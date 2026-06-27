@@ -1,0 +1,480 @@
+# Changelog
+
+All notable changes to **CROCHET HR Management System** will be documented in this file.
+
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versioning follows [Semantic Versioning](https://semver.org/).
+
+---
+
+## [1.4.5] — 2026-06-27
+
+**CRITICAL FIX: Data Loss Race Condition in Cloud Sync**
+
+### Root Cause
+3 bugs combined caused intermittent data loss in employees + leave requests:
+
+1. **`cloudPushAll()` ran on EVERY page load** (not only first-time setup)
+   - Old: `if (DB.load('initialized', false)) DB.cloudPushAll();` — fires every refresh
+   - Effect: If another browser added data after our `cloudPullAll` but before our `cloudPushAll`, the new data got **overwritten by our stale local data**
+
+2. **`DB.save()` is fire-and-forget** for cloud upserts (no `await`)
+   - If user refreshed page before the upsert completed, cloud still had old data
+   - Next `cloudPullAll` would overwrite local with the old data
+
+3. **Realtime handler had no concurrency guard**
+   - Echoes of our own writes (or other clients' writes) could overwrite local data mid-edit
+
+### Fix
+- **New `cloudPullAllSafe()`** — returns `{ok, count, reason}` so caller can distinguish "cloud empty" from "cloud pull failed"
+- **Startup sequence rewritten:**
+ 1. Pull cloud first (authoritative)
+ 2. Setup realtime
+ 3. Seed locally **ONLY** if `!alreadyInitialized` AND cloud pull succeeded
+ 4. Push initial seed up to cloud ONLY this one time
+ 5. **NO more unconditional `cloudPushAll()` on every load**
+- **`DB._localDirty` Set** — tracks keys currently being upserted
+- **Realtime handler skips updates** for keys in `_localDirty` until cloud confirms write
+- **Network-fail safety:** if cloud pull fails AND localStorage is empty, show alert and stop (prevents pushing empty data over real cloud data)
+
+### Impact
+- ✅ พนักงานที่เพิ่มจะไม่หายอีก
+- ✅ คำขอลาที่ส่งจะถึง Admin ทุกครั้ง
+- ✅ Cross-device sync เสถียร
+- ✅ Offline mode safe (ไม่ overwrite cloud โดยไม่ตั้งใจ)
+
+### Migration Note
+- **ก่อน upgrade:** Manual backup CSV จาก Supabase Table Editor
+- **หลัง upgrade:** ทดสอบ add employee + refresh page ดูข้อมูลคงอยู่
+- v1.4.4 → v1.4.5 ไม่ต้องแก้ schema
+
+---
+
+## [1.4.4] — 2026-06-26
+
+**Attendance Report: Department lookup จาก system + "พนักงานใหม่"**
+
+### Changed
+- **คอลัมน์ "แผนก"** ในรายงานเข้างาน (ทุกตาราง + XLSX export) — เปลี่ยนจากค่าใน record (ตอน upload Excel) เป็น **lookup จาก employees ในระบบ**
+ - ถ้าพบในระบบ → ใช้ `employee.department` (ตรงตามที่ Admin ตั้งล่าสุด)
+ - ถ้าไม่พบ → แสดง badge **"พนักงานใหม่"** (สีส้ม)
+
+### Added
+- Helper `getDeptForAttendance(rec)` — try lookup ด้วย `employeeId` ก่อน · fallback ด้วย `employeeCode` · finally return `'พนักงานใหม่'`
+
+### Why this matters
+- เดิม: ถ้า Admin เปลี่ยนแผนกพนักงานในระบบ → รายงานเก่ายังโชว์แผนกเก่าจากไฟล์ Excel
+- เดิม: รหัสที่ไม่มีในระบบ (เช่น เพิ่งจ้างมา ยังไม่ได้เพิ่ม) → โชว์ค่าจาก Excel ที่บางครั้งว่าง/ไม่ตรง
+- ใหม่: รายงานสะท้อนสถานะระบบล่าสุดเสมอ · เห็นทันทีว่าใครยังไม่ได้ add เข้าระบบ
+
+---
+
+## [1.4.3] — 2026-06-26
+
+**Fix: รายงานเข้างาน — date filter, distinct counts, date column**
+
+### Fixed
+- **Critical: Stats ไม่เปลี่ยนตามวันที่เลือก** — เกิดจากใน v1.3.0 ตอนเพิ่ม time-cert merge ลืม filter records ตามวันที่ก่อน → `mergeApprovedTimeCertForDate(records, date)` returns records ทั้งหมดถ้าไม่มี cert ตรงวัน → stats นับรวมทุกวัน
+ - แก้: filter records → `r.date === _attReportDate` **ก่อน** เรียก merge
+
+### Changed
+- **นับ unique ต่อพนักงานต่อวัน** — ใช้ `Map` keyed by `employeeCode` เพื่อ dedup กรณีมีหลายเรคคอร์ดของคนเดียวกันในวันเดียว (เช่น cert overrides scan)
+ - มาทำงาน / มาสาย / ไม่มา / ขาดอัตโนมัติ ทั้งหมด unique count
+- **เพิ่มคอลัมน์ "วันที่"** ในทุกตาราง: มาทำงาน, มาสาย, ไม่มา, ลา (4 tabs)
+- **XLSX Export ปรับด้วย** — เพิ่ม column วันที่ + ใช้ unique count + label "จำนวนพนักงานทั้งหมด (Unique)" ใน sheet สรุป
+
+### Why this matters
+- ก่อนแก้: เลือกวันใดได้ตัวเลขเดียวกัน (1632/1659) — ทำให้ตัดสินใจผิด
+- หลังแก้: เลือก 13 พ.ค. → เห็นเฉพาะของวันนั้น · เลือก 24 พ.ค. → เห็นเฉพาะของวันนั้น
+
+---
+
+## [1.4.2] — 2026-06-26
+
+**Time Certification Report (Admin Reports tab)**
+
+### Added
+- **Tab ใหม่ในหน้า "รายงาน"** — `รับรองเวลา` แสดงคำขอรับรองเวลาทั้งหมดในระบบ (รวมทั้ง pending/approved/rejected)
+- **Filter buttons** — ทั้งหมด / รออนุมัติ / อนุมัติแล้ว / ปฏิเสธ พร้อมแสดงจำนวน
+- **Stats grid 4 cards** — Total / Pending / Approved / Rejected
+- **ตารางครบ 13 คอลัมน์** — วันที่ขอ, พนักงาน, วันที่ทำงาน, เวลาเข้า/เลิกจริง, **สแกนจริงเทียบ**, เหตุผล, หัวหน้า, สถานะ, วันอนุมัติ, หมายเหตุ, ดูหลักฐาน, ปุ่มลบ (Admin)
+- **`exportTimeCertXLSX()`** — Excel 2 sheets
+ - Sheet 1: คำขอครบทุกรายการ + สแกนจริง + หมายเหตุผู้อนุมัติ
+ - Sheet 2: สรุปสถานะ + สรุปต่อพนักงาน (sort by total desc)
+- **`deleteTimeCert(id)`** — Admin ลบคำขอได้พร้อม audit log + cascade ลบ notification
+
+### Schema additions
+- State: `_timeCertReportFilter` (filter ที่ใช้ในรายงาน)
+
+---
+
+## [1.4.1] — 2026-06-26
+
+**Fix DD/MM date parsing for Tigersoft Excel imports**
+
+### Fixed
+- **Critical: ไฟล์ Tigersoft อ่านวันที่ผิด** — Tigersoft ส่งออก `DD/MM/YYYY` แต่ Excel locale (US) auto-parse แถวที่ทั้ง day+month ≤ 12 เป็น `MM/DD` → เก็บ `datetime` ที่ month/day **สลับกัน**
+ - ตัวอย่าง: ค่า `01/06/2026` (1 มิ.ย.) ใน Excel กลายเป็น `datetime(2026, 1, 6)` (6 ม.ค.) → ระบบเดิมอ่านผิดเป็น 6 ม.ค.
+ - แถวที่ day > 12 (เช่น `17/06/2026`) ยังเป็น string DD/MM อยู่ → 2 format ในไฟล์เดียว
+- **แก้แล้ว:** `parseAnyDate(v, opts)` รับ format parameter (default 'DD/MM' Thai) — swap month/day กลับให้ถูกต้อง
+
+### Added
+- **`detectExcelDateFormat(workbook)`** — heuristic auto-detect format จาก string cells ในไฟล์
+ - String date ที่ day > 12 → DD/MM confirmed (high confidence)
+ - String date ที่ month > 12 → MM/DD confirmed (high confidence)
+ - ไม่มี evidence → ใช้ default DD/MM (Thai)
+- **UI Banner ในหน้าอัปโหลด** แสดง format ที่ detect ได้ + confidence + จำนวน evidence rows
+ - High confidence → สีน้ำเงิน (info)
+ - Default fallback → สีส้ม (warning) + เตือนตรวจสอบหน้าจอ
+- เพิ่ม console.log สำหรับ debug
+
+### Verified with real Tigersoft exports
+- `RadGridExport (1).xlsx`: 3,212 rows · detected DD/MM (1,684 evidence) → ครอบ 26 วัน (2026-06-01 → 2026-06-26)
+- `RadGridExport (2).xlsx`: 2,994 rows · detected DD/MM (1,495 evidence) → ครอบ 24 วัน (2026-05-01 → 2026-05-24)
+
+### Behavior
+- ระบบเก็บใน localStorage เป็น ISO `YYYY-MM-DD` เสมอ (มาตรฐานเดียว)
+- File ที่ใช้ MM/DD format จะถูก detect และ parse ถูกต้องอัตโนมัติเช่นกัน
+- Backward compatible: ข้อมูลเก่าใน localStorage ที่เก็บถูกต้องอยู่แล้วไม่ได้รับผลกระทบ
+
+---
+
+## [1.4.0] — 2026-06-21
+
+**Configurable Companies (Multi-tenant CRUD)**
+
+### Added
+- **Settings UI สำหรับจัดการบริษัทในเครือ** (Admin only) — เพิ่ม/แก้ไข/ลบบริษัทได้
+ - ฟิลด์: ID, ชื่อย่อ (label), ชื่อเต็ม (ใช้บนสลิป), ที่อยู่, TAX ID, เบอร์โทร, ชื่อไฟล์โลโก้
+ - ตารางแสดงจำนวนพนักงานสังกัด · ลบไม่ได้ถ้ามีพนักงาน
+ - ID validation: a-z, 0-9, `-`, `_` · ห้ามแก้ ID หลังบันทึก
+- **Seed companies** เพิ่ม **The Habita** (4 บริษัทรวม): Masterpiece, Crochet, ConceptOne, The Habita
+
+### Changed
+- **`getCompanyInfo(id)`** — read จาก `settings.companies` (fallback hardcoded สำหรับ legacy)
+- **`getCompanyLabel(id)`** — new helper return display name
+- **Employee form dropdown** — populate จาก settings dynamic
+- **ลบ hardcoded mapping** `({masterpiece:'Masterpiece',...})[id]` ออกทุกที่ (~7 จุด): Org Chart, Employee Management, Payroll Export, Exec Dashboard XLSX, Settings rows
+- **Audit Log** — ทุกการเพิ่ม/แก้ไข/ลบบริษัท
+
+### Schema additions
+- `settings.companies: [{ id, label, name, address, taxId, phone, logo }]`
+
+### Use cases
+- เพิ่ม "The Habita" + กรอกข้อมูลที่อยู่/TAX ID แยก → สลิปเงินเดือนของพนักงาน Habita จะแสดงหัวบริษัทเฉพาะ
+- เปลี่ยนชื่อ/ที่อยู่บริษัทได้เองทาง Settings ไม่ต้องแก้โค้ด
+- รองรับการขยายบริษัทในเครือในอนาคต
+
+---
+
+## [1.3.1] — 2026-06-21
+
+**Unpaid Leave: hourly → half-day/day**
+
+### Changed
+- **ลาไม่รับค่าจ้าง** เปลี่ยนจาก "รายชั่วโมง" → "ครึ่งวัน/วัน" — ใช้ workflow เดียวกับลาประเภทอื่น (date range + halfDay selector)
+ - Form: ตัด `unpaidHoursGroup` ออก · ใช้ `dateRangeGroup` + `halfDayGroup` เหมือนทุกประเภท
+ - Validation: ขั้นต่ำ 0.5 วัน (ครึ่งวัน) · ลาเต็มวัน/หลายวันได้
+ - Payroll: เปลี่ยนสูตรหักเงินเป็น `unpaidDays × dailyRate` (เดิม: `unpaidHours × hourlyRate`)
+ - Slip: แสดง "X วัน × Y บาท/วัน" (เดิม: "X ชม. × Y บาท/ชม.")
+ - Excel export Payroll: คอลัมน์ "ลาไม่รับค่าจ้าง (วัน)" (เดิม: "(ชม.)")
+
+### Backward compatibility
+- Records เก่าที่มี `unpaidHours > 0` ยังถูกคำนวณถูก (legacy path: `hours × hourlyRate`)
+- Helper ใหม่ `leaveQtyDisplay(r)` — แสดง "ชม." สำหรับ legacy, "วัน" สำหรับใหม่
+- Payslip return เพิ่ม field `unpaidDays`, `dailyRate`
+
+### Internal
+- ทำให้ `calcLeaveDays` + `updateLeaveFormUI` simpler — ไม่มี branch พิเศษสำหรับ unpaid อีกแล้ว
+- ตัด unused state field `unpaidHours` ในการ submit (เซ็ตเป็น 0 ตลอดสำหรับ records ใหม่)
+
+---
+
+## [1.3.0] — 2026-06-21
+
+**Auto-Absent Rule + Time Certification Workflow**
+
+### Added
+- **Auto-Absent Rule** — Setting `autoAbsentLateMinutes` (default 240) · มาสายเกิน X นาทีจาก `lateThreshold` → ระบบนับเป็นขาดงานทันที (excluded from workDays + payroll calculation) · แสดง stat card "ขาดอัตโนมัติ" + แท็กแถวในตาราง "ไม่มา"
+- **Time Certification Workflow** (รับรองเวลา) — เมนูใหม่ "ขอรับรองเวลา" ใต้ "ขอ OT"
+ - Employee → Form: วันที่ทำงาน, เวลาเข้าจริง, เวลาเลิก (ถ้ามี), เหตุผล, แนบหลักฐาน (image/PDF ≤ 2 MB)
+ - Manager → Approval tab ใหม่ "รับรองเวลา" · แสดงเวลาที่ขอเทียบกับสแกนจริง
+ - Approved cert → merge เข้า attendance pool อัตโนมัติ → ใช้ในรายงาน + คำนวณเงินเดือน
+ - แสดง badge "รับรองเวลา" ในตารางมาทำงาน
+- **Setting: เปิด/ปิดฟังก์ชั่นรับรองเวลา** (`timeCertEnabled`) — Admin toggle ได้
+
+### Changed
+- **`renderAttendanceReport`** — merge approved time certs ก่อนจัดหมวด · auto-absent ถูกย้ายไปแท็บ "ไม่มา"
+- **`calculatePaySlip`** — ใช้ merged attendance + skip auto-absent records · เพิ่ม field `autoAbsentDays` ใน return
+- **`getPendingApprovals`** — รวม time cert pending ใน badge sidebar
+- **Cascade delete** — ลบพนักงาน → ลบ time-cert requests ทั้งหมดของคนนั้น
+
+### New Helpers
+- `computeAutoAbsentCutoff(settings)` — return "HH:MM" cutoff
+- `mergeApprovedTimeCertForDate(records, dateStr)`
+- `mergeApprovedTimeCertForMonth(records, monthStr)`
+
+### Schema additions
+- `settings.autoAbsentLateMinutes: number`
+- `settings.timeCertEnabled: boolean`
+- New store: `timeCertRequests[]`
+ - `{ id, employeeId, date, claimedCheckIn, claimedCheckOut, reason, attachment, attachmentName, status, requestDate, managerId, approverNote, approvedDate }`
+
+---
+
+## [1.2.2] — 2026-06-21
+
+**Pay Slip visual refinement**
+
+### Changed
+- **Pay Slip color palette** → เปลี่ยนเป็นโทน gray ทั้งใบ (เดิม: green/red/black bars ที่ contrast แรงเกิน อ่านยาก)
+ - Header bars: `#f3f4f6` light gray bg · `#374151` dark text
+ - Section borders: `#475569` slim accent bar (เดิม สีเขียว/แดง บล็อกใหญ่)
+ - Table headers: `#f3f4f6` (เดิม `#000` solid black + `#dc2626` solid red)
+ - Net Pay box: `#4b5563` dim gray bg · white text · rounded 8px (เดิม solid black)
+ - All amounts: dark gray instead of bright green/red for plus/minus
+ - Borders: `#e5e7eb` ลายเส้นบาง · เพิ่ม visual hierarchy ด้วย panel grouping
+
+### Removed
+- **บรรทัด "มาสาย"** ออกจากตาราง Deductions ของสลิป (ยังคงคำนวณ + หักจากเงินสุทธิอยู่ — แค่ไม่แสดงรายการ)
+
+---
+
+## [1.2.1] — 2026-06-21
+
+**Leave Policy display + sick cert rule**
+
+### Added
+- **Settings UI for leave policy parameters** — เพิ่ม 4 field ที่เคย hardcode ใน "นโยบายสิทธิ์ลา"
+ - `sickCertThreshold` (default 2): ลาป่วยเกินกี่วันต้องแนบใบรับรองแพทย์
+ - `backDatedLeaveMaxDays` (default 7): ห้ามยื่นลาย้อนหลังเกิน X วัน
+ - `leaveCarryOverMax` (default 5): ยกยอดวันลาข้ามปีสูงสุด
+ - `leaveCarryOverCutoff` (default '03-31'): วันตัดยอดยกข้ามปี
+
+### Changed
+- **Sick leave validation** — ใช้ `sickCertThreshold` แทน hardcode "1" และ "2"
+ - `sick-without-cert`: ลาได้สูงสุด ${threshold} วัน (เดิม 1)
+ - `sick-with-cert`: ต้องลามากกว่า ${threshold} วัน (เดิม 2)
+- **showLeaveForm dropdown** — text แสดงตามค่าใน settings
+- **Leave Policy Card** ในหน้า "วันหยุด & สิทธิ์ลา" → **dynamic ทั้งหมด**
+ - ลาพักร้อนตามอายุงาน: คำนวณจาก `vacationAccrual` settings (Base, +วัน/ปี, เพดาน)
+ - ลาป่วยตามกฎหมาย: ใช้ค่าจาก settings.leaveQuotas.sick + sickCertThreshold
+ - ลากิจช่วงทดลองงาน: ใช้ probationPersonalCap + probationDays
+ - ยกยอดวันลาข้ามปี: ใช้ leaveCarryOverMax + leaveCarryOverCutoff
+ - ห้ามยื่นลาย้อนหลัง: ใช้ backDatedLeaveMaxDays
+
+### Schema additions
+- `settings.sickCertThreshold: number`
+- `settings.backDatedLeaveMaxDays: number`
+- `settings.leaveCarryOverMax: number`
+- `settings.leaveCarryOverCutoff: string` (MM-DD)
+
+---
+
+## [1.2.0] — 2026-06-21
+
+**HR Policy refinements before management presentation**
+
+### Added
+- **Vacation Accrual by Years of Service** — Setting ใหม่ `vacationAccrual` ปรับเพดานสิทธิ์ลาพักร้อนเพิ่มตามอายุงาน · กำหนด Base (ปีที่ 1), เริ่มเพิ่มที่ปีอายุงานเท่าใด, +วัน/ปี, เพดานสูงสุด · มี Live Preview แสดงสิทธิ์ปี 1-12 พร้อม flag เพดาน · เปิด/ปิดได้ผ่าน iOS toggle
+- **Probation Personal Leave Cap** — Setting ใหม่ `probationPersonalCap` (default 3 วัน) — พนักงานในช่วงทดลองงานมีสิทธิ์ลากิจได้ตามที่กำหนด (เดิม = 0)
+- **`yearsOfService`** ใน `getLeaveBalance` return — ใช้ในรายงาน/dashboard ต่อได้
+
+### Changed
+- **getLeaveBalance** — ใช้ vacation accrual table แทน fix quota เดียว · probation ไม่บล็อก personal อีกแล้ว
+- **showLeaveForm** — option ลากิจในช่วงทดลองงานไม่ถูก disable ถ้า quota > 0
+- **Probation alert** — แสดงสิทธิ์ลากิจตามจริง (เช่น "ลากิจได้ 3 วัน" แทน "ลาได้เฉพาะลาป่วย/ลาคลอด")
+
+### Schema additions
+- `settings.probationPersonalCap: number`
+- `settings.vacationAccrual: { enabled, base, startYear, incrementPerYear, maxDays }`
+
+---
+
+## [1.1.0] — 2026-06-21
+
+**Pre-presentation refinements**
+
+### Added
+- **Stationery: Edit + Delete buttons per row** — Admin / `isStationeryAdmin` ลบรายการที่เพิ่มผิดได้ พร้อม cascade ลบประวัติเบิก/รับเข้าของ item นั้น
+- **Per-employee Leave Quota Override (Admin only)** — ปรับสิทธิ์ลาได้ทุกประเภท (ลากิจ, ลาพักร้อน, ลาป่วย, ลาคลอด, ลาบวช) ต่อพนักงานรายคน · Override จะข้าม Pro-rate และข้ามทดลองงาน · มีปุ่มรีเซ็ตกลับเป็น default
+- **OT Multiplier แยกวันปกติ vs วันหยุด** — Setting field ใหม่ `otMultiplierHoliday` (default 3×) · ระบบ detect วันหยุดอัตโนมัติจาก companyHolidays + เสาร์-อาทิตย์ · สลิปแสดง breakdown 2 บรรทัด (OT วันปกติ × 1.5 / OT วันหยุด × 3)
+- **OT Attachment** — แนบรูป/PDF ในฟอร์มขอ OT (สูงสุด 2 MB) · แสดงในศูนย์อนุมัติ Manager + หน้าของพนักงาน
+- **OT request: คืนปุ่มขอลาให้ทุก role** — Employee/Manager/Accountant ส่งคำขอลาตัวเองได้กลับมา (Admin ยัง add แทนคนอื่น + auto-approve ได้)
+
+### Fixed
+- **Bulk Commission modal layout overflow** — Modal กว้างขึ้น (880px) + grid `minmax(0, ...)` + `min-width:0` บน input · responsive breakpoint @640px → stack rows
+
+### Schema additions
+- `employees[].leaveQuotaOverride: { personal?, vacation?, sick?, maternity?, ordination? }`
+- `settings.otMultiplierHoliday: number`
+- `otRequests[].attachment / attachmentName` (Base64)
+
+---
+
+## [1.0.0] — 2026-06-21
+
+**🎉 First Production Release**
+
+Stable baseline ของระบบ HR Management System ที่ใช้งานได้ครบทุก workflow หลัก พร้อม Export, Cloud sync, และ Multi-tenant support สำหรับ Masterpiece / Crochet / ConceptOne
+
+### Added — Core Modules
+
+#### Employee Self-Service
+- **ระบบขอลา 7 ประเภท** — ลากิจ, ลาพักร้อน, ลาป่วย (มี/ไม่มีใบรับรอง), ลาคลอด, ลาบวช, ลาไม่รับค่าจ้าง (รายชั่วโมง), ลาสะสมวันหยุด
+- ลาครึ่งวัน (เช้า/บ่าย) ได้
+- Pro-rate สำหรับพนักงานใหม่หลังผ่านทดลองงาน 120 วัน
+- ระบบขอ OT, สะสมวันหยุด, ปฏิบัติงานนอกสถานที่
+- ปฏิทินส่วนตัว แดชบอร์ดของฉัน
+- ดาวน์โหลดสลิปเงินเดือนเป็น PNG + ปุ่มแชร์ผ่าน Web Share API
+- ระบบประเมินตัวเอง (ทดลองงาน 120 วัน + ประจำปี)
+- ผังองค์กรแสดงสายบังคับบัญชา
+
+#### Manager
+- ศูนย์อนุมัติ (ลา/OT/สะสม/งานนอกสถานที่) พร้อม badge แจ้งจำนวนรออนุมัติ
+- Dashboard ผู้บริหารแสดง KPI ทีม
+- ปฏิทินทีมรวมสถานะลูกน้องทุกคน
+- ตารางลงกะงาน (Shift Schedule) — Cycle ผ่านการ click (M/A/N/W/O)
+- ระบบประเมินลูกน้อง (4 เกณฑ์มาตรฐาน + ปรับแต่งได้)
+
+#### Admin (HR)
+- CRUD พนักงาน + Cascade Delete ครอบคลุม leave, OT, attendance, payslip, commission
+- Reset Password, ปรับ Role, ปรับสายบังคับบัญชา
+- ปรับสิทธิ์ลาเป็นรายคน (override default)
+- Onboarding / Offboarding Checklist
+- อัปโหลดเวลาเข้างาน (Excel format `RadGridExport.xlsx`) — Match ด้วยรหัสพนักงาน
+- รายงานเข้างาน รายวัน (มาทำงาน / ลาหยุด / มาสาย / ไม่มา)
+- ค่าคอมมิชชั่นรายเดือนรายคน — รวมเข้าสลิปเงินเดือนอัตโนมัติ
+- Audit Log บันทึกทุกการเปลี่ยนแปลงข้อมูล
+- ตั้งค่าระบบ (วันหยุด, OT rate, ค่าหักสาย, เกณฑ์ประเมิน, ประกันสังคม)
+
+#### Accountant / Finance
+- ส่งออก Payroll ทั้งบริษัทในเดือนเดียว
+- คำนวณอัตโนมัติ: เงินเดือน + OT (×1.5) + Commission − หักมาสาย − ลาไม่รับ − ประกันสังคม
+- ประกันสังคมตามกฎหมายไทย (5% ฐาน 1,650–15,000 บาท)
+- คลังเครื่องเขียน (เบิก/รับเข้า/แจ้งเตือนสต๊อก)
+
+#### Common Features
+- แจ้งซ่อมอาคาร (Maintenance Tickets) — ส่งให้ผู้ที่ติด flag `isMaintenance`
+- ประกาศ & นโยบาย + ระบบ Acknowledgement
+- ระบบแจ้งเตือน In-app (Notification Bell + Badge)
+
+### Added — Roles & Permissions
+
+- **4 Roles:** Employee / Manager / Accountant / Admin
+- **Flag เสริม:**
+  - `isMaintenance` — ผู้ดูแลซ่อมบำรุง (รับ ticket แจ้งซ่อม)
+  - `isStationeryAdmin` — Manager ที่ดูแลคลังเครื่องเขียนเพิ่มได้
+  - `exemptFromLateDeduction` — ยกเว้นกฎหักเงินมาสายรายคน
+
+### Added — Multi-Tenant
+
+- รองรับ 3 บริษัทในระบบเดียว: **Masterpiece / Crochet / ConceptOne**
+- โลโก้และตราบริษัทแยกกันต่อบริษัท
+- กรองข้อมูลตามบริษัทในรายงาน
+
+### Added — Export Functions
+
+#### Excel (.xlsx) ผ่าน SheetJS
+- **จัดการพนักงาน** → 16 columns ครบฟิลด์ พร้อม respect search filter
+- **รายงานเข้างาน** → 4 sheets (มาทำงาน, ลาหยุด, ไม่มา, สรุป)
+- **ส่งออก Payroll** → 18 columns + แถวรวม
+- **Dashboard ผู้บริหาร** → 6 sheets (KPI, ตามบริษัท, ตามแผนก, การลา, พนักงานเข้าใหม่, Top Performers)
+- **ตารางลงกะงาน** → 3 sheets (Matrix, สรุปต่อคน, สรุปต่อวัน) พร้อม freeze panes
+
+#### PNG + Share (html2canvas + Web Share API)
+- สลิปเงินเดือนรายบุคคล
+- รายงานเข้างานรายวัน (รวมทุก tab ในรูปเดียว)
+- Dashboard ผู้บริหาร snapshot
+- ตารางลงกะงาน
+- Fallback: Clipboard API → Modal preview สำหรับ browser เก่า
+
+#### CSV
+- รายงานทุกประเภท Export UTF-8 BOM (เปิด Excel ภาษาไทยไม่ garbled)
+
+### Added — Design & UX
+
+- **Glassmorphism Design Language** (iOS 26 inspired) + iOS System Font Stack (SF Pro Display + Sarabun)
+- **Responsive Mobile-first** — Sidebar drawer พร้อม hamburger menu
+- **iOS-style Toggle Switches** สำหรับ checkbox ทั้งหมด
+- **Role Badges** สี navy สอดคล้องกับธีมเมนู (กลืนกับ sidebar ใน sidebar context)
+- Notification Badge แบบ real-time
+
+### Added — Cloud Sync (Optional)
+
+- รองรับ Supabase Realtime DB
+- เมื่อ user 1 คนแก้ข้อมูล → user อื่นเห็นทันที (cross-browser / cross-device)
+- เก็บใน localStorage เป็น primary + sync ไป cloud ในเบื้องหลัง
+- Real-time subscription auto-refresh
+
+### Added — Search & Filter
+
+- **Search Bar หน้าจัดการพนักงาน** — ค้นด้วย ชื่อ / นามสกุล / รหัสพนักงาน (debounce 150ms)
+- กรองวันที่ในทุกรายงาน
+
+### Security & Permissions
+
+- Audit Log บันทึก: login, create, update, delete, approve, reject
+- Role-based Access Control 4 ระดับ
+- **เพิ่ม/แก้ไข/ลบ รายการลา** — จำกัดเฉพาะ Admin (Internal Control)
+- เมื่อ Admin บันทึกการลา → อนุมัติอัตโนมัติ + แจ้งเตือนพนักงาน
+
+### Localization
+
+- ภาษาไทยเต็มรูปแบบ + Buddhist Era (พ.ศ. +543) + DD/MM/YYYY
+- รองรับชื่อพนักงานพม่า (กรณีไม่มี นามสกุล)
+
+### Tech Stack
+
+- Single HTML File (~5,900 บรรทัด)
+- HTML5 + CSS3 + Vanilla JavaScript
+- localStorage (Primary) + Supabase Realtime DB (Optional)
+- **CDN Libraries:** SheetJS 0.18.5, html2canvas 1.4.1, Supabase JS v2
+- Deploy via Vercel (auto-deploy from GitHub)
+
+### Fixed (during pre-1.0 stabilization)
+
+- **Cloud sync corruption** — `localStorage` เคยถูกเขียนเป็นสตริง `"undefined"` เมื่อ realtime payload ส่ง `value=undefined` จาก Supabase. แก้โดยเพิ่ม guard ใน 4 จุด (DB.load, DB.save, setupCloudRealtime, cloudPullAll) + เตือนเมื่อ payload > 900 KB
+- **ค่าหักมาสาย 0 ไม่ทำงาน** — เปลี่ยน `settings.lateDeduction || 50` เป็น `?? 50` เพื่อให้ค่า 0 ใช้งานได้
+- **Diagnostic guards** บน `renderUploadAttendance` + `renderAttendanceReport` — แสดง error stack บนหน้าจอ + ปุ่ม "รีเซ็ตข้อมูล Attendance"
+
+### Removed
+
+- เมนู "หน้าหลัก" (ซ้ำกับ "แดชบอร์ดของฉัน")
+- เมนู "สลิปเงินเดือน" (ซ้ำกับ "ส่งออก Payroll")
+- Stat card "ตำแหน่งเปิดรับ" บน Dashboard ผู้บริหาร (placeholder ที่ยังไม่ implement)
+- Emoji ในเมนูทั้งหมด (ปรับให้เป็น corporate look)
+
+### Known Limitations
+
+- **localStorage จำกัด ~5–10 MB** — ข้อมูล attendance ขนาดใหญ่ (>9,000 records) อาจใกล้ limit
+- **Supabase row size limit ~1 MB** — payload ใหญ่อาจ sync ไม่สำเร็จ (มี warning แจ้ง)
+- Password เก็บแบบ plain text (ไม่เหมาะ public production)
+- ไม่มี endDate ใน employee schema → คำนวณ Headcount MoM/YoY ย้อนหลังไม่แม่น
+- อนุมัติเพียง 1 ขั้น (single-level) — ไม่รองรับ multi-level approval workflow
+
+### Roadmap (post-1.0)
+
+- **v1.1** — Password hashing (bcrypt), Soft Delete employees, Delegation, Auto-Reminder
+- **v1.2** — `endDate` field + Headcount MoM/YoY widget on Exec Dashboard
+- **v1.3** — Multi-level approval workflow + Bulk approval
+- **v1.4** — Tax withholding calculation + Provident Fund + Bonus
+- **v2.0** — Refactor to modular components + Test Suite + SSO
+
+---
+
+## Versioning Convention
+
+- **MAJOR** (X.0.0) — Breaking changes (DB schema migration ที่ต้อง manual intervention)
+- **MINOR** (1.X.0) — New features (backward-compatible)
+- **PATCH** (1.0.X) — Bug fixes only
+
+## Release Process
+
+```bash
+# Update CHANGELOG.md และ APP_VERSION ใน index.html
+git add CHANGELOG.md index.html
+git commit -m "Release vX.Y.Z"
+git tag vX.Y.Z
+git push --tags
+# Vercel auto-deploy
+```

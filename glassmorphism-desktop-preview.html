@@ -1,0 +1,1145 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CROCHET HR · Desktop Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+ --navy: #1e3a8a;
+ --navy-dark: #0f2557;
+ --navy-mid: #1d4ed8;
+ --sky: #3b82f6;
+ --sky-soft: #93c5fd;
+ --pale: #eff6ff;
+ --pale-2: #dbeafe;
+ --ink: #0f172a;
+ --muted: rgba(15,37,87,0.55);
+}
+* { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+html, body { height:100%; }
+body {
+ font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+              'Inter', 'Sarabun', 'Helvetica Neue', system-ui, sans-serif;
+ font-feature-settings: 'cv11', 'ss01', 'kern', 'liga', 'tnum';
+ letter-spacing: -0.01em;
+ background: #ffffff;
+ min-height: 100vh;
+ padding: 30px 16px 60px;
+ color: var(--ink);
+ overflow-x: hidden;
+}
+
+.demo-tabs {
+ display: flex; gap: 8px; justify-content: center;
+ margin-bottom: 28px; flex-wrap: wrap;
+}
+.demo-tab {
+ padding: 11px 22px;
+ background: rgba(255,255,255,0.65);
+ backdrop-filter: blur(20px) saturate(160%);
+ -webkit-backdrop-filter: blur(20px) saturate(160%);
+ color: var(--navy);
+ border: 1px solid rgba(30,58,138,0.15);
+ border-radius: 50px;
+ font: 600 13.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ cursor: pointer;
+ letter-spacing: 0.02em;
+ transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.85),
+  0 4px 14px rgba(30,58,138,0.10);
+}
+.demo-tab.active {
+ background: var(--navy);
+ color: #fff;
+ border-color: var(--navy-dark);
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.25),
+  0 8px 22px rgba(30,58,138,0.35);
+}
+
+/* ============================================================
+   Browser Window Frame (Chrome-style on Windows)
+============================================================ */
+.browser {
+ max-width: 1380px;
+ margin: 0 auto;
+ background: #e8eef5;
+ border-radius: 12px;
+ overflow: hidden;
+ box-shadow:
+  0 0 0 1px rgba(0,0,0,0.08),
+  0 30px 60px rgba(15,37,87,0.18),
+  0 60px 120px rgba(15,37,87,0.10);
+}
+
+/* Title bar (Windows 11 style) */
+.titlebar {
+ height: 32px;
+ background: linear-gradient(180deg, #f3f6fa 0%, #e6ecf3 100%);
+ display: flex;
+ align-items: center;
+ padding: 0 4px 0 14px;
+ border-bottom: 1px solid #d6dde7;
+ position: relative;
+}
+.titlebar .app-icon {
+ width: 16px; height: 16px;
+ border-radius: 3px;
+ background: var(--navy);
+ display: inline-flex; align-items: center; justify-content: center;
+ color: #fff; font: 800 9px -apple-system, 'Inter', sans-serif;
+ margin-right: 8px;
+}
+.titlebar .title-text {
+ font: 500 12.5px -apple-system, 'Inter', sans-serif;
+ color: #1c1f25;
+ flex: 1;
+}
+.win-controls { display: flex; height: 100%; }
+.win-controls .btn {
+ width: 46px; height: 32px;
+ display: flex; align-items: center; justify-content: center;
+ color: #1c1f25; cursor: pointer;
+}
+.win-controls .btn:hover { background: rgba(0,0,0,0.06); }
+.win-controls .btn.close:hover { background: #c4313f; color: #fff; }
+.win-controls .btn svg { width: 10px; height: 10px; }
+
+/* Tab strip (Chrome) */
+.tabstrip {
+ height: 38px;
+ background: #dde4ed;
+ display: flex; align-items: flex-end;
+ padding: 4px 8px 0;
+ gap: 2px;
+ border-bottom: 1px solid #d6dde7;
+}
+.tab-chip {
+ background: rgba(255,255,255,0.55);
+ border: 1px solid rgba(0,0,0,0.06);
+ border-radius: 8px 8px 0 0;
+ padding: 0 14px 0 12px;
+ height: 32px;
+ display: flex; align-items: center;
+ font: 500 12.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: #4b5563;
+ max-width: 220px;
+ white-space: nowrap;
+ overflow: hidden;
+ text-overflow: ellipsis;
+}
+.tab-chip.active {
+ background: #ffffff;
+ color: #1c1f25;
+ box-shadow: 0 -2px 6px rgba(0,0,0,0.05);
+ border-color: rgba(0,0,0,0.10);
+ border-bottom-color: transparent;
+}
+.tab-chip .dot {
+ width: 14px; height: 14px;
+ border-radius: 3px;
+ background: var(--navy);
+ display: inline-flex; align-items: center; justify-content: center;
+ color: #fff; font: 800 8px -apple-system, sans-serif;
+ margin-right: 7px;
+ flex-shrink: 0;
+}
+.tab-add {
+ width: 28px; height: 28px;
+ display: flex; align-items: center; justify-content: center;
+ color: #6b7280; cursor: pointer; border-radius: 6px;
+ margin-left: 4px;
+}
+
+/* Address bar */
+.addressbar {
+ height: 44px;
+ background: #ffffff;
+ display: flex; align-items: center;
+ gap: 8px;
+ padding: 0 16px;
+ border-bottom: 1px solid #e5e7eb;
+}
+.addr-nav {
+ display: flex; gap: 4px;
+}
+.addr-btn {
+ width: 30px; height: 30px;
+ display: flex; align-items: center; justify-content: center;
+ color: #6b7280; cursor: pointer; border-radius: 50%;
+}
+.addr-btn:hover { background: rgba(0,0,0,0.05); color: #1c1f25; }
+.url-bar {
+ flex: 1;
+ height: 30px;
+ background: #f1f5f9;
+ border-radius: 16px;
+ display: flex; align-items: center;
+ padding: 0 14px;
+ font: 500 13px -apple-system, 'Inter', sans-serif;
+ color: #4b5563;
+}
+.url-bar::before {
+ content: '';
+ display: inline-block;
+ width: 12px; height: 12px;
+ margin-right: 8px;
+ background: currentColor;
+ -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='currentColor'><path d='M5 7V5a3 3 0 016 0v2h1a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1V8a1 1 0 011-1h1zm1 0h4V5a2 2 0 10-4 0v2z'/></svg>");
+ mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='currentColor'><path d='M5 7V5a3 3 0 016 0v2h1a1 1 0 011 1v6a1 1 0 01-1 1H4a1 1 0 01-1-1V8a1 1 0 011-1h1zm1 0h4V5a2 2 0 10-4 0v2z'/></svg>");
+ color: #10b981;
+}
+.url-domain { color: #1c1f25; font-weight: 600; }
+
+/* Viewport area (where the app renders) */
+.viewport {
+ height: 740px;
+ position: relative;
+ overflow: hidden;
+ background: #f8fafc;
+}
+
+/* Subtle mesh inside viewport for glass to grab onto */
+.viewport::before {
+ content: '';
+ position: absolute; inset: 0;
+ background:
+  radial-gradient(circle at 18% 15%, rgba(99, 102, 241, 0.10) 0%, transparent 45%),
+  radial-gradient(circle at 82% 20%, rgba(59, 130, 246, 0.10) 0%, transparent 45%),
+  radial-gradient(circle at 78% 85%, rgba(99, 102, 241, 0.08) 0%, transparent 45%),
+  radial-gradient(circle at 22% 80%, rgba(125, 211, 252, 0.10) 0%, transparent 42%),
+  linear-gradient(180deg, #ffffff 0%, #eaf1fb 100%);
+ filter: blur(30px) saturate(140%);
+ z-index: 0;
+}
+
+.tab-content { display: none; height: 100%; position: relative; z-index: 1; }
+.tab-content.show { display: flex; }
+
+/* ============================================================
+   LOGIN — centered glass card
+============================================================ */
+.login-stage {
+ width: 100%;
+ display: flex;
+ align-items: center;
+ justify-content: center;
+ padding: 30px;
+ position: relative;
+}
+.login-card {
+ width: 100%;
+ max-width: 440px;
+ padding: 36px 30px;
+ background: rgba(255,255,255,0.72);
+ backdrop-filter: blur(40px) saturate(180%);
+ -webkit-backdrop-filter: blur(40px) saturate(180%);
+ border: 1px solid rgba(255,255,255,0.9);
+ border-radius: 24px;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,1),
+  0 30px 60px rgba(30,58,138,0.18),
+  0 4px 12px rgba(30,58,138,0.08);
+ text-align: center;
+}
+.crochet-frame {
+ width: 110px; height: 130px;
+ margin: 0 auto 16px;
+ padding: 12px;
+ border-radius: 24px;
+ background: rgba(255,255,255,0.6);
+ backdrop-filter: blur(20px);
+ -webkit-backdrop-filter: blur(20px);
+ border: 1px solid rgba(255,255,255,0.9);
+ box-shadow:
+  inset 0 2px 0 rgba(255,255,255,1),
+  0 12px 32px rgba(30,58,138,0.2);
+ display: flex; align-items: center; justify-content: center;
+}
+.crochet-frame img {
+ width: 100%; height: 100%;
+ object-fit: contain;
+ filter: drop-shadow(0 4px 8px rgba(30,58,138,0.2));
+}
+.login-card h1 {
+ font: 700 26px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.16em;
+ color: var(--navy-dark);
+ margin-bottom: 5px;
+}
+.login-card .sub {
+ font: 500 11px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.2em;
+ color: var(--muted);
+ text-transform: uppercase;
+ margin-bottom: 28px;
+ padding-bottom: 18px;
+ border-bottom: 1px solid rgba(30,58,138,0.08);
+}
+.field {
+ text-align: left;
+ margin-bottom: 14px;
+}
+.field label {
+ display: block;
+ font: 600 11.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--muted);
+ letter-spacing: 0.06em;
+ text-transform: uppercase;
+ margin-bottom: 6px;
+}
+.field input {
+ width: 100%;
+ padding: 12px 16px;
+ background: rgba(255,255,255,0.75);
+ border: 1px solid rgba(30,58,138,0.12);
+ border-radius: 10px;
+ font: 600 15px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+ outline: none;
+ transition: all 0.2s;
+}
+.field input:focus {
+ border-color: var(--navy-mid);
+ box-shadow: 0 0 0 4px rgba(59,130,246,0.15);
+ background: #fff;
+}
+.cta {
+ display: block;
+ width: 100%;
+ padding: 14px;
+ margin-top: 8px;
+ background: var(--navy);
+ color: #fff;
+ border: none;
+ border-radius: 50px;
+ font: 700 14.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.04em;
+ cursor: pointer;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.25),
+  0 10px 26px rgba(30,58,138,0.4);
+ transition: all 0.2s;
+}
+.cta:hover { background: var(--navy-dark); transform: translateY(-1px); }
+.cta.ghost {
+ background: rgba(255,255,255,0.7);
+ color: var(--navy);
+ border: 1px solid rgba(30,58,138,0.15);
+ margin-top: 10px;
+ box-shadow: inset 0 1px 0 rgba(255,255,255,1), 0 4px 12px rgba(30,58,138,0.1);
+}
+
+/* ============================================================
+   APP LAYOUT — Sidebar + Main
+============================================================ */
+.app-shell { display: flex; width: 100%; height: 100%; }
+
+/* Sidebar (Glass with Navy header) */
+.sidebar {
+ width: 260px;
+ background: rgba(255,255,255,0.72);
+ backdrop-filter: blur(40px) saturate(180%);
+ -webkit-backdrop-filter: blur(40px) saturate(180%);
+ border-right: 1px solid rgba(255,255,255,0.85);
+ display: flex; flex-direction: column;
+ box-shadow: 6px 0 24px rgba(30,58,138,0.08);
+}
+.side-header {
+ padding: 20px 18px 18px;
+ background: linear-gradient(165deg, var(--navy) 0%, var(--navy-dark) 100%);
+ color: #fff;
+ position: relative;
+ overflow: hidden;
+}
+.side-header::before {
+ content:''; position:absolute; top:-30px; right:-30px;
+ width:120px; height:120px;
+ background: radial-gradient(circle, rgba(255,255,255,0.15), transparent 60%);
+ border-radius: 50%;
+ pointer-events: none;
+}
+.side-logo {
+ display: flex; align-items: center; gap: 10px;
+ margin-bottom: 16px;
+ position: relative;
+}
+.side-logo img {
+ width: 36px; height: 36px; object-fit: contain;
+ filter: brightness(0) invert(1);
+}
+.side-logo .brand {
+ font: 700 14px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.14em;
+ color: #fff;
+}
+.side-logo .brand small {
+ display: block; font-size: 10px; font-weight: 500;
+ letter-spacing: 0.18em; opacity: 0.75; margin-top: 2px;
+}
+.side-user {
+ padding-top: 14px;
+ border-top: 1px solid rgba(255,255,255,0.15);
+ position: relative;
+}
+.side-user .name {
+ font: 700 14px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: #fff;
+}
+.side-user .id {
+ font: 500 12px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: rgba(255,255,255,0.7); margin-top: 2px;
+}
+.role-pill {
+ display: inline-block;
+ padding: 3px 10px;
+ background: rgba(255,255,255,0.15);
+ border: 1px solid rgba(255,255,255,0.25);
+ border-radius: 4px;
+ font: 700 10px -apple-system, 'Inter', sans-serif;
+ letter-spacing: 0.1em; text-transform: uppercase;
+ margin-top: 8px;
+ color: #fff;
+}
+.nav-area { flex: 1; padding: 10px 0; overflow-y: auto; }
+.nav-area::-webkit-scrollbar { width: 0; }
+.nav-section {
+ padding: 14px 20px 6px;
+ font: 700 10.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: rgba(15,37,87,0.4);
+ text-transform: uppercase;
+ letter-spacing: 0.12em;
+}
+.nav-item {
+ padding: 9px 20px;
+ display: flex; align-items: center; gap: 12px;
+ font: 500 13px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: rgba(15,37,87,0.75);
+ cursor: pointer;
+ border-left: 3px solid transparent;
+ transition: all 0.15s;
+}
+.nav-item:hover { background: rgba(30,58,138,0.04); color: var(--navy); }
+.nav-item.active {
+ background: rgba(30,58,138,0.08);
+ color: var(--navy-dark);
+ border-left-color: var(--navy);
+ font-weight: 700;
+}
+.nav-item .badge {
+ margin-left: auto;
+ background: var(--navy);
+ color: #fff;
+ font: 700 10px -apple-system, 'Inter', sans-serif;
+ padding: 2px 7px;
+ border-radius: 10px;
+}
+
+/* Main content */
+.main {
+ flex: 1;
+ padding: 24px 32px 28px;
+ overflow-y: auto;
+ position: relative;
+}
+.main::-webkit-scrollbar { width: 6px; }
+.main::-webkit-scrollbar-thumb { background: rgba(30,58,138,0.18); border-radius: 4px; }
+
+/* Page header */
+.page-hdr {
+ display: flex; justify-content: space-between; align-items: flex-end;
+ margin-bottom: 22px;
+ padding-bottom: 16px;
+ border-bottom: 2px solid rgba(30,58,138,0.12);
+}
+.page-hdr h1 {
+ font: 700 24px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+ letter-spacing: 0.01em;
+}
+.page-hdr .sub {
+ font: 500 13px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--muted);
+ margin-top: 4px;
+}
+.btn-pill {
+ padding: 9px 18px;
+ background: var(--navy);
+ color: #fff;
+ border: none;
+ border-radius: 50px;
+ font: 700 13px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ cursor: pointer;
+ letter-spacing: 0.02em;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.2),
+  0 8px 22px rgba(30,58,138,0.32);
+ transition: all 0.2s;
+}
+.btn-pill:hover { background: var(--navy-dark); transform: translateY(-1px); }
+.btn-pill.ghost {
+ background: rgba(255,255,255,0.7);
+ color: var(--navy);
+ border: 1px solid rgba(30,58,138,0.15);
+ box-shadow: inset 0 1px 0 rgba(255,255,255,1), 0 4px 10px rgba(30,58,138,0.08);
+}
+.btn-pill.ghost:hover { background: #fff; }
+
+/* Glass cards */
+.glass {
+ background: rgba(255,255,255,0.70);
+ backdrop-filter: blur(30px) saturate(180%);
+ -webkit-backdrop-filter: blur(30px) saturate(180%);
+ border: 1px solid rgba(255,255,255,0.85);
+ border-radius: 18px;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,1),
+  0 8px 24px rgba(30,58,138,0.10);
+}
+
+/* KPI grid */
+.kpi-grid {
+ display: grid;
+ grid-template-columns: repeat(4, 1fr);
+ gap: 14px;
+ margin-bottom: 22px;
+}
+.kpi {
+ padding: 18px 20px;
+ position: relative; overflow: hidden;
+}
+.kpi::before {
+ content:''; position:absolute; top:-20px; right:-20px;
+ width: 80px; height: 80px;
+ background: radial-gradient(circle, rgba(59,130,246,0.18), transparent 65%);
+ border-radius: 50%; pointer-events: none;
+}
+.kpi.green::before { background: radial-gradient(circle, rgba(34,197,94,0.18), transparent 65%); }
+.kpi.amber::before { background: radial-gradient(circle, rgba(245,158,11,0.18), transparent 65%); }
+.kpi.violet::before { background: radial-gradient(circle, rgba(139,92,246,0.18), transparent 65%); }
+.kpi .lbl {
+ font: 700 10.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--muted);
+ letter-spacing: 0.1em; text-transform: uppercase;
+}
+.kpi .v {
+ font: 700 32px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+ margin-top: 8px; line-height: 1;
+}
+.kpi .v small { font-size: 14px; color: var(--muted); font-weight: 500; }
+.kpi .delta {
+ display: inline-flex; align-items: center; gap: 5px;
+ margin-top: 10px;
+ padding: 3px 10px;
+ background: rgba(34, 197, 94, 0.14);
+ color: #15803d;
+ font: 700 11px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ border-radius: 50px;
+ border: 1px solid rgba(34, 197, 94, 0.3);
+}
+.kpi.amber .delta {
+ background: rgba(245, 158, 11, 0.14); color: #b45309;
+ border-color: rgba(245, 158, 11, 0.3);
+}
+
+/* 2-column area */
+.col-2 {
+ display: grid;
+ grid-template-columns: 2fr 1fr;
+ gap: 14px;
+ margin-bottom: 18px;
+}
+.panel { overflow: hidden; }
+.panel-hdr {
+ padding: 14px 20px;
+ border-bottom: 1px solid rgba(30,58,138,0.08);
+ display: flex; justify-content: space-between; align-items: center;
+}
+.panel-hdr h3 {
+ font: 700 12.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+ letter-spacing: 0.06em; text-transform: uppercase;
+}
+.panel-hdr .more {
+ font: 600 11.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-mid); cursor: pointer;
+}
+.panel-body { padding: 16px 20px; }
+
+/* Request tiles */
+.req-tiles {
+ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px;
+}
+.req-tile {
+ padding: 14px 16px;
+ display: flex; align-items: center; gap: 12px;
+ background: rgba(255,255,255,0.55);
+ border: 1px solid rgba(30,58,138,0.08);
+ border-radius: 14px;
+ cursor: pointer;
+ transition: all 0.2s;
+}
+.req-tile:hover {
+ background: rgba(255,255,255,0.95);
+ border-color: var(--navy-mid);
+ transform: translateY(-2px);
+ box-shadow: 0 10px 25px rgba(30,58,138,0.15);
+}
+.req-orb {
+ width: 42px; height: 42px;
+ border-radius: 13px;
+ position: relative; overflow: hidden;
+ box-shadow:
+  inset 0 2px 2px rgba(255,255,255,0.55),
+  0 4px 12px rgba(30,58,138,0.18);
+ flex-shrink: 0;
+}
+.req-orb::after {
+ content:''; position:absolute; top:5px; left:5px; right:5px;
+ height:14px; border-radius:50% 50% 0 0;
+ background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0));
+}
+.req-tile.leave .req-orb { background: linear-gradient(135deg, var(--sky), var(--navy-mid)); }
+.req-tile.ot .req-orb { background: linear-gradient(135deg, #6366f1, #4f46e5); }
+.req-tile.field .req-orb { background: linear-gradient(135deg, #14b8a6, #0891b2); }
+.req-tile.maint .req-orb { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+.req-tile.comp .req-orb { background: linear-gradient(135deg, #f97316, #ea580c); }
+.req-tile.news .req-orb { background: linear-gradient(135deg, #ec4899, #be185d); }
+.req-tile .info .name {
+ font: 700 13px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+}
+.req-tile .info .desc {
+ font: 500 11.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--muted);
+ margin-top: 2px;
+}
+
+/* Progress rows */
+.prog-row {
+ padding: 12px 0;
+ border-bottom: 1px solid rgba(30,58,138,0.06);
+}
+.prog-row:last-child { border-bottom: none; }
+.prog-row .top {
+ display: flex; justify-content: space-between; margin-bottom: 6px;
+}
+.prog-row .top .l {
+ font: 600 13px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+}
+.prog-row .top .r {
+ font: 700 13px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+}
+.prog-bar {
+ height: 8px; border-radius: 4px;
+ background: rgba(30,58,138,0.08);
+ overflow: hidden;
+}
+.prog-fill {
+ height: 100%; border-radius: 4px;
+ background: linear-gradient(90deg, var(--sky), var(--navy-mid));
+ box-shadow: 0 0 10px rgba(59,130,246,0.4);
+}
+.prog-fill.green { background: linear-gradient(90deg, #22c55e, #16a34a); box-shadow: 0 0 10px rgba(34,197,94,0.4); }
+.prog-fill.amber { background: linear-gradient(90deg, #fbbf24, #f59e0b); box-shadow: 0 0 10px rgba(245,158,11,0.4); }
+
+/* Activity feed */
+.feed-item {
+ padding: 12px 0;
+ display: flex; gap: 12px; align-items: center;
+ border-bottom: 1px solid rgba(30,58,138,0.06);
+}
+.feed-item:last-child { border-bottom: none; }
+.feed-item .avatar {
+ width: 38px; height: 38px;
+ border-radius: 50%;
+ display:flex; align-items:center; justify-content:center;
+ font: 700 13px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: #fff; flex-shrink: 0;
+ box-shadow: inset 0 2px 2px rgba(255,255,255,0.4), 0 4px 10px rgba(30,58,138,0.2);
+}
+.feed-item .body { flex: 1; min-width: 0; }
+.feed-item .text {
+ font: 500 13px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+}
+.feed-item .text strong { font-weight: 700; }
+.feed-item .when {
+ font: 500 11.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--muted); margin-top: 2px;
+}
+.chip {
+ padding: 3px 10px;
+ background: rgba(34, 197, 94, 0.14);
+ color: #15803d;
+ border: 1px solid rgba(34, 197, 94, 0.3);
+ border-radius: 50px;
+ font: 700 10.5px -apple-system, 'Inter', sans-serif;
+ letter-spacing: 0.04em; text-transform: uppercase;
+}
+.chip.pending {
+ background: rgba(245, 158, 11, 0.14); color: #b45309;
+ border-color: rgba(245, 158, 11, 0.3);
+}
+
+/* Filter chips bar */
+.filter-bar {
+ display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;
+}
+.fchip {
+ padding: 7px 16px;
+ background: rgba(255,255,255,0.7);
+ backdrop-filter: blur(15px);
+ -webkit-backdrop-filter: blur(15px);
+ border: 1px solid rgba(30,58,138,0.15);
+ border-radius: 50px;
+ font: 600 12px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy);
+ cursor: pointer;
+}
+.fchip.active {
+ background: var(--navy); color: #fff;
+ border-color: var(--navy-dark);
+ box-shadow: 0 4px 14px rgba(30,58,138,0.35);
+}
+
+/* Table (Leave & OT) */
+.table-glass {
+ overflow: hidden;
+}
+.table-glass table { width: 100%; border-collapse: collapse; }
+.table-glass th {
+ padding: 12px 16px;
+ background: rgba(30,58,138,0.06);
+ color: var(--navy-dark);
+ font: 700 11px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.06em; text-transform: uppercase;
+ text-align: left;
+ border-bottom: 1px solid rgba(30,58,138,0.12);
+}
+.table-glass td {
+ padding: 14px 16px;
+ font: 500 13px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+ border-bottom: 1px solid rgba(30,58,138,0.06);
+}
+.table-glass tr:last-child td { border-bottom: none; }
+.table-glass tr:hover td { background: rgba(30,58,138,0.04); }
+
+.brand-mark {
+ text-align: center;
+ margin-top: 28px;
+ color: var(--muted);
+ font: 600 11px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.22em; text-transform: uppercase;
+}
+.brand-mark span { color: var(--navy); }
+</style>
+</head>
+<body>
+
+<div class="demo-tabs">
+ <button class="demo-tab active" onclick="show('login', this)">Login</button>
+ <button class="demo-tab" onclick="show('home', this)">Dashboard</button>
+ <button class="demo-tab" onclick="show('list', this)">Leave &amp; OT</button>
+</div>
+
+<div class="browser">
+ <!-- Windows-style title bar -->
+ <div class="titlebar">
+  <span class="app-icon">C</span>
+  <span class="title-text">CROCHET HR Management — Google Chrome</span>
+  <div class="win-controls">
+   <div class="btn"><svg viewBox="0 0 10 10"><path d="M0 5h10" stroke="currentColor" stroke-width="1" fill="none"/></svg></div>
+   <div class="btn"><svg viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/></svg></div>
+   <div class="btn close"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" stroke-width="1" fill="none"/></svg></div>
+  </div>
+ </div>
+
+ <!-- Tab strip -->
+ <div class="tabstrip">
+  <div class="tab-chip active"><span class="dot">C</span>CROCHET HR Management</div>
+  <div class="tab-chip"><span class="dot" style="background:#10b981;">G</span>Gmail</div>
+  <div class="tab-chip"><span class="dot" style="background:#f59e0b;">N</span>Notion</div>
+  <div class="tab-add">+</div>
+ </div>
+
+ <!-- Address bar -->
+ <div class="addressbar">
+  <div class="addr-nav">
+   <div class="addr-btn">‹</div>
+   <div class="addr-btn">›</div>
+   <div class="addr-btn">↻</div>
+  </div>
+  <div class="url-bar"><span class="url-domain">hr-management-pi-six.vercel.app</span>/dashboard</div>
+  <div class="addr-nav">
+   <div class="addr-btn">⋮</div>
+  </div>
+ </div>
+
+ <!-- Viewport -->
+ <div class="viewport">
+
+  <!-- ===== LOGIN ===== -->
+  <div id="tab-login" class="tab-content show">
+   <div class="login-stage">
+    <div class="login-card">
+     <div class="crochet-frame">
+      <img src="Asset 4 Black.png" alt="CROCHET" onerror="this.src='logo-black.png'">
+     </div>
+     <h1>CROCHET</h1>
+     <div class="sub">HR Management System</div>
+
+     <div class="field">
+      <label>รหัสพนักงาน</label>
+      <input type="text" value="ADMIN001">
+     </div>
+     <div class="field">
+      <label>รหัสผ่าน</label>
+      <input type="password" value="••••••••">
+     </div>
+
+     <button class="cta">เข้าสู่ระบบ</button>
+     <button class="cta ghost">ลืมรหัสผ่าน</button>
+    </div>
+   </div>
+  </div>
+
+  <!-- ===== DASHBOARD ===== -->
+  <div id="tab-home" class="tab-content">
+   <div class="app-shell">
+    <aside class="sidebar">
+     <div class="side-header">
+      <div class="side-logo">
+       <img src="Asset 4 Black.png" alt="CROCHET" onerror="this.src='logo-black.png'">
+       <div class="brand">CROCHET<small>HR MANAGEMENT</small></div>
+      </div>
+      <div class="side-user">
+       <div class="name">แอดมิน ระบบ</div>
+       <div class="id">ADMIN001 · HR</div>
+       <span class="role-pill">Admin HR</span>
+      </div>
+     </div>
+     <div class="nav-area">
+      <div class="nav-section">หน้าหลัก</div>
+      <div class="nav-item active">แดชบอร์ดของฉัน</div>
+      <div class="nav-item">วันหยุด &amp; สิทธิ์ลา</div>
+
+      <div class="nav-section">คำขอของฉัน</div>
+      <div class="nav-item">ขอลา</div>
+      <div class="nav-item">ขอ OT</div>
+      <div class="nav-item">งานนอกสถานที่</div>
+      <div class="nav-item">ปฏิทินของฉัน</div>
+      <div class="nav-item">สลิปเงินเดือน</div>
+
+      <div class="nav-section">การอนุมัติและทีม</div>
+      <div class="nav-item">ศูนย์อนุมัติ<span class="badge">3</span></div>
+      <div class="nav-item">แดชบอร์ดผู้บริหาร</div>
+      <div class="nav-item">ลางาน &amp; OT</div>
+
+      <div class="nav-section">จัดการระบบ</div>
+      <div class="nav-item">จัดการพนักงาน</div>
+      <div class="nav-item">ผังองค์กร</div>
+      <div class="nav-item">Audit Log</div>
+     </div>
+    </aside>
+
+    <main class="main">
+     <div class="page-hdr">
+      <div>
+       <h1>แดชบอร์ดของฉัน</h1>
+       <div class="sub">สวัสดีตอนเช้า · วันพุธที่ 19 มิ.ย. 2569 · 3 คำขอรอดำเนินการ</div>
+      </div>
+      <button class="btn-pill">+ สร้างคำขอใหม่</button>
+     </div>
+
+     <div class="kpi-grid">
+      <div class="glass kpi green">
+       <div class="lbl">ลาพักร้อนคงเหลือ</div>
+       <div class="v">8.5 <small>/ 12 วัน</small></div>
+       <div class="delta">↑ +5 จากปีที่แล้ว</div>
+      </div>
+      <div class="glass kpi">
+       <div class="lbl">OT เดือนนี้</div>
+       <div class="v">14 <small>ชม.</small></div>
+       <div class="delta">↑ +2 ชม.</div>
+      </div>
+      <div class="glass kpi amber">
+       <div class="lbl">คำขอรออนุมัติ</div>
+       <div class="v">3</div>
+       <div class="delta">1 เกิน SLA</div>
+      </div>
+      <div class="glass kpi violet">
+       <div class="lbl">ลาป่วยคงเหลือ</div>
+       <div class="v">27 <small>/ 30 วัน</small></div>
+       <div class="delta">ตามกฎหมาย</div>
+      </div>
+     </div>
+
+     <div class="col-2">
+      <div class="glass panel">
+       <div class="panel-hdr">
+        <h3>One Request Center</h3>
+        <span class="more">ดูทั้งหมด →</span>
+       </div>
+       <div class="panel-body">
+        <div class="req-tiles">
+         <div class="req-tile leave"><div class="req-orb"></div><div class="info"><div class="name">ขอลา</div><div class="desc">ป่วย กิจ พักร้อน</div></div></div>
+         <div class="req-tile ot"><div class="req-orb"></div><div class="info"><div class="name">ขอ OT</div><div class="desc">ล่วงเวลา</div></div></div>
+         <div class="req-tile field"><div class="req-orb"></div><div class="info"><div class="name">งานนอกสถานที่</div><div class="desc">พบลูกค้า</div></div></div>
+         <div class="req-tile comp"><div class="req-orb"></div><div class="info"><div class="name">สะสมวันหยุด</div><div class="desc">ทำงานวันหยุด</div></div></div>
+         <div class="req-tile maint"><div class="req-orb"></div><div class="info"><div class="name">แจ้งซ่อมอาคาร</div><div class="desc">อุปกรณ์ ไฟ น้ำ</div></div></div>
+         <div class="req-tile news"><div class="req-orb"></div><div class="info"><div class="name">ประกาศ</div><div class="desc">ข่าวภายใน</div></div></div>
+        </div>
+       </div>
+      </div>
+
+      <div class="glass panel">
+       <div class="panel-hdr"><h3>สิทธิ์การลา</h3></div>
+       <div class="panel-body">
+        <div class="prog-row">
+         <div class="top"><span class="l">ลาพักร้อน</span><span class="r">8.5 / 12</span></div>
+         <div class="prog-bar"><div class="prog-fill" style="width:71%;"></div></div>
+        </div>
+        <div class="prog-row">
+         <div class="top"><span class="l">ลาป่วย</span><span class="r">27 / 30</span></div>
+         <div class="prog-bar"><div class="prog-fill green" style="width:90%;"></div></div>
+        </div>
+        <div class="prog-row">
+         <div class="top"><span class="l">ลากิจ</span><span class="r">4 / 6</span></div>
+         <div class="prog-bar"><div class="prog-fill amber" style="width:67%;"></div></div>
+        </div>
+       </div>
+      </div>
+     </div>
+
+     <div class="glass panel">
+      <div class="panel-hdr">
+       <h3>กิจกรรมล่าสุด</h3>
+       <span class="more">ดูทั้งหมด →</span>
+      </div>
+      <div class="panel-body">
+       <div class="feed-item">
+        <div class="avatar" style="background:linear-gradient(135deg,#3b82f6,#1d4ed8);">สม</div>
+        <div class="body">
+         <div class="text">สมชาย ผู้จัดการ อนุมัติ <strong>ลาพักร้อน 22-24 มิ.ย. 2569</strong></div>
+         <div class="when">2 ชั่วโมงที่แล้ว · MGR001</div>
+        </div>
+        <div class="chip">อนุมัติ</div>
+       </div>
+       <div class="feed-item">
+        <div class="avatar" style="background:linear-gradient(135deg,#6366f1,#4338ca);">OT</div>
+        <div class="body">
+         <div class="text">คุณส่ง <strong>ขอ OT 4 ชั่วโมง</strong> วันที่ 15 มิ.ย. — ปิดบัญชี Q2</div>
+         <div class="when">เมื่อวานนี้ · 09:14</div>
+        </div>
+        <div class="chip pending">รออนุมัติ</div>
+       </div>
+       <div class="feed-item">
+        <div class="avatar" style="background:linear-gradient(135deg,#14b8a6,#0891b2);">ฟิ</div>
+        <div class="body">
+         <div class="text"><strong>ฟิวส์ขาด ชั้น 3</strong> — Maintenance รับงานแล้ว</div>
+         <div class="when">3 วันที่แล้ว · FX-0041</div>
+        </div>
+        <div class="chip">เสร็จ</div>
+       </div>
+      </div>
+     </div>
+    </main>
+   </div>
+  </div>
+
+  <!-- ===== LEAVE & OT LIST ===== -->
+  <div id="tab-list" class="tab-content">
+   <div class="app-shell">
+    <aside class="sidebar">
+     <div class="side-header">
+      <div class="side-logo">
+       <img src="Asset 4 Black.png" alt="CROCHET" onerror="this.src='logo-black.png'">
+       <div class="brand">CROCHET<small>HR MANAGEMENT</small></div>
+      </div>
+      <div class="side-user">
+       <div class="name">แอดมิน ระบบ</div>
+       <div class="id">ADMIN001 · HR</div>
+       <span class="role-pill">Admin HR</span>
+      </div>
+     </div>
+     <div class="nav-area">
+      <div class="nav-section">หน้าหลัก</div>
+      <div class="nav-item">แดชบอร์ดของฉัน</div>
+      <div class="nav-item">วันหยุด &amp; สิทธิ์ลา</div>
+
+      <div class="nav-section">คำขอของฉัน</div>
+      <div class="nav-item">ขอลา</div>
+      <div class="nav-item">ขอ OT</div>
+      <div class="nav-item">งานนอกสถานที่</div>
+      <div class="nav-item">ปฏิทินของฉัน</div>
+
+      <div class="nav-section">การอนุมัติและทีม</div>
+      <div class="nav-item">ศูนย์อนุมัติ<span class="badge">3</span></div>
+      <div class="nav-item">แดชบอร์ดผู้บริหาร</div>
+      <div class="nav-item active">ลางาน &amp; OT</div>
+     </div>
+    </aside>
+
+    <main class="main">
+     <div class="page-hdr">
+      <div>
+       <h1>ลางาน &amp; OT</h1>
+       <div class="sub">รายการของฉัน · 5 รายการล่าสุด · มิถุนายน 2569</div>
+      </div>
+      <div style="display:flex;gap:8px;">
+       <button class="btn-pill ghost">Export</button>
+       <button class="btn-pill">+ ขอลาใหม่</button>
+      </div>
+     </div>
+
+     <div class="filter-bar">
+      <div class="fchip active">ทั้งหมด · 5</div>
+      <div class="fchip">ลา · 3</div>
+      <div class="fchip">OT · 2</div>
+      <div class="fchip">รออนุมัติ · 2</div>
+      <div class="fchip">อนุมัติแล้ว · 3</div>
+     </div>
+
+     <div class="col-2">
+      <div class="glass panel table-glass">
+       <div class="panel-hdr"><h3>คำขอลาล่าสุด</h3><span class="more">ดูทั้งหมด →</span></div>
+       <table>
+        <thead><tr><th>ประเภท</th><th>วันที่</th><th>จำนวน</th><th>สถานะ</th></tr></thead>
+        <tbody>
+         <tr>
+          <td><strong>ลาพักร้อน</strong></td>
+          <td>22-24 มิ.ย. 2569</td>
+          <td>3 วัน</td>
+          <td><span class="chip">อนุมัติ</span></td>
+         </tr>
+         <tr>
+          <td><strong>ลาป่วย</strong></td>
+          <td>10 มิ.ย. 2569</td>
+          <td>1 วัน</td>
+          <td><span class="chip">อนุมัติ</span></td>
+         </tr>
+         <tr>
+          <td><strong>ลากิจ</strong></td>
+          <td>2 มิ.ย. 2569</td>
+          <td>0.5 วัน</td>
+          <td><span class="chip pending">รออนุมัติ</span></td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+
+      <div class="glass panel table-glass">
+       <div class="panel-hdr"><h3>คำขอ OT ล่าสุด</h3><span class="more">ดูทั้งหมด →</span></div>
+       <table>
+        <thead><tr><th>วันที่</th><th>ชม.</th><th>สถานะ</th></tr></thead>
+        <tbody>
+         <tr>
+          <td>15 มิ.ย. 2569<div class="when" style="font-size:11px;color:var(--muted);margin-top:2px;">ปิดบัญชี Q2</div></td>
+          <td>4 ชม.</td>
+          <td><span class="chip pending">รออนุมัติ</span></td>
+         </tr>
+         <tr>
+          <td>8 มิ.ย. 2569<div class="when" style="font-size:11px;color:var(--muted);margin-top:2px;">ติดตั้งระบบ</div></td>
+          <td>8 ชม.</td>
+          <td><span class="chip">อนุมัติ</span></td>
+         </tr>
+        </tbody>
+       </table>
+      </div>
+     </div>
+
+     <div class="glass panel">
+      <div class="panel-hdr"><h3>ปฏิทินวันลาของทีม · มิถุนายน 2569</h3></div>
+      <div class="panel-body">
+       <div style="display:grid;grid-template-columns:repeat(7,1fr);gap:1px;background:rgba(30,58,138,0.08);border:1px solid rgba(30,58,138,0.08);border-radius:10px;overflow:hidden;">
+        ${['อา','จ','อ','พ','พฤ','ศ','ส']}
+        <div style="background:var(--navy);color:#fff;padding:8px;text-align:center;font:700 11px -apple-system,'Inter',sans-serif;letter-spacing:0.06em;text-transform:uppercase;">อา</div>
+        <div style="background:var(--navy);color:#fff;padding:8px;text-align:center;font:700 11px -apple-system,'Inter',sans-serif;letter-spacing:0.06em;text-transform:uppercase;">จ</div>
+        <div style="background:var(--navy);color:#fff;padding:8px;text-align:center;font:700 11px -apple-system,'Inter',sans-serif;letter-spacing:0.06em;text-transform:uppercase;">อ</div>
+        <div style="background:var(--navy);color:#fff;padding:8px;text-align:center;font:700 11px -apple-system,'Inter',sans-serif;letter-spacing:0.06em;text-transform:uppercase;">พ</div>
+        <div style="background:var(--navy);color:#fff;padding:8px;text-align:center;font:700 11px -apple-system,'Inter',sans-serif;letter-spacing:0.06em;text-transform:uppercase;">พฤ</div>
+        <div style="background:var(--navy);color:#fff;padding:8px;text-align:center;font:700 11px -apple-system,'Inter',sans-serif;letter-spacing:0.06em;text-transform:uppercase;">ศ</div>
+        <div style="background:var(--navy);color:#fff;padding:8px;text-align:center;font:700 11px -apple-system,'Inter',sans-serif;letter-spacing:0.06em;text-transform:uppercase;">ส</div>
+
+        ${['',1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20].map(()=>'').join('')}
+        <div style="background:#fff;padding:8px;min-height:64px;"></div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">1</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">2</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">3</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">4</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">5</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">6</div>
+
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">7</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">8</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">9</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">10
+         <div style="margin-top:4px;display:inline-block;padding:2px 8px;background:#dbeafe;color:#1e40af;font:700 10px -apple-system,sans-serif;border-radius:10px;">2</div>
+        </div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">11</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">12</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">13</div>
+
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">14</div>
+        <div style="background:var(--navy);color:#fff;padding:8px;min-height:64px;font:700 12px -apple-system,sans-serif;">15
+         <div style="margin-top:4px;display:inline-block;padding:2px 8px;background:rgba(255,255,255,0.25);color:#fff;font:700 10px -apple-system,sans-serif;border-radius:10px;">OT 4</div>
+        </div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">16</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">17</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">18</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">19</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">20</div>
+
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">21</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">22
+         <div style="margin-top:4px;display:inline-block;padding:2px 8px;background:#dbeafe;color:#1e40af;font:700 10px -apple-system,sans-serif;border-radius:10px;">ลา 1</div>
+        </div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">23
+         <div style="margin-top:4px;display:inline-block;padding:2px 8px;background:#dbeafe;color:#1e40af;font:700 10px -apple-system,sans-serif;border-radius:10px;">ลา 1</div>
+        </div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">24
+         <div style="margin-top:4px;display:inline-block;padding:2px 8px;background:#dbeafe;color:#1e40af;font:700 10px -apple-system,sans-serif;border-radius:10px;">ลา 1</div>
+        </div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">25</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">26</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">27</div>
+
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">28</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">29</div>
+        <div style="background:#fff;padding:8px;min-height:64px;font:600 12px -apple-system,sans-serif;">30</div>
+        <div style="background:#fff;padding:8px;min-height:64px;color:#cbd5e1;"></div>
+        <div style="background:#fff;padding:8px;min-height:64px;color:#cbd5e1;"></div>
+        <div style="background:#fff;padding:8px;min-height:64px;color:#cbd5e1;"></div>
+        <div style="background:#fff;padding:8px;min-height:64px;color:#cbd5e1;"></div>
+       </div>
+      </div>
+     </div>
+    </main>
+   </div>
+  </div>
+
+ </div>
+</div>
+
+<div class="brand-mark"><span>CROCHET HR</span> · Desktop Liquid Glass · Web on Windows</div>
+
+<script>
+function show(name, el) {
+ document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('show'));
+ document.getElementById('tab-' + name).classList.add('show');
+ document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('active'));
+ el.classList.add('active');
+}
+</script>
+</body>
+</html>

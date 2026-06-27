@@ -1,0 +1,815 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CROCHET HR · iOS 6 Skeuomorphism</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-font-smoothing: antialiased; }
+
+html, body {
+ font-family: 'IBM Plex Sans Thai', 'Helvetica Neue', Helvetica, sans-serif;
+ background: #1d2025;
+ background-image:
+   radial-gradient(circle at 20% 0%, #3a4453 0%, transparent 50%),
+   radial-gradient(circle at 80% 100%, #2d3848 0%, transparent 50%),
+   linear-gradient(180deg, #1d2025 0%, #0c0e12 100%);
+ min-height: 100vh;
+ padding: 40px 20px 60px;
+ color: #000;
+}
+
+.demo-tabs {
+ display: flex;
+ gap: 10px;
+ justify-content: center;
+ margin-bottom: 32px;
+ flex-wrap: wrap;
+}
+.demo-tab {
+ padding: 10px 22px;
+ background: linear-gradient(180deg, #f8fafc 0%, #c8cdd4 50%, #a5acb6 51%, #d5dade 100%);
+ color: #1f2937;
+ border: 1px solid #5a6470;
+ border-radius: 8px;
+ font-weight: 600;
+ font-size: 13px;
+ cursor: pointer;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.8),
+  inset 0 -1px 0 rgba(0,0,0,0.1),
+  0 1px 0 rgba(255,255,255,0.1),
+  0 4px 10px rgba(0,0,0,0.6);
+ text-shadow: 0 1px 0 rgba(255,255,255,0.7);
+ font-family: 'Helvetica Neue', sans-serif;
+}
+.demo-tab.active {
+ background: linear-gradient(180deg, #4a90e2 0%, #2862b0 50%, #1f4f96 51%, #2862b0 100%);
+ color: #fff;
+ border-color: #16335f;
+ text-shadow: 0 -1px 0 rgba(0,0,0,0.5);
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.4),
+  inset 0 -1px 0 rgba(0,0,0,0.2),
+  0 4px 10px rgba(0,0,0,0.5);
+}
+
+/* ============================================================
+   iPhone (5/5s) Frame
+============================================================ */
+.phone-row {
+ display: flex;
+ gap: 36px;
+ justify-content: center;
+ align-items: flex-start;
+ flex-wrap: wrap;
+}
+.iphone {
+ width: 340px;
+ height: 700px;
+ background: linear-gradient(180deg, #2b2f35 0%, #0d0f12 100%);
+ border-radius: 46px;
+ padding: 72px 18px 70px;
+ position: relative;
+ box-shadow:
+  inset 0 0 0 1px rgba(255,255,255,0.05),
+  inset 0 2px 0 rgba(255,255,255,0.07),
+  0 0 0 1.5px #000,
+  0 30px 60px rgba(0,0,0,0.7),
+  0 60px 90px rgba(0,0,0,0.5);
+}
+.iphone::before { /* ear-piece */
+ content:''; position:absolute; top:38px; left:50%; transform:translateX(-50%);
+ width: 64px; height: 8px; border-radius: 4px; background: #0a0b0d;
+ box-shadow: inset 0 1px 1px rgba(0,0,0,0.8);
+}
+.iphone::after { /* home button */
+ content:''; position:absolute; bottom:14px; left:50%; transform:translateX(-50%);
+ width: 46px; height: 46px; border-radius:50%;
+ background: linear-gradient(180deg, #1a1c20 0%, #0a0b0d 100%);
+ box-shadow:
+  inset 0 1px 1px rgba(255,255,255,0.1),
+  inset 0 -1px 1px rgba(0,0,0,0.8),
+  0 0 0 1px #000;
+}
+.screen-inner {
+ width: 100%; height: 100%;
+ background: #c5cdd6;
+ border-radius: 4px;
+ overflow: hidden;
+ position: relative;
+ box-shadow: inset 0 0 0 1px #000;
+}
+
+/* ============================================================
+   iOS 6 Status Bar (top of phone)
+============================================================ */
+.statusbar {
+ height: 20px;
+ background: linear-gradient(180deg, #b8c0ca 0%, #939ba6 100%);
+ display: flex;
+ align-items: center;
+ justify-content: space-between;
+ padding: 0 8px;
+ font: 600 12px/1 'Helvetica Neue', sans-serif;
+ color: #000;
+ text-shadow: 0 1px 0 rgba(255,255,255,0.4);
+ border-bottom: 1px solid rgba(0,0,0,0.15);
+ position: relative;
+ z-index: 5;
+}
+.statusbar .left { display:flex; align-items:center; gap:5px; }
+.signal { display:flex; gap:2px; align-items:flex-end; }
+.signal i { display:block; width:4px; background:#000; border-radius:1px; }
+.signal i:nth-child(1){height:4px} .signal i:nth-child(2){height:6px}
+.signal i:nth-child(3){height:8px} .signal i:nth-child(4){height:10px} .signal i:nth-child(5){height:12px;background:#000}
+.battery {
+ display:inline-block;
+ width: 24px; height: 10px;
+ border:1px solid #000; border-radius:2px;
+ padding:1px;
+ position:relative;
+}
+.battery::after { content:''; position:absolute; right:-3px; top:3px; width:1.5px; height:4px; background:#000; border-radius:0 1px 1px 0;}
+.battery i { display:block; height:100%; width:78%; background:#000; }
+
+/* ============================================================
+   iOS 6 Navigation Bar (chrome blue)
+============================================================ */
+.navbar {
+ height: 44px;
+ background:
+  linear-gradient(180deg, #afb9c5 0%, #6d7d92 49%, #59697e 50%, #455565 100%);
+ display: flex;
+ align-items: center;
+ justify-content: center;
+ position: relative;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.4),
+  inset 0 -1px 0 rgba(0,0,0,0.4),
+  0 1px 0 rgba(255,255,255,0.15);
+ border-bottom: 1px solid #2b3947;
+}
+.navbar .title {
+ font: 700 16px 'Helvetica Neue', sans-serif;
+ color: #fff;
+ letter-spacing: 0.02em;
+ text-shadow: 0 -1px 0 rgba(0,0,0,0.5), 0 1px 0 rgba(255,255,255,0.25);
+}
+.navbar .nav-btn {
+ position: absolute;
+ top: 7px;
+ padding: 5px 10px 6px;
+ border-radius: 5px;
+ font: 600 13px 'Helvetica Neue', sans-serif;
+ color: #fff;
+ text-shadow: 0 -1px 0 rgba(0,0,0,0.5);
+ background: linear-gradient(180deg, #98a3b3 0%, #6d7d92 50%, #59697e 51%, #455565 100%);
+ border: 1px solid #2b3947;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.3),
+  0 1px 0 rgba(255,255,255,0.15);
+}
+.navbar .nav-btn.left  { left: 8px; }
+.navbar .nav-btn.right { right: 8px; }
+.navbar .nav-btn.back  { padding-left: 18px; border-radius: 5px; position: relative; }
+.navbar .nav-btn.back::before {
+ content:''; position:absolute; left:5px; top:50%; transform:translateY(-50%);
+ width: 0; height:0;
+ border-top: 4px solid transparent;
+ border-bottom: 4px solid transparent;
+ border-right: 6px solid #fff;
+ filter: drop-shadow(0 -1px 0 rgba(0,0,0,0.5));
+}
+
+/* ============================================================
+   Linen background (the iOS 6 classic)
+============================================================ */
+.linen {
+ background-color: #4a5664;
+ background-image:
+  repeating-linear-gradient(90deg, rgba(0,0,0,0.06) 0 1px, transparent 1px 2px),
+  repeating-linear-gradient(0deg, rgba(255,255,255,0.04) 0 1px, transparent 1px 2px),
+  radial-gradient(circle at 30% 20%, rgba(255,255,255,0.08), transparent 60%),
+  radial-gradient(circle at 70% 80%, rgba(0,0,0,0.15), transparent 60%);
+ background-size: 3px 3px, 3px 3px, 100% 100%, 100% 100%;
+}
+.linen.dark {
+ background-color: #2c3340;
+ background-image:
+  repeating-linear-gradient(90deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 2px),
+  repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 2px),
+  radial-gradient(circle at 50% 0%, rgba(80,100,130,0.4), transparent 60%);
+ background-size: 3px 3px, 3px 3px, 100% 100%;
+}
+.linen.green {
+ background-color: #2f6e4f;
+ background-image:
+  repeating-linear-gradient(90deg, rgba(0,0,0,0.18) 0 1px, transparent 1px 2px),
+  repeating-linear-gradient(0deg, rgba(255,255,255,0.05) 0 1px, transparent 1px 2px),
+  radial-gradient(circle at 50% 0%, rgba(120,180,140,0.3), transparent 60%);
+ background-size: 3px 3px, 3px 3px, 100% 100%;
+}
+
+/* ============================================================
+   Body content area
+============================================================ */
+.content {
+ height: calc(100% - 64px);
+ overflow: hidden;
+}
+.content.linen-bg { padding: 14px 12px; overflow-y: auto; }
+
+/* ============================================================
+   iOS 6 Grouped Table (cells)
+============================================================ */
+.section-title {
+ padding: 14px 12px 6px;
+ color: #5a657a;
+ font: 700 13px 'Helvetica Neue', sans-serif;
+ text-transform: uppercase;
+ letter-spacing: 0.04em;
+ text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+}
+.table {
+ background: #fff;
+ border-radius: 11px;
+ overflow: hidden;
+ margin: 0 0 8px;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.8),
+  0 1px 1px rgba(255,255,255,0.5),
+  0 1px 0 rgba(0,0,0,0.08);
+ border: 1px solid rgba(0,0,0,0.2);
+}
+.cell {
+ padding: 12px 14px;
+ background: linear-gradient(180deg, #ffffff 0%, #f5f5f6 100%);
+ border-bottom: 1px solid #c8cdd4;
+ display: flex;
+ align-items: center;
+ gap: 12px;
+ position: relative;
+ font: 500 14px 'IBM Plex Sans Thai', sans-serif;
+ color: #1c1f25;
+}
+.cell:last-child { border-bottom: none; }
+.cell .icon {
+ width: 30px; height: 30px;
+ border-radius: 6px;
+ background: linear-gradient(180deg, #6ab0ff 0%, #2f7adf 100%);
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.6),
+  inset 0 -1px 0 rgba(0,0,0,0.2),
+  0 1px 1px rgba(0,0,0,0.2);
+ flex-shrink: 0;
+ position: relative;
+}
+.cell .icon.green   { background: linear-gradient(180deg, #82d979 0%, #2eaf2e 100%); }
+.cell .icon.orange  { background: linear-gradient(180deg, #ffbe5b 0%, #e88f1e 100%); }
+.cell .icon.purple  { background: linear-gradient(180deg, #bf8df6 0%, #7a4dd0 100%); }
+.cell .icon.red     { background: linear-gradient(180deg, #ff8f78 0%, #d63b2a 100%); }
+.cell .icon.gray    { background: linear-gradient(180deg, #c1c8d2 0%, #7d8794 100%); }
+.cell .label-stack { flex: 1; min-width: 0; }
+.cell .main-label { font-size: 14px; font-weight: 600; }
+.cell .sub-label { font-size: 11.5px; color: #6e7889; margin-top: 1px; }
+.cell .value-right { font-size: 13px; color: #6e7889; }
+.cell .chevron {
+ width: 8px; height: 8px;
+ border-right: 2px solid #aab1bc;
+ border-bottom: 2px solid #aab1bc;
+ transform: rotate(-45deg);
+ margin-right: -2px;
+}
+
+/* ============================================================
+   iOS 6 Button (Glossy blue)
+============================================================ */
+.ios-btn {
+ display: block;
+ width: 100%;
+ padding: 12px 16px;
+ background:
+  linear-gradient(180deg, #6cb1ff 0%, #3478ed 49%, #1e60d4 50%, #2f70df 100%);
+ border: 1px solid #14418c;
+ border-radius: 8px;
+ color: #fff;
+ font: 700 15px 'Helvetica Neue', sans-serif;
+ text-shadow: 0 -1px 0 rgba(0,0,0,0.4);
+ cursor: pointer;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.5),
+  inset 0 -1px 0 rgba(0,0,0,0.2),
+  0 1px 0 rgba(255,255,255,0.2),
+  0 1px 2px rgba(0,0,0,0.3);
+ letter-spacing: 0.02em;
+}
+.ios-btn:active {
+ background: linear-gradient(180deg, #2862c5 0%, #1e60d4 50%, #1454bf 100%);
+ box-shadow: inset 0 2px 4px rgba(0,0,0,0.3);
+}
+.ios-btn.gray {
+ background: linear-gradient(180deg, #f6f7f9 0%, #d5dade 49%, #b9c0c9 50%, #c8ced6 100%);
+ color: #1f2937;
+ text-shadow: 0 1px 0 rgba(255,255,255,0.7);
+ border-color: #6e7889;
+}
+.ios-btn.green {
+ background: linear-gradient(180deg, #82d979 0%, #5fbf52 49%, #46a939 50%, #4fb541 100%);
+ border-color: #2e7a25;
+}
+.ios-btn.red {
+ background: linear-gradient(180deg, #ff8f78 0%, #ee5236 49%, #d63b2a 50%, #e0432f 100%);
+ border-color: #8d2419;
+}
+
+/* ============================================================
+   LOGIN page
+============================================================ */
+.login-content {
+ height: calc(100% - 64px);
+ padding: 28px 22px 22px;
+ background: #f0f1f4;
+ background-image:
+  radial-gradient(circle at 50% 0%, rgba(80,140,255,0.08) 0%, transparent 70%),
+  linear-gradient(180deg, #f9fafc 0%, #d4dae2 100%);
+ overflow-y: auto;
+}
+.brand-block {
+ text-align: center;
+ margin-bottom: 28px;
+}
+.crochet-shield {
+ width: 92px; height: 110px;
+ margin: 4px auto 14px;
+ background: linear-gradient(180deg, #15182d 0%, #050610 100%);
+ border-radius: 18px 18px 50% 50% / 18px 18px 32% 32%;
+ box-shadow:
+  inset 0 2px 0 rgba(255,255,255,0.18),
+  inset 0 -8px 16px rgba(0,0,0,0.6),
+  0 8px 16px rgba(0,0,0,0.35),
+  0 0 0 1px rgba(255,255,255,0.5);
+ display: flex; align-items:center; justify-content:center;
+ position: relative;
+}
+.crochet-shield::before {
+ content: 'C';
+ font: 800 60px 'Helvetica Neue', sans-serif;
+ background: linear-gradient(180deg, #fff 0%, #c4c9d0 50%, #6e7889 100%);
+ -webkit-background-clip: text;
+ background-clip: text;
+ -webkit-text-fill-color: transparent;
+ filter: drop-shadow(0 2px 2px rgba(0,0,0,0.4));
+}
+.brand-block h2 {
+ font: 700 22px 'IBM Plex Sans Thai', sans-serif;
+ color: #1c1f25;
+ letter-spacing: 0.14em;
+ text-shadow: 0 1px 0 rgba(255,255,255,0.8);
+}
+.brand-block .sub {
+ font: 500 10.5px 'Helvetica Neue', sans-serif;
+ color: #6e7889;
+ letter-spacing: 0.18em;
+ text-transform: uppercase;
+ margin-top: 4px;
+}
+
+.form-group { margin-bottom: 0; }
+.form-group label {
+ padding: 16px 14px 6px;
+ color: #5a657a;
+ font: 700 12px 'Helvetica Neue', sans-serif;
+ text-transform: uppercase;
+ letter-spacing: 0.05em;
+ text-shadow: 0 1px 0 rgba(255,255,255,0.5);
+ display: block;
+}
+.ios-input {
+ width: 100%;
+ padding: 12px 14px;
+ background: #fff;
+ border: none;
+ font: 500 15px 'IBM Plex Sans Thai', sans-serif;
+ color: #000;
+ outline: none;
+}
+.input-table { /* group inputs like iOS 6 settings */
+ background: #fff;
+ border-radius: 11px;
+ overflow: hidden;
+ border: 1px solid rgba(0,0,0,0.2);
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.8),
+  0 1px 0 rgba(0,0,0,0.08);
+}
+.input-row {
+ display: flex; align-items: center;
+ border-bottom: 1px solid #c8cdd4;
+}
+.input-row:last-child { border-bottom: none; }
+.input-row .row-label {
+ width: 90px; padding: 12px 0 12px 14px;
+ font: 600 13px 'IBM Plex Sans Thai', sans-serif;
+ color: #1c1f25;
+}
+.input-row input {
+ flex: 1; padding: 12px 14px;
+ background: transparent; border: none; outline: none;
+ font: 500 14px 'IBM Plex Sans Thai', sans-serif;
+ color: #000;
+}
+
+.help {
+ text-align: center;
+ margin-top: 18px;
+ font-size: 11px;
+ color: #6e7889;
+}
+
+/* ============================================================
+   Dashboard - Notification Center style + Game Center
+============================================================ */
+.greeting {
+ padding: 12px 14px 8px;
+ font: 600 12px 'IBM Plex Sans Thai', sans-serif;
+ color: rgba(255,255,255,0.95);
+ text-shadow: 0 -1px 0 rgba(0,0,0,0.6);
+ letter-spacing: 0.04em;
+}
+.greeting .name { font-size: 16px; font-weight: 700; }
+.greeting .meta { font-size: 11px; color: rgba(255,255,255,0.65); margin-top: 1px; }
+
+/* "Pill" stat tile - green felt with embossed numbers (Game Center style) */
+.stat-row {
+ display: grid;
+ grid-template-columns: 1fr 1fr;
+ gap: 8px;
+ margin: 0 0 10px;
+}
+.stat-pill {
+ background:
+  linear-gradient(180deg, rgba(255,255,255,0.18) 0%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0) 100%),
+  linear-gradient(180deg, #38445a 0%, #1f2737 100%);
+ border-radius: 10px;
+ padding: 10px 12px;
+ color: #fff;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.25),
+  inset 0 -1px 0 rgba(0,0,0,0.4),
+  0 1px 2px rgba(0,0,0,0.3);
+ border: 1px solid rgba(0,0,0,0.4);
+}
+.stat-pill .lbl { font: 700 10px 'Helvetica Neue', sans-serif; opacity: 0.75; text-transform: uppercase; letter-spacing: 0.06em; }
+.stat-pill .num { font: 700 22px 'Helvetica Neue', sans-serif; line-height: 1.1; text-shadow: 0 -1px 0 rgba(0,0,0,0.5); }
+.stat-pill .num small { font-size: 11px; opacity: 0.7; font-weight: 500; }
+
+/* Tab bar (bottom) iOS 6 style */
+.tabbar {
+ position: absolute;
+ left: 0; right: 0; bottom: 0;
+ height: 50px;
+ display: flex;
+ align-items: center;
+ background:
+  linear-gradient(180deg, #4a5260 0%, #303641 50%, #232934 51%, #1c2129 100%);
+ border-top: 1px solid #0c0e12;
+ box-shadow: inset 0 1px 0 rgba(255,255,255,0.15);
+}
+.tab-btn {
+ flex: 1;
+ text-align: center;
+ padding: 6px 0;
+ color: #8e95a3;
+ font: 600 10px 'Helvetica Neue', sans-serif;
+ cursor: pointer;
+ text-shadow: 0 -1px 0 rgba(0,0,0,0.5);
+}
+.tab-btn .glyph {
+ display: block; margin: 0 auto 2px;
+ width: 26px; height: 26px;
+ border-radius: 5px;
+ background:
+  linear-gradient(180deg, rgba(255,255,255,0.3) 0%, rgba(255,255,255,0.05) 50%, transparent 51%, rgba(255,255,255,0.05) 100%);
+ box-shadow: inset 0 1px 0 rgba(255,255,255,0.2);
+ position: relative;
+}
+.tab-btn .glyph i {
+ position:absolute; inset:5px;
+ background: currentColor;
+ -webkit-mask-size:contain; mask-size:contain;
+ -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat;
+ -webkit-mask-position:center; mask-position:center;
+ color:#8e95a3;
+}
+.tab-btn.active { color: #4a90e2; }
+.tab-btn.active .glyph i { color: #4a90e2; }
+.tab-btn .glyph i.home { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 1L1 7v8h4v-5h6v5h4V7z'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M8 1L1 7v8h4v-5h6v5h4V7z'/></svg>"); }
+.tab-btn .glyph i.cal { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='3' width='14' height='12' rx='1' fill='currentColor'/><rect x='1' y='3' width='14' height='3' fill='currentColor'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><rect x='1' y='3' width='14' height='12' rx='1' fill='currentColor'/></svg>"); }
+.tab-btn .glyph i.check { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M6 12L2 8l1.5-1.5L6 9l6.5-6.5L14 4z'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><path d='M6 12L2 8l1.5-1.5L6 9l6.5-6.5L14 4z'/></svg>"); }
+.tab-btn .glyph i.user { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3' fill='currentColor'/><path d='M2 15c0-3 3-5 6-5s6 2 6 5z' fill='currentColor'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='5' r='3'/><path d='M2 15c0-3 3-5 6-5s6 2 6 5z'/></svg>"); }
+
+/* Date pill */
+.date-pill {
+ display: inline-block;
+ padding: 3px 10px;
+ background:
+  linear-gradient(180deg, rgba(255,255,255,0.6) 0%, rgba(255,255,255,0.3) 100%);
+ color: #1f2937;
+ font: 700 11px 'Helvetica Neue', sans-serif;
+ border-radius: 10px;
+ border: 1px solid rgba(0,0,0,0.2);
+ text-shadow: 0 1px 0 rgba(255,255,255,0.6);
+ box-shadow: 0 1px 1px rgba(0,0,0,0.2);
+}
+
+/* Badge */
+.badge {
+ background: linear-gradient(180deg, #ff5959 0%, #d61f1f 100%);
+ color: #fff;
+ font: 700 11px 'Helvetica Neue', sans-serif;
+ padding: 2px 8px;
+ border-radius: 12px;
+ min-width: 22px;
+ text-align: center;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.4),
+  0 1px 1px rgba(0,0,0,0.3);
+ text-shadow: 0 -1px 0 rgba(0,0,0,0.4);
+}
+
+/* Progress (leather strap style) */
+.progress-row { padding: 10px 14px; background: linear-gradient(180deg, #ffffff 0%, #f5f5f6 100%); border-bottom: 1px solid #c8cdd4; }
+.progress-row:last-child { border-bottom: none; }
+.progress-row .top { display:flex; justify-content:space-between; font: 600 12px 'IBM Plex Sans Thai', sans-serif; color:#1c1f25; margin-bottom: 5px; }
+.bar-outer {
+ height: 10px; border-radius: 6px;
+ background: linear-gradient(180deg, #cbd1d9 0%, #e7ebef 100%);
+ box-shadow: inset 0 1px 2px rgba(0,0,0,0.3);
+ padding: 1px;
+}
+.bar-inner {
+ height: 100%; border-radius: 5px;
+ background:
+  linear-gradient(180deg, #6ab0ff 0%, #3478ed 49%, #1e60d4 50%, #2f70df 100%);
+ box-shadow: inset 0 1px 0 rgba(255,255,255,0.5);
+}
+.bar-inner.green { background: linear-gradient(180deg, #82d979 0%, #46a939 49%, #2eaf2e 50%, #4fb541 100%); }
+.bar-inner.amber { background: linear-gradient(180deg, #ffbe5b 0%, #ed8c1f 49%, #d6791b 50%, #e08e25 100%); }
+
+@media (max-width: 768px) {
+ .phone-row { gap: 18px; }
+ .iphone { transform: scale(0.85); transform-origin: top center; margin-bottom: -100px; }
+}
+</style>
+</head>
+<body>
+
+<div class="demo-tabs">
+ <button class="demo-tab active" onclick="show('login', this)">Login</button>
+ <button class="demo-tab" onclick="show('home', this)">Home (Dashboard)</button>
+ <button class="demo-tab" onclick="show('list', this)">Leave & OT</button>
+</div>
+
+<div class="phone-row" id="phones">
+ <!-- ===== Phone 1: Login ===== -->
+ <div class="iphone" data-tab="login">
+  <div class="screen-inner">
+   <div class="statusbar">
+    <div class="left">
+     <div class="signal"><i></i><i></i><i></i><i></i><i></i></div>
+     <span>CROCHET</span>
+     <span style="font-weight:400;">5G</span>
+    </div>
+    <div>9:41</div>
+    <div class="left">
+     <span>100%</span>
+     <div class="battery"><i></i></div>
+    </div>
+   </div>
+   <div class="navbar">
+    <div class="title">เข้าสู่ระบบ</div>
+   </div>
+   <div class="login-content">
+    <div class="brand-block">
+     <div class="crochet-shield"></div>
+     <h2>CROCHET</h2>
+     <div class="sub">HR Management System</div>
+    </div>
+
+    <div class="section-title" style="text-shadow:none;color:#5a657a;">ข้อมูลเข้าสู่ระบบ</div>
+    <div class="input-table">
+     <div class="input-row">
+      <div class="row-label">รหัสพนักงาน</div>
+      <input type="text" value="ADMIN001">
+     </div>
+     <div class="input-row">
+      <div class="row-label">รหัสผ่าน</div>
+      <input type="password" value="********">
+     </div>
+    </div>
+
+    <div style="margin-top:18px;">
+     <button class="ios-btn">เข้าสู่ระบบ</button>
+    </div>
+    <div style="margin-top:10px;">
+     <button class="ios-btn gray">ลืมรหัสผ่าน?</button>
+    </div>
+
+    <div class="help">© 2026 BUGpairoj Group · v1.0</div>
+   </div>
+  </div>
+ </div>
+
+ <!-- ===== Phone 2: Dashboard / Home ===== -->
+ <div class="iphone" data-tab="home" style="display:none;">
+  <div class="screen-inner">
+   <div class="statusbar">
+    <div class="left">
+     <div class="signal"><i></i><i></i><i></i><i></i><i></i></div>
+     <span>CROCHET</span>
+     <span style="font-weight:400;">5G</span>
+    </div>
+    <div>9:41</div>
+    <div class="left">
+     <span>100%</span>
+     <div class="battery"><i></i></div>
+    </div>
+   </div>
+   <div class="navbar">
+    <div class="nav-btn left">เมนู</div>
+    <div class="title">หน้าหลัก</div>
+    <div class="nav-btn right">+</div>
+   </div>
+   <div class="content linen-bg linen dark" style="overflow-y:auto;">
+    <div class="greeting">
+     <div class="name">สวัสดี, แอดมิน ระบบ</div>
+     <div class="meta">วันพุธที่ 19 มิ.ย. · 3 คำขอรอดำเนินการ</div>
+    </div>
+
+    <div class="stat-row">
+     <div class="stat-pill"><div class="lbl">พักร้อน</div><div class="num">8.5<small>/12</small></div></div>
+     <div class="stat-pill"><div class="lbl">OT เดือนนี้</div><div class="num">14<small> ชม.</small></div></div>
+    </div>
+    <div class="stat-row">
+     <div class="stat-pill"><div class="lbl">รออนุมัติ</div><div class="num">3</div></div>
+     <div class="stat-pill"><div class="lbl">ป่วยคงเหลือ</div><div class="num">27<small>/30</small></div></div>
+    </div>
+
+    <div class="section-title">คำขอที่ใช้บ่อย</div>
+    <div class="table">
+     <div class="cell">
+      <div class="icon green"></div>
+      <div class="label-stack"><div class="main-label">ขอลางาน</div><div class="sub-label">ป่วย · กิจ · พักร้อน · บวช</div></div>
+      <div class="chevron"></div>
+     </div>
+     <div class="cell">
+      <div class="icon orange"></div>
+      <div class="label-stack"><div class="main-label">ขอ OT</div><div class="sub-label">ทำงานล่วงเวลา</div></div>
+      <div class="chevron"></div>
+     </div>
+     <div class="cell">
+      <div class="icon purple"></div>
+      <div class="label-stack"><div class="main-label">ปฏิบัติงานนอกสถานที่</div><div class="sub-label">พบลูกค้า · ออกพื้นที่</div></div>
+      <div class="chevron"></div>
+     </div>
+     <div class="cell">
+      <div class="icon red"></div>
+      <div class="label-stack"><div class="main-label">แจ้งซ่อมอาคาร</div><div class="sub-label">แอร์, ไฟ, น้ำ, อุปกรณ์</div></div>
+      <div class="chevron"></div>
+     </div>
+    </div>
+
+    <div class="section-title">สิทธิ์การลา</div>
+    <div class="table">
+     <div class="progress-row">
+      <div class="top"><span>ลาพักร้อน</span><span>8.5 / 12</span></div>
+      <div class="bar-outer"><div class="bar-inner green" style="width:71%;"></div></div>
+     </div>
+     <div class="progress-row">
+      <div class="top"><span>ลาป่วย</span><span>27 / 30</span></div>
+      <div class="bar-outer"><div class="bar-inner" style="width:90%;"></div></div>
+     </div>
+     <div class="progress-row">
+      <div class="top"><span>ลากิจ</span><span>4 / 6</span></div>
+      <div class="bar-outer"><div class="bar-inner amber" style="width:67%;"></div></div>
+     </div>
+    </div>
+
+    <div style="height:70px;"></div>
+   </div>
+   <div class="tabbar">
+    <div class="tab-btn active"><div class="glyph"><i class="home"></i></div>หน้าหลัก</div>
+    <div class="tab-btn"><div class="glyph"><i class="cal"></i></div>ปฏิทิน</div>
+    <div class="tab-btn"><div class="glyph"><i class="check"></i></div>อนุมัติ</div>
+    <div class="tab-btn"><div class="glyph"><i class="user"></i></div>โปรไฟล์</div>
+   </div>
+  </div>
+ </div>
+
+ <!-- ===== Phone 3: List page ===== -->
+ <div class="iphone" data-tab="list" style="display:none;">
+  <div class="screen-inner">
+   <div class="statusbar">
+    <div class="left">
+     <div class="signal"><i></i><i></i><i></i><i></i><i></i></div>
+     <span>CROCHET</span>
+     <span style="font-weight:400;">5G</span>
+    </div>
+    <div>9:41</div>
+    <div class="left">
+     <span>100%</span>
+     <div class="battery"><i></i></div>
+    </div>
+   </div>
+   <div class="navbar">
+    <div class="nav-btn back left">กลับ</div>
+    <div class="title">ลางาน &amp; OT</div>
+    <div class="nav-btn right">+ ใหม่</div>
+   </div>
+   <div class="content linen-bg linen" style="overflow-y:auto;">
+    <div class="section-title">คำขอลาล่าสุด</div>
+    <div class="table">
+     <div class="cell">
+      <div class="icon green"></div>
+      <div class="label-stack">
+       <div class="main-label">ลาพักร้อน · 3 วัน</div>
+       <div class="sub-label">22-24 มิ.ย. 2569</div>
+      </div>
+      <span class="date-pill">อนุมัติ</span>
+     </div>
+     <div class="cell">
+      <div class="icon red"></div>
+      <div class="label-stack">
+       <div class="main-label">ลาป่วย · 1 วัน</div>
+       <div class="sub-label">10 มิ.ย. 2569</div>
+      </div>
+      <span class="date-pill">อนุมัติ</span>
+     </div>
+     <div class="cell">
+      <div class="icon orange"></div>
+      <div class="label-stack">
+       <div class="main-label">ลากิจ · 0.5 วัน</div>
+       <div class="sub-label">2 มิ.ย. 2569</div>
+      </div>
+      <span class="badge">รอ</span>
+     </div>
+    </div>
+
+    <div class="section-title">คำขอ OT ล่าสุด</div>
+    <div class="table">
+     <div class="cell">
+      <div class="icon purple"></div>
+      <div class="label-stack">
+       <div class="main-label">OT 4 ชม. · วันธรรมดา</div>
+       <div class="sub-label">15 มิ.ย. 2569 · ปิดบัญชี Q2</div>
+      </div>
+      <span class="badge">รอ</span>
+     </div>
+     <div class="cell">
+      <div class="icon gray"></div>
+      <div class="label-stack">
+       <div class="main-label">OT 8 ชม. · วันหยุด</div>
+       <div class="sub-label">8 มิ.ย. 2569 · ติดตั้งระบบ</div>
+      </div>
+      <span class="date-pill">อนุมัติ</span>
+     </div>
+    </div>
+
+    <div class="section-title">การกระทำ</div>
+    <div style="padding: 0 2px;">
+     <button class="ios-btn green">+ ขอลาใหม่</button>
+     <div style="height:8px;"></div>
+     <button class="ios-btn">+ ขอ OT</button>
+     <div style="height:8px;"></div>
+     <button class="ios-btn gray">ดูปฏิทินทีม</button>
+    </div>
+    <div style="height:70px;"></div>
+   </div>
+   <div class="tabbar">
+    <div class="tab-btn"><div class="glyph"><i class="home"></i></div>หน้าหลัก</div>
+    <div class="tab-btn active"><div class="glyph"><i class="cal"></i></div>ปฏิทิน</div>
+    <div class="tab-btn"><div class="glyph"><i class="check"></i></div>อนุมัติ</div>
+    <div class="tab-btn"><div class="glyph"><i class="user"></i></div>โปรไฟล์</div>
+   </div>
+  </div>
+ </div>
+
+</div>
+
+<div style="text-align:center;margin-top:34px;color:#7f8aa0;font:600 11px 'Helvetica Neue';letter-spacing:0.2em;text-transform:uppercase;">
+CROCHET HR · iOS 6 Skeuomorphism Preview
+</div>
+
+<script>
+function show(name, el) {
+ document.querySelectorAll('.iphone').forEach(p => p.style.display = (p.dataset.tab === name) ? '' : 'none');
+ document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('active'));
+ el.classList.add('active');
+}
+</script>
+</body>
+</html>

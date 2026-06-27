@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240" fill="none">
+  <!-- Shield -->
+  <path d="M 100 10 L 190 30 L 190 130 Q 190 190 100 230 Q 10 190 10 130 L 10 30 Z" fill="#000000"/>
+  <path d="M 100 20 L 180 38 L 180 128 Q 180 182 100 218 Q 20 182 20 128 L 20 38 Z" fill="#ffffff"/>
+  <!-- Letter C -->
+  <text x="100" y="160" font-family="Georgia, serif" font-size="150" font-weight="bold" text-anchor="middle" fill="#000000">C</text>
+</svg>

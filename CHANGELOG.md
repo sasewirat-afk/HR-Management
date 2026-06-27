@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.8] — 2026-06-27
+
+**Add "มาสายสะสม (นาที)" Report Tab**
+
+### Added
+- **Tab ใหม่ในหน้ารายงาน:** `มาสายสะสม` (อยู่ขวาสุด หลัง `รับรองเวลา`)
+- **สรุปรายคน:** อันดับ, รหัส, ชื่อ, แผนก, จำนวนวันมาสาย, รวมเวลาสาย (นาที), เฉลี่ย/ครั้ง
+- เรียงจาก **มาสายเยอะ → น้อย**
+- **Month filter:** dropdown เลือก 12 เดือนย้อนหลัง (default = เดือนปัจจุบัน)
+- **Stats banner:** จำนวนพนักงานมาสาย + รวมเวลาสายทั้งหมด + รวมจำนวนครั้ง
+- **ปุ่ม "ดูรายละเอียด"** ต่อแถว → modal แสดงวันที่มาสายทุกวัน, เวลาเข้า/ออกงาน, จำนวนนาทีที่สาย
+- **Export CSV** + **Export Excel** (`exportLateSummaryXLSX`, 2 sheets: สรุป + รายละเอียด)
+
+### Logic
+- ใช้เกณฑ์มาสายจาก Settings (`settings.lateThreshold`, default `09:01`)
+- คำนวณ: `lateMinutes = (checkInMinutes − thresholdMinutes)` ถ้า > 0
+- Group by `employeeId`, sort DESC ตามรวมเวลาสาย
+
+---
+
 ## [1.4.7] — 2026-06-27
 
 **Add .txt File Support for Attendance Upload (Tigersoft Plain Text)**

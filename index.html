@@ -777,7 +777,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.7</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.8</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -801,7 +801,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.7';
+const APP_VERSION = '1.4.8';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -6786,6 +6786,7 @@ function downloadPaySlipPDF(empId, year, month) {
 // ============================================================
 let reportTab = 'leave-summary';
 let _timeCertReportFilter = 'all';
+let _lateReportMonth = null; // YYYY-MM, null = current month
 
 function renderReports() {
  document.getElementById('mainContent').innerHTML = `
@@ -6798,6 +6799,7 @@ function renderReports() {
  <div class="tab ${reportTab==='ot-report'?'active':''}" onclick="setReportTab('ot-report')">รายงาน OT</div>
  <div class="tab ${reportTab==='field-work'?'active':''}" onclick="setReportTab('field-work')">งานนอกสถานที่</div>
  <div class="tab ${reportTab==='time-cert'?'active':''}" onclick="setReportTab('time-cert')">รับรองเวลา</div>
+ <div class="tab ${reportTab==='late-summary'?'active':''}" onclick="setReportTab('late-summary')">มาสายสะสม</div>
  </div>
  <div id="reportContent"></div>
  `;
@@ -7040,7 +7042,236 @@ function drawReport() {
  `;
  }
 
+ else if (reportTab === 'late-summary') {
+ const settings = DB.load('settings');
+ const lateThreshold = settings.lateThreshold || '09:01';
+ const [lthH, lthM] = lateThreshold.split(':').map(Number);
+ const thresholdMinutes = lthH * 60 + lthM;
+ const monthStr = _lateReportMonth || new Date().toISOString().slice(0, 7);
+ const records = DB.load('attendanceRecords').filter(r =>
+ r.checkIn && r.checkIn >= lateThreshold && r.date.startsWith(monthStr)
+ );
+
+ // Group by employeeCode → sum late minutes + collect days
+ const byEmp = {};
+ records.forEach(r => {
+ const [h, m] = r.checkIn.split(':').map(Number);
+ const lateMin = Math.max(0, (h * 60 + m) - thresholdMinutes);
+ if (lateMin <= 0) return;
+ const key = r.employeeId || r.employeeCode;
+ if (!byEmp[key]) {
+ byEmp[key] = { employeeId: r.employeeId, employeeCode: r.employeeCode, employeeName: r.employeeName, days: [], totalMinutes: 0 };
+ }
+ byEmp[key].days.push({ date: r.date, checkIn: r.checkIn, lateMinutes: lateMin });
+ byEmp[key].totalMinutes += lateMin;
+ });
+
+ const summary = Object.values(byEmp).sort((a, b) => b.totalMinutes - a.totalMinutes);
+
+ // Generate month options (last 12 months)
+ const monthOptions = [];
+ const now = new Date();
+ for (let i = 0; i < 12; i++) {
+ const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+ const ms = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+ monthOptions.push({ value: ms, label: d.toLocaleDateString('th-TH', { year: 'numeric', month: 'long' }) });
+ }
+
+ const totalLate = summary.reduce((s, e) => s + e.totalMinutes, 0);
+ const totalDays = summary.reduce((s, e) => s + e.days.length, 0);
+
+ html = `
+ <div class="card">
+ <div class="card-header">
+ <h3>มาสายสะสม (นาที) — เดือน ${new Date(monthStr+'-01').toLocaleDateString('th-TH', {year:'numeric', month:'long'})}</h3>
+ <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+ <select onchange="_lateReportMonth = this.value; drawReport();" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
+ ${monthOptions.map(o => `<option value="${o.value}" ${o.value === monthStr ? 'selected' : ''}>${o.label}</option>`).join('')}
+ </select>
+ <button class="btn btn-success btn-sm" onclick="exportCSV('late-summary')">⬇ Export CSV</button>
+ <button class="btn btn-success btn-sm" onclick="exportLateSummaryXLSX()">Export Excel</button>
+ </div>
+ </div>
+ <div class="card-body">
+ <div class="alert alert-info mb-3" style="font-size:13px;">
+ <strong>เกณฑ์มาสาย:</strong> เข้างานหลัง <code>${lateThreshold}</code> (ตามตั้งค่า)<br>
+ <small>คำนวณนาทีที่สาย = (เวลาเข้างาน − ${lateThreshold}) · sort จากมากไปน้อย</small>
+ </div>
+ <div class="stats-grid" style="margin-bottom:14px;">
+ <div class="stat-card"><div class="label">พนักงานมาสาย</div><div class="value">${summary.length} <small>คน</small></div></div>
+ <div class="stat-card red"><div class="label">รวมเวลาสาย</div><div class="value">${totalLate.toLocaleString()} <small>นาที</small></div></div>
+ <div class="stat-card orange"><div class="label">รวมจำนวนครั้ง</div><div class="value">${totalDays.toLocaleString()} <small>ครั้ง</small></div></div>
+ </div>
+ </div>
+ <div class="card-body" style="padding:0;overflow-x:auto;">
+ ${summary.length ? `
+ <table id="reportTable">
+ <thead><tr>
+ <th>อันดับ</th>
+ <th>รหัส</th>
+ <th>ชื่อ-นามสกุล</th>
+ <th>แผนก</th>
+ <th>จำนวนวันมาสาย</th>
+ <th>รวมเวลาสาย (นาที)</th>
+ <th>เฉลี่ย (นาที/ครั้ง)</th>
+ <th>การจัดการ</th>
+ </tr></thead>
+ <tbody>
+ ${summary.map((e, i) => {
+ const emp = getEmployee(e.employeeId);
+ const empDept = emp ? emp.department : 'พนักงานใหม่';
+ const avg = Math.round(e.totalMinutes / e.days.length);
+ return `<tr>
+ <td><strong>${i + 1}</strong></td>
+ <td>${e.employeeCode}</td>
+ <td>${emp ? emp.firstName + ' ' + emp.lastName : e.employeeName || '-'}</td>
+ <td>${empDept === 'พนักงานใหม่' ? '<span class="status-badge status-pending">พนักงานใหม่</span>' : empDept}</td>
+ <td>${e.days.length} ครั้ง</td>
+ <td><strong style="color:var(--danger);">${e.totalMinutes.toLocaleString()}</strong> นาที</td>
+ <td>${avg} นาที</td>
+ <td><button class="btn btn-sm btn-primary" onclick="showLateDetailModal('${e.employeeCode}', '${monthStr}')">ดูรายละเอียด</button></td>
+ </tr>`;
+ }).join('')}
+ </tbody>
+ </table>
+ ` : '<div class="empty-state" style="padding:40px;text-align:center;">ไม่มีพนักงานมาสายในเดือนนี้</div>'}
+ </div>
+ </div>
+ `;
+ }
+
  document.getElementById('reportContent').innerHTML = html;
+}
+
+// Show detail modal: per-day late breakdown for an employee
+function showLateDetailModal(empCode, monthStr) {
+ const settings = DB.load('settings');
+ const lateThreshold = settings.lateThreshold || '09:01';
+ const [lthH, lthM] = lateThreshold.split(':').map(Number);
+ const thresholdMinutes = lthH * 60 + lthM;
+ const records = DB.load('attendanceRecords').filter(r =>
+ (r.employeeCode === empCode || r.employeeId === empCode) &&
+ r.date.startsWith(monthStr) &&
+ r.checkIn && r.checkIn >= lateThreshold
+ ).sort((a, b) => a.date.localeCompare(b.date));
+
+ const emp = getEmployee(records[0]?.employeeId || empCode);
+ const empName = emp ? `${emp.firstName} ${emp.lastName}` : (records[0]?.employeeName || empCode);
+ const empDept = emp ? emp.department : 'พนักงานใหม่';
+
+ const days = records.map(r => {
+ const [h, m] = r.checkIn.split(':').map(Number);
+ const lateMin = Math.max(0, (h * 60 + m) - thresholdMinutes);
+ return { ...r, lateMinutes: lateMin };
+ });
+ const totalMin = days.reduce((s, d) => s + d.lateMinutes, 0);
+
+ const body = `
+ <div style="margin-bottom:14px;padding:12px;background:var(--gray-100);border-radius:8px;">
+ <div><strong>พนักงาน:</strong> ${empName} (${empCode})</div>
+ <div><strong>แผนก:</strong> ${empDept}</div>
+ <div><strong>เดือน:</strong> ${new Date(monthStr+'-01').toLocaleDateString('th-TH', {year:'numeric', month:'long'})}</div>
+ <div><strong>รวม:</strong> มาสาย <span style="color:var(--danger);font-weight:700;">${days.length} ครั้ง</span> · รวม <span style="color:var(--danger);font-weight:700;">${totalMin.toLocaleString()} นาที</span></div>
+ </div>
+ <table style="width:100%;">
+ <thead style="background:var(--gray-100);">
+ <tr>
+ <th style="padding:8px;text-align:left;">ลำดับ</th>
+ <th style="padding:8px;text-align:left;">วันที่</th>
+ <th style="padding:8px;text-align:left;">เข้างาน</th>
+ <th style="padding:8px;text-align:left;">ออกงาน</th>
+ <th style="padding:8px;text-align:right;">สายกี่นาที</th>
+ </tr>
+ </thead>
+ <tbody>
+ ${days.map((d, i) => `<tr style="border-bottom:1px solid var(--gray-200);">
+ <td style="padding:8px;">${i + 1}</td>
+ <td style="padding:8px;">${formatDate(d.date)}</td>
+ <td style="padding:8px;"><strong>${d.checkIn}</strong></td>
+ <td style="padding:8px;">${d.checkOut || '-'}</td>
+ <td style="padding:8px;text-align:right;color:var(--danger);font-weight:600;">${d.lateMinutes} นาที</td>
+ </tr>`).join('')}
+ <tr style="background:var(--gray-100);font-weight:700;">
+ <td colspan="4" style="padding:10px;text-align:right;">รวม:</td>
+ <td style="padding:10px;text-align:right;color:var(--danger);">${totalMin.toLocaleString()} นาที</td>
+ </tr>
+ </tbody>
+ </table>
+ `;
+ showModal(`รายละเอียดการมาสาย — ${empName}`, body, `<button class="btn btn-secondary" onclick="closeModal()">ปิด</button>`);
+}
+
+// Excel export for late summary
+function exportLateSummaryXLSX() {
+ if (!_xlsxCheck()) return;
+ const settings = DB.load('settings');
+ const lateThreshold = settings.lateThreshold || '09:01';
+ const [lthH, lthM] = lateThreshold.split(':').map(Number);
+ const thresholdMinutes = lthH * 60 + lthM;
+ const monthStr = _lateReportMonth || new Date().toISOString().slice(0, 7);
+ const records = DB.load('attendanceRecords').filter(r =>
+ r.checkIn && r.checkIn >= lateThreshold && r.date.startsWith(monthStr)
+ );
+
+ const byEmp = {};
+ records.forEach(r => {
+ const [h, m] = r.checkIn.split(':').map(Number);
+ const lateMin = Math.max(0, (h * 60 + m) - thresholdMinutes);
+ if (lateMin <= 0) return;
+ const key = r.employeeId || r.employeeCode;
+ if (!byEmp[key]) {
+ byEmp[key] = { employeeId: r.employeeId, employeeCode: r.employeeCode, days: [], totalMinutes: 0 };
+ }
+ byEmp[key].days.push({ date: r.date, checkIn: r.checkIn, checkOut: r.checkOut, lateMinutes: lateMin });
+ byEmp[key].totalMinutes += lateMin;
+ });
+ const summary = Object.values(byEmp).sort((a, b) => b.totalMinutes - a.totalMinutes);
+
+ const wb = XLSX.utils.book_new();
+
+ // Sheet 1: Summary
+ const sheet1 = [
+ ['รายงานมาสายสะสม — เดือน ' + new Date(monthStr+'-01').toLocaleDateString('th-TH', {year:'numeric', month:'long'})],
+ [`เกณฑ์มาสาย: หลัง ${lateThreshold}`],
+ [],
+ ['อันดับ', 'รหัส', 'ชื่อ-นามสกุล', 'แผนก', 'จำนวนวันมาสาย', 'รวมเวลาสาย (นาที)', 'เฉลี่ย (นาที/ครั้ง)']
+ ];
+ summary.forEach((e, i) => {
+ const emp = getEmployee(e.employeeId);
+ sheet1.push([
+ i + 1,
+ e.employeeCode,
+ emp ? `${emp.firstName} ${emp.lastName}` : '-',
+ emp ? emp.department : 'พนักงานใหม่',
+ e.days.length,
+ e.totalMinutes,
+ Math.round(e.totalMinutes / e.days.length)
+ ]);
+ });
+ const ws1 = XLSX.utils.aoa_to_sheet(sheet1);
+ ws1['!cols'] = [{wch:8},{wch:14},{wch:22},{wch:18},{wch:14},{wch:18},{wch:14}];
+ XLSX.utils.book_append_sheet(wb, ws1, 'สรุป');
+
+ // Sheet 2: Detail
+ const sheet2 = [
+ ['รายละเอียดวันที่มาสาย'],
+ [],
+ ['รหัส', 'ชื่อ-นามสกุล', 'แผนก', 'วันที่', 'เวลาเข้างาน', 'เวลาออกงาน', 'สายกี่นาที']
+ ];
+ summary.forEach(e => {
+ const emp = getEmployee(e.employeeId);
+ const empName = emp ? `${emp.firstName} ${emp.lastName}` : '-';
+ const empDept = emp ? emp.department : 'พนักงานใหม่';
+ e.days.sort((a, b) => a.date.localeCompare(b.date)).forEach(d => {
+ sheet2.push([e.employeeCode, empName, empDept, d.date, d.checkIn, d.checkOut || '-', d.lateMinutes]);
+ });
+ });
+ const ws2 = XLSX.utils.aoa_to_sheet(sheet2);
+ ws2['!cols'] = [{wch:14},{wch:22},{wch:18},{wch:14},{wch:12},{wch:12},{wch:14}];
+ XLSX.utils.book_append_sheet(wb, ws2, 'รายละเอียด');
+
+ XLSX.writeFile(wb, `รายงานมาสายสะสม-${monthStr}.xlsx`);
+ toast(`Export ${summary.length} คน สำเร็จ`);
 }
 
 function exportCSV(type) {

@@ -777,7 +777,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.5</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.6</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -801,7 +801,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.5';
+const APP_VERSION = '1.4.6';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -4682,16 +4682,12 @@ function previewAttendance(e) {
  // cellDates: true → convert Excel dates to JS Date objects
  const workbook = XLSX.read(data, { type: 'array', cellDates: true });
 
- // Detect date format BEFORE parsing — Tigersoft exports DD/MM but Excel auto-parses as MM/DD
- const dateFormatInfo = detectExcelDateFormat(workbook, 0);
- const fmtOpts = { format: dateFormatInfo.format };
- console.log(`[Attendance Upload] Date format detected: ${dateFormatInfo.format} (confidence: ${dateFormatInfo.confidence})`, dateFormatInfo.evidence);
-
  const emps = DB.load('employees');
  const scanGroups = {}; // key: "empCode|date" → { empCode, empName, dept, date, scans:[] }
  let totalScans = 0;
  let parseErrors = 0;
  let unmatched = new Map(); // empCode → name
+ let normStats = { datetime: 0, string: 0, iso: 0, errors: 0, total: 0 };
 
  workbook.SheetNames.forEach(sheetName => {
  const ws = workbook.Sheets[sheetName];
@@ -4710,6 +4706,22 @@ function previewAttendance(e) {
  if (idxDate < 0 || idxTime < 0 || idxEmpId < 0) {
  throw new Error(`ไม่พบคอลัมน์ที่จำเป็น (วันที่/เวลา/รหัสพนักงาน) ใน Sheet "${sheetName}"`);
  }
+
+ // ========================================================
+ // STEP 1 (per user request): Normalize Column A to DD/MM/YYYY
+ // BEFORE any other processing. Mixed formats (datetime + strings)
+ // become uniform DD/MM/YYYY strings.
+ // ========================================================
+ const s = normalizeAttendanceColumnA(rows, idxDate);
+ normStats.datetime += s.datetime;
+ normStats.string += s.string;
+ normStats.iso += s.iso;
+ normStats.errors += s.errors;
+ normStats.total += s.total;
+
+ // After normalization, all values are uniform DD/MM/YYYY strings.
+ // parseAnyDate() will treat them as DD/MM (Thai default).
+ const fmtOpts = { format: 'DD/MM' };
 
  for (let i = 1; i < rows.length; i++) {
  const r = rows[i];
@@ -4772,12 +4784,15 @@ function previewAttendance(e) {
 
  document.getElementById('attPreview').innerHTML = `
  <div class="alert alert-success">อ่านไฟล์สำเร็จ — รวม ${totalScans.toLocaleString()} ครั้งสแกน → จัดกลุ่มได้ ${allRecords.length.toLocaleString()} records</div>
- <div class="alert ${dateFormatInfo.confidence === 'high' ? 'alert-info' : 'alert-error'} mb-3" style="font-size:13px;">
- <strong>รูปแบบวันที่ที่ตรวจพบ:</strong> <code>${dateFormatInfo.format}/YYYY</code>
- ${dateFormatInfo.confidence === 'high'
- ? ` <span style="color:var(--success);">ยืนยันจากข้อมูลในไฟล์</span> (พบ DD/MM ${dateFormatInfo.evidence.ddmm} แถว · MM/DD ${dateFormatInfo.evidence.mmdd} แถว)`
- : ` <span style="color:var(--warning);">ใช้ค่า default (Thai DD/MM)</span> — ไฟล์ไม่มีวันที่ที่ disambiguate (วันที่ทุกแถวมีค่า ≤ 12) · ถ้าวันที่บนหน้าจอด้านล่างผิด แสดงว่าไฟล์ใช้ MM/DD format ให้ติดต่อ Admin`}
- <div style="margin-top:6px;color:var(--gray-500);">ระบบบังคับเก็บเป็น YYYY-MM-DD ตามมาตรฐาน ISO ทั้งหมด</div>
+ <div class="alert alert-info mb-3" style="font-size:13px;">
+ <strong>Step 1: Normalize Column A → DD/MM/YYYY</strong> (uniform format ก่อน parse)
+ <div style="margin-top:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+ <div><span style="color:var(--gray-500);">Datetime → DD/MM:</span> <strong>${normStats.datetime.toLocaleString()}</strong></div>
+ <div><span style="color:var(--gray-500);">String DD/MM (คง):</span> <strong>${normStats.string.toLocaleString()}</strong></div>
+ <div><span style="color:var(--gray-500);">ISO → DD/MM:</span> <strong>${normStats.iso.toLocaleString()}</strong></div>
+ <div><span style="color:${normStats.errors ? 'var(--danger)' : 'var(--gray-500)'};">แปลงไม่ได้:</span> <strong>${normStats.errors.toLocaleString()}</strong></div>
+ </div>
+ <div style="margin-top:8px;color:var(--gray-500);font-size:12px;">หลัง normalize: parse เป็น YYYY-MM-DD ISO เก็บใน DB</div>
  </div>
  <div class="stats-grid">
  <div class="stat-card"><div class="label">จำนวน records</div><div class="value">${allRecords.length.toLocaleString()}</div></div>
@@ -4875,6 +4890,97 @@ function getDeptForAttendance(rec) {
  if (found && found.department) return found.department;
  }
  return 'พนักงานใหม่';
+}
+
+// ============================================================
+// NORMALIZE TO DD/MM/YYYY (Step 1 of upload pipeline)
+// ============================================================
+// ตามคำสั่ง User: "เมื่อรับไฟล์แล้ว ให้ดำเนินการแปลง Format Column A
+//                  อย่างไรก็ตามให้เป็น DD/MM/YYYY ก่อนการนำข้อมูลไปใช้งานเสมอ"
+//
+// Excel auto-parses values as datetime when ambiguous (US locale MM/DD).
+// We normalize ALL cells to DD/MM/YYYY string format BEFORE any other processing.
+//
+// Input → Output:
+//   datetime(2026, 1, 6)  → "01/06/2026"  (Excel month → DD, Excel date → MM)
+//   "13/06/2026" (string) → "13/06/2026"  (already DD/MM, keep)
+//   "2026-06-13" (ISO)    → "13/06/2026"  (convert)
+//   number 46028 (serial) → handled by SheetJS into datetime first
+function normalizeToDDMMString(v) {
+ if (v === null || v === undefined || v === '') return null;
+
+ // Case 1: Excel auto-parsed datetime (US locale interpretation)
+ // Original Tigersoft string "DD/MM/YYYY" → Excel saw as MM/DD → datetime object
+ // To recover: take Excel's month value AS DD, Excel's date value AS MM
+ if (v instanceof Date && !isNaN(v)) {
+ const y = v.getFullYear();
+ const excelMonth = v.getMonth() + 1; // = original DD
+ const excelDate = v.getDate(); // = original MM
+ return `${String(excelMonth).padStart(2,'0')}/${String(excelDate).padStart(2,'0')}/${y}`;
+ }
+
+ const s = String(v).trim();
+
+ // Case 2: ISO format YYYY-MM-DD → convert to DD/MM/YYYY
+ let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+ if (m) {
+ return `${m[3].padStart(2,'0')}/${m[2].padStart(2,'0')}/${m[1]}`;
+ }
+
+ // Case 3: Already X/Y/YYYY string format
+ m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+ if (m) {
+ const a = +m[1], b = +m[2];
+ // If first number > 12, must be DD (Thai DD/MM intent)
+ if (a > 12 && b <= 12) {
+ return `${m[1].padStart(2,'0')}/${m[2].padStart(2,'0')}/${m[3]}`;
+ }
+ // If second number > 12, original was MM/DD (US) — convert
+ if (b > 12 && a <= 12) {
+ return `${m[2].padStart(2,'0')}/${m[1].padStart(2,'0')}/${m[3]}`;
+ }
+ // Ambiguous (both ≤ 12): assume DD/MM (Thai default) — keep as-is
+ return `${m[1].padStart(2,'0')}/${m[2].padStart(2,'0')}/${m[3]}`;
+ }
+
+ // Case 4: Dash-separated DD-MM-YYYY → convert to slash
+ m = s.match(/^(\d{1,2})-(\d{1,2})-(\d{4})/);
+ if (m) {
+ return `${m[1].padStart(2,'0')}/${m[2].padStart(2,'0')}/${m[3]}`;
+ }
+
+ console.warn(`[normalizeToDDMMString] Cannot normalize: ${JSON.stringify(v)}`);
+ return null;
+}
+
+// Apply normalization in-place to Column A of rows array
+// Returns stats: { datetime: N, string: M, iso: K, errors: E, total: T }
+function normalizeAttendanceColumnA(rows, dateColIdx = 0) {
+ const stats = { datetime: 0, string: 0, iso: 0, errors: 0, total: 0 };
+ const errorRows = [];
+ for (let i = 1; i < rows.length; i++) {
+ if (!rows[i] || rows[i][dateColIdx] === undefined || rows[i][dateColIdx] === null) continue;
+ stats.total++;
+ const original = rows[i][dateColIdx];
+ const wasDate = original instanceof Date;
+ const wasISO = typeof original === 'string' && /^\d{4}-/.test(original);
+
+ const normalized = normalizeToDDMMString(original);
+ if (normalized === null) {
+ stats.errors++;
+ if (errorRows.length < 5) errorRows.push({ row: i+1, value: original });
+ continue;
+ }
+ rows[i][dateColIdx] = normalized;
+ if (wasDate) stats.datetime++;
+ else if (wasISO) stats.iso++;
+ else stats.string++;
+ }
+ if (errorRows.length) {
+ console.warn('[Normalize] Sample errors:', errorRows);
+ }
+ console.log(`[Normalize] Column A → DD/MM/YYYY:`, stats);
+ return stats;
 }
 
 // Detect date format from string cells in the workbook (any cell with day > 12 = DD/MM confirmed)

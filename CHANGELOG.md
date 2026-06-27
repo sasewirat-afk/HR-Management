@@ -6,6 +6,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.6] — 2026-06-27
+
+**Normalize Excel Column A to DD/MM/YYYY at file-read time**
+
+### Per User Request
+> "เมื่อรับไฟล์แล้ว ให้ดำเนินการแปลง Format Column A อย่างไรก็ตามให้เป็น DD/MM/YYYY ก่อนการนำข้อมูลไปใช้งานเสมอ"
+
+### Changed
+- **Upload pipeline now has explicit Step 1: NORMALIZE** — ก่อน parse anything, แปลง Column A ทุก cell เป็น `DD/MM/YYYY` string format
+- Excel files มี mixed formats (datetime + strings) → uniform DD/MM/YYYY ทุก row
+- หลัง normalize: parse เป็น YYYY-MM-DD ISO เก็บใน DB
+
+### Added
+- **`normalizeToDDMMString(v)`** — handles 4 input cases:
+ - `Date` object (Excel auto-parsed): swap month/day to recover DD/MM intent → `DD/MM/YYYY`
+ - ISO `YYYY-MM-DD` string → `DD/MM/YYYY`
+ - DD/MM/YYYY string: keep + zero-pad
+ - DD-MM-YYYY (dash): convert to slash
+- **`normalizeAttendanceColumnA(rows, idx)`** — applies normalize in-place to all rows
+- **Preview UI** แสดง normalize stats: datetime count / string count / ISO count / errors
+
+### Verified
+- File "RadGridExport (1)-9635b91b.xlsx" (17,257 rows):
+ - 7,235 datetime values → normalized
+ - 10,021 string values → kept (already DD/MM)
+ - 0 errors
+ - 142 unique dates across 6 months (Jan-Jun 2026)
+
+---
+
 ## [1.4.5] — 2026-06-27
 
 **CRITICAL FIX: Data Loss Race Condition in Cloud Sync**

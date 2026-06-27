@@ -777,7 +777,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.6</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.7</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -801,7 +801,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.6';
+const APP_VERSION = '1.4.7';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -4616,14 +4616,15 @@ function renderUploadAttendance() {
  <div class="card-header"><h3>อัปโหลดไฟล์ Excel (RadGridExport)</h3></div>
  <div class="card-body">
  <div class="alert alert-info mb-3">
- <strong>รูปแบบไฟล์รองรับ:</strong> RadGridExport.xlsx จากเครื่องสแกนหน้า<br>
- คอลัมน์ที่ต้องมี: <code>วันที่, เวลา, รหัสพนักงาน, ชื่อ, นามสกุล</code> (รวมถึงคอลัมน์อื่นๆ ที่อยู่ในไฟล์ต้นฉบับ)<br>
+ <strong>รูปแบบไฟล์รองรับ 2 แบบ:</strong><br>
+ 1) <code>.xlsx</code> (Excel) — RadGridExport.xlsx · คอลัมน์: วันที่, เวลา, รหัสพนักงาน, ชื่อ, นามสกุล<br>
+ 2) <code>.txt</code> (Text) — Tigersoft Plain Text Export (DD/MM/YYYY คงรูป ไม่มี Excel auto-convert) ★ แนะนำ<br>
  <strong>การจับคู่:</strong> ใช้ <code>รหัสพนักงาน</code> matching กับรหัสในระบบ<br>
  <strong>การจัดกลุ่ม:</strong> 1 พนักงาน + 1 วัน อาจมีหลายครั้งสแกน → เวลาแรก = เข้างาน, เวลาสุดท้าย = เลิกงาน
  </div>
  <div class="form-group">
- <label>เลือกไฟล์ (.xlsx)</label>
- <input type="file" id="attFile" accept=".xlsx,.xls" onchange="previewAttendance(event)">
+ <label>เลือกไฟล์ (.xlsx หรือ .txt)</label>
+ <input type="file" id="attFile" accept=".xlsx,.xls,.txt" onchange="previewAttendance(event)">
  </div>
  <div id="attPreview"></div>
  </div>
@@ -4671,13 +4672,46 @@ function renderUploadAttendance() {
 
 let _attendanceBuffer = null;
 
+// Parse 1 line from Tigersoft .txt export
+// Format: " DD/MM/YYYY HH:MM 00 EMPCODE FIRSTNAME LASTNAME EMPCODE COMPANY DEPT SERIAL..."
+function parseTxtAttendanceLine(line) {
+ const dateMatch = line.match(/(\d{2}\/\d{2}\/\d{4})/);
+ const timeMatch = line.match(/(\d{2}:\d{2})/);
+ if (!dateMatch || !timeMatch) return null;
+ const codes = [...line.matchAll(/(?:^|\s)(\d{9})(?:\s|$)/g)];
+ if (codes.length === 0) return null;
+ const empCode = codes[0][1];
+ let firstName = '', lastName = '', company = '', department = '';
+ if (codes.length >= 2) {
+ const startIdx = codes[0].index + codes[0][0].length;
+ const endIdx = codes[1].index;
+ const nameArea = line.substring(startIdx, endIdx).trim();
+ const nameParts = nameArea.split(/\s{2,}/).filter(s => s.trim());
+ firstName = nameParts[0] || '';
+ lastName = nameParts[1] || '';
+ const afterIdx = codes[1].index + codes[1][0].length;
+ const afterCode = line.substring(afterIdx).trim();
+ const parts = afterCode.split(/\s{2,}/).filter(s => s.trim());
+ const textParts = parts.filter(p => !/^[A-Z]+\d+$/.test(p));
+ company = textParts[0] || '';
+ department = textParts[1] || '';
+ }
+ return { date: dateMatch[1], time: timeMatch[1], empCode, firstName, lastName, company, department };
+}
+
 function previewAttendance(e) {
  const file = e.target.files[0];
  if (!file) return;
 
+ const fileName = (file.name || '').toLowerCase();
+ const isTxt = fileName.endsWith('.txt');
+
  const reader = new FileReader();
  reader.onload = (evt) => {
  try {
+ if (isTxt) {
+ return previewAttendanceTxt(evt.target.result);
+ }
  const data = new Uint8Array(evt.target.result);
  // cellDates: true → convert Excel dates to JS Date objects
  const workbook = XLSX.read(data, { type: 'array', cellDates: true });
@@ -4833,7 +4867,120 @@ function previewAttendance(e) {
  document.getElementById('attPreview').innerHTML = `<div class="alert alert-error"> อ่านไฟล์ไม่สำเร็จ: ${err.message}</div>`;
  }
  };
+ if (isTxt) {
+ reader.readAsText(file, 'UTF-8');
+ } else {
  reader.readAsArrayBuffer(file);
+ }
+}
+
+// ============================================================
+// TXT PIPELINE — Tigersoft Plain Text Export
+// ============================================================
+function previewAttendanceTxt(text) {
+ try {
+ const lines = String(text).split(/\r?\n/);
+ const emps = DB.load('employees');
+ const scanGroups = {};
+ let totalScans = 0;
+ let parseErrors = 0;
+ const unmatched = new Map();
+ const errorSamples = [];
+
+ for (let i = 0; i < lines.length; i++) {
+ const line = lines[i];
+ if (!line.trim()) continue;
+ const r = parseTxtAttendanceLine(line);
+ if (!r) {
+ parseErrors++;
+ if (errorSamples.length < 5) errorSamples.push({ line: i+1, content: line.slice(0, 80) });
+ continue;
+ }
+ // Convert DD/MM/YYYY → YYYY-MM-DD
+ const [dd, mm, yyyy] = r.date.split('/');
+ const workDate = `${yyyy}-${mm}-${dd}`;
+ const scanTime = r.time;
+ const empName = (r.firstName + ' ' + r.lastName).trim();
+ const key = `${r.empCode}|${workDate}`;
+ if (!scanGroups[key]) {
+ scanGroups[key] = { empCode: r.empCode, empName, department: r.department, date: workDate, scans: [] };
+ }
+ scanGroups[key].scans.push(scanTime);
+ totalScans++;
+ }
+
+ if (errorSamples.length) console.warn('[TXT Parser] Sample errors:', errorSamples);
+
+ const allRecords = [];
+ Object.values(scanGroups).forEach(g => {
+ g.scans.sort();
+ const checkIn = g.scans[0];
+ const checkOut = g.scans.length > 1 ? g.scans[g.scans.length - 1] : null;
+ const emp = emps.find(e => String(e.id).trim() === g.empCode);
+ if (!emp) unmatched.set(g.empCode, g.empName);
+ allRecords.push({
+ id: uid('AT'),
+ employeeId: emp ? emp.id : null,
+ employeeCode: g.empCode,
+ employeeName: emp ? `${emp.firstName} ${emp.lastName}` : g.empName,
+ department: emp ? emp.department : g.department,
+ date: g.date,
+ checkIn, checkOut,
+ scans: g.scans,
+ status: 'present'
+ });
+ });
+
+ _attendanceBuffer = allRecords;
+ const matched = allRecords.filter(r => r.employeeId).length;
+ const uniqueDates = new Set(allRecords.map(r => r.date)).size;
+ const sample = allRecords.slice(0, 8);
+
+ document.getElementById('attPreview').innerHTML = `
+ <div class="alert alert-success">อ่านไฟล์ .txt สำเร็จ — ${totalScans.toLocaleString()} สแกน → ${allRecords.length.toLocaleString()} records</div>
+ <div class="alert alert-info mb-3" style="font-size:13px;">
+ <strong>📄 Tigersoft Plain Text Format</strong> — ไม่มี Excel auto-conversion · วันที่เป็น DD/MM/YYYY string ตรงจาก source<br>
+ <small style="color:var(--gray-500);">parse ${lines.length} บรรทัด → success ${totalScans}, errors ${parseErrors}</small>
+ </div>
+ <div class="stats-grid">
+ <div class="stat-card"><div class="label">จำนวน records</div><div class="value">${allRecords.length.toLocaleString()}</div></div>
+ <div class="stat-card green"><div class="label">ครอบคลุม</div><div class="value">${uniqueDates} <small>วัน</small></div></div>
+ <div class="stat-card"><div class="label">จับคู่รหัสพนักงานได้</div><div class="value">${matched}</div></div>
+ <div class="stat-card orange"><div class="label">รหัสไม่พบในระบบ</div><div class="value">${unmatched.size}</div></div>
+ </div>
+ ${parseErrors > 0 ? `<div class="alert alert-error mb-3">${parseErrors} บรรทัดอ่านไม่ได้ ถูกข้ามไป</div>` : ''}
+ ${unmatched.size > 0 ? `
+ <div class="alert alert-error mb-3">
+ รหัสพนักงาน ${unmatched.size} คน ไม่พบในระบบ: ${[...unmatched.entries()].slice(0, 8).map(([c, n]) => `${c} (${n || 'ไม่มีชื่อ'})`).join(', ')}${unmatched.size > 8 ? '...' : ''}<br>
+ <small>ข้อมูลจะเก็บไว้ แต่จะไม่ปรากฏในรายงาน/สลิป จนกว่าจะเพิ่มพนักงานเข้าระบบ</small>
+ </div>
+ ` : ''}
+ <div class="card mb-3">
+ <div class="card-header"><h3>ตัวอย่างข้อมูล (${sample.length} จาก ${allRecords.length})</h3></div>
+ <div class="card-body" style="padding:0;overflow-x:auto;">
+ <table>
+ <thead><tr><th>รหัสพนักงาน</th><th>ชื่อ</th><th>วันที่</th><th>เข้างาน</th><th>เลิกงาน</th><th>จำนวนสแกน</th><th>จับคู่</th></tr></thead>
+ <tbody>
+ ${sample.map(r => `<tr>
+ <td>${r.employeeCode}</td>
+ <td>${r.employeeName}</td>
+ <td>${formatDate(r.date)}</td>
+ <td><strong>${r.checkIn}</strong></td>
+ <td>${r.checkOut || '-'}</td>
+ <td>${r.scans.length}</td>
+ <td>${r.employeeId ? '✓' : '✗'}</td>
+ </tr>`).join('')}
+ </tbody>
+ </table>
+ </div>
+ </div>
+ <button class="btn btn-success" onclick="confirmUploadAttendance()">บันทึกข้อมูลทั้งหมด</button>
+ <button class="btn btn-secondary" onclick="cancelUploadAttendance()">ยกเลิก</button>
+ `;
+ } catch (err) {
+ console.error('[TXT Parser] failed:', err);
+ document.getElementById('attPreview').innerHTML = `<div class="alert alert-error">อ่านไฟล์ .txt ไม่สำเร็จ: ${err.message}</div>`;
+ }
 }
 
 // Parse date from various formats: Date object, "DD/MM/YYYY" string, "YYYY-MM-DD" string

@@ -6,6 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.7] — 2026-06-27
+
+**Add .txt File Support for Attendance Upload (Tigersoft Plain Text)**
+
+### Added
+- **รับไฟล์ `.txt`** (Tigersoft Plain Text Export) เพิ่มจาก `.xlsx`
+ - ไม่มี Excel auto-conversion → ไม่มี DD/MM vs MM/DD confusion
+ - วันที่เป็น string `DD/MM/YYYY` ตรงจาก Tigersoft
+ - แนะนำเป็นวิธีหลัก หากเป็นไปได้
+- **`parseTxtAttendanceLine(line)`** — regex-based parser
+ - Extract: date, time, empCode (9 digits), firstName, lastName, company, department
+ - Robust ต่อ space alignment ที่ไม่เท่ากัน
+- **`previewAttendanceTxt(text)`** — separate pipeline for .txt
+ - Reuse `_attendanceBuffer` + `confirmUploadAttendance()` ของ Excel pipeline
+- **File input accept** `.xlsx, .xls, .txt`
+- **Preview banner** แยกระหว่าง Excel และ TXT (TXT badge: "ไม่มี Excel auto-conversion")
+
+### Verified
+- File "text.txt" (3,395 lines): 100% parsed, 0 errors
+- 104 unique employees recognized
+- Dates DD/MM/YYYY → ISO YYYY-MM-DD ครบทุก row
+
+### Use Case
+ถ้า Tigersoft Excel ส่งออกแล้ว format เพี้ยน (Excel auto-convert บางแถว เป็น datetime) — ใช้ .txt export แทน ระบบจะ parse ตรง ไม่มีความกำกวม
+
+---
+
 ## [1.4.6] — 2026-06-27
 
 **Normalize Excel Column A to DD/MM/YYYY at file-read time**

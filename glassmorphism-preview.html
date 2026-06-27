@@ -1,0 +1,871 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CROCHET HR · Corporate Liquid Glass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+:root {
+ --navy: #1e3a8a;
+ --navy-dark: #0f2557;
+ --navy-mid: #1d4ed8;
+ --sky: #3b82f6;
+ --sky-soft: #93c5fd;
+ --pale: #eff6ff;
+ --pale-2: #dbeafe;
+}
+* { margin:0; padding:0; box-sizing:border-box; -webkit-font-smoothing:antialiased; }
+html, body { height:100%; }
+/* iOS-matching font stack:
+   - Apple devices: native SF Pro via -apple-system / BlinkMacSystemFont
+   - Other devices: Inter (closest SF Pro analog) + Sarabun (closest iOS Thai)
+   - Tabular figures + cv11 stylistic set make digits feel like SF Pro */
+body {
+ font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
+              'Inter', 'Sarabun', 'Helvetica Neue', system-ui, sans-serif;
+ font-feature-settings: 'cv11', 'ss01', 'kern', 'liga', 'tnum';
+ letter-spacing: -0.01em;
+ background: #ffffff;
+ min-height: 100vh;
+ padding: 40px 20px 80px;
+ color: #0f172a;
+ overflow-x: hidden;
+ position: relative;
+}
+
+.demo-tabs {
+ display: flex; gap: 8px; justify-content: center;
+ margin-bottom: 36px; flex-wrap: wrap;
+}
+.demo-tab {
+ padding: 11px 22px;
+ background: rgba(255,255,255,0.55);
+ backdrop-filter: blur(20px) saturate(160%);
+ -webkit-backdrop-filter: blur(20px) saturate(160%);
+ color: var(--navy);
+ border: 1px solid rgba(30,58,138,0.15);
+ border-radius: 50px;
+ font: 600 13.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ cursor: pointer;
+ letter-spacing: 0.02em;
+ transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.8),
+  0 4px 14px rgba(30,58,138,0.10);
+}
+.demo-tab.active {
+ background: var(--navy);
+ color: #fff;
+ border-color: var(--navy-dark);
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.25),
+  0 8px 22px rgba(30,58,138,0.35);
+}
+
+/* ============================================================
+   iPhone Frame
+============================================================ */
+.phone-row {
+ display: flex; gap: 38px; justify-content: center;
+ align-items: flex-start; flex-wrap: wrap;
+}
+.iphone {
+ width: 360px; height: 760px;
+ background: linear-gradient(135deg, #2a2d35 0%, #0a0c12 100%);
+ border-radius: 56px;
+ padding: 8px;
+ position: relative;
+ box-shadow:
+  inset 0 0 0 1.5px rgba(255,255,255,0.08),
+  0 0 0 1.5px #000,
+  0 30px 60px rgba(0,0,0,0.15),
+  0 60px 100px rgba(0,0,0,0.08);
+}
+.screen-inner {
+ width: 100%; height: 100%;
+ border-radius: 48px;
+ overflow: hidden;
+ position: relative;
+ background: #f0f6ff;
+}
+
+/* Wallpaper inside screen — pure white with very faint gray hint for depth */
+.wallpaper {
+ position: absolute; inset:0;
+ background:
+  radial-gradient(circle at 20% 18%, rgba(0,0,0,0.025) 0%, transparent 45%),
+  radial-gradient(circle at 80% 25%, rgba(0,0,0,0.02) 0%, transparent 48%),
+  radial-gradient(circle at 75% 85%, rgba(0,0,0,0.03) 0%, transparent 45%),
+  radial-gradient(circle at 25% 78%, rgba(0,0,0,0.02) 0%, transparent 42%),
+  linear-gradient(160deg, #ffffff 0%, #f5f6f8 100%);
+ filter: blur(20px);
+ transform: scale(1.1);
+}
+
+/* Dynamic Island */
+.island {
+ position: absolute;
+ top: 12px; left: 50%; transform: translateX(-50%);
+ width: 120px; height: 36px;
+ background: #000;
+ border-radius: 22px;
+ z-index: 10;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.05),
+  0 4px 14px rgba(0,0,0,0.4);
+}
+
+/* Status bar */
+.statusbar {
+ position: absolute;
+ top: 18px; left: 0; right: 0;
+ display: flex; justify-content: space-between;
+ padding: 0 32px;
+ color: var(--navy-dark);
+ font: 600 15px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ z-index: 9;
+}
+.statusbar .right { display:flex; align-items:center; gap:5px; }
+.signal { display:flex; gap:2px; align-items:flex-end; }
+.signal i { display:block; width:3.5px; background: var(--navy-dark); border-radius:1px; }
+.signal i:nth-child(1){height:4px} .signal i:nth-child(2){height:6px}
+.signal i:nth-child(3){height:8px} .signal i:nth-child(4){height:10px}
+.battery {
+ display:inline-block; width:26px; height:13px;
+ border:1.5px solid rgba(15,37,87,0.65); border-radius:4px;
+ padding:1.5px; position:relative; margin-left:2px;
+}
+.battery::after { content:''; position:absolute; right:-4px; top:4px; width:2px; height:5px; background:rgba(15,37,87,0.65); border-radius:0 1.5px 1.5px 0;}
+.battery i { display:block; height:100%; width:78%; background: var(--navy-dark); border-radius:2px; }
+
+/* Content area */
+.content {
+ position: absolute;
+ top: 58px; left: 0; right: 0; bottom: 0;
+ padding: 16px 18px 110px;
+ overflow-y: auto;
+ z-index: 5;
+}
+.content::-webkit-scrollbar { display: none; }
+
+/* ============================================================
+   Glass System — Light corporate
+============================================================ */
+.glass {
+ background: rgba(255,255,255,0.65);
+ backdrop-filter: blur(30px) saturate(180%);
+ -webkit-backdrop-filter: blur(30px) saturate(180%);
+ border: 1px solid rgba(255,255,255,0.85);
+ border-radius: 22px;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.95),
+  0 8px 32px rgba(30,58,138,0.12),
+  0 2px 8px rgba(30,58,138,0.08);
+}
+.glass.tinted {
+ background: rgba(219, 234, 254, 0.55);
+ border-color: rgba(147, 197, 253, 0.6);
+}
+.glass.solid {
+ background: rgba(255,255,255,0.92);
+ border-color: rgba(30, 58, 138, 0.10);
+}
+
+/* ============================================================
+   Floating Tab Bar
+============================================================ */
+.tabbar {
+ position: absolute;
+ bottom: 22px; left: 18px; right: 18px;
+ height: 70px;
+ display: flex; align-items: center;
+ padding: 0 12px;
+ background: rgba(255,255,255,0.75);
+ backdrop-filter: blur(40px) saturate(200%);
+ -webkit-backdrop-filter: blur(40px) saturate(200%);
+ border: 1px solid rgba(255,255,255,0.9);
+ border-radius: 40px;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,1),
+  0 12px 40px rgba(30,58,138,0.18),
+  0 4px 12px rgba(30,58,138,0.1);
+ z-index: 8;
+}
+.tab-btn {
+ flex: 1; text-align: center; padding: 6px 0;
+ color: rgba(15,37,87,0.45);
+ cursor: pointer; transition: all 0.2s;
+}
+.tab-btn.active { color: var(--navy); }
+.tab-btn .glyph {
+ display: block; margin: 0 auto 3px;
+ width: 26px; height: 26px;
+ position: relative;
+}
+.tab-btn .glyph::before {
+ content:''; position:absolute; inset:0;
+ background: currentColor;
+ -webkit-mask-size:contain; mask-size:contain;
+ -webkit-mask-repeat:no-repeat; mask-repeat:no-repeat;
+ -webkit-mask-position:center; mask-position:center;
+}
+.tab-btn[data-i="home"]  .glyph::before { -webkit-mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='currentColor'><path d='M12 3l9 8h-3v9h-4v-6H10v6H6v-9H3z'/></svg>"); mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='currentColor'><path d='M12 3l9 8h-3v9h-4v-6H10v6H6v-9H3z'/></svg>"); }
+.tab-btn[data-i="cal"]   .glyph::before { -webkit-mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='currentColor'><rect x='3' y='4' width='18' height='17' rx='3'/></svg>"); mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='currentColor'><rect x='3' y='4' width='18' height='17' rx='3'/></svg>"); }
+.tab-btn[data-i="check"] .glyph::before { -webkit-mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='currentColor'><path d='M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z'/></svg>"); mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='currentColor'><path d='M9 16.2L4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z'/></svg>"); }
+.tab-btn[data-i="user"]  .glyph::before { -webkit-mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='currentColor'><circle cx='12' cy='8' r='5'/><path d='M3 22c0-5 4-8 9-8s9 3 9 8z'/></svg>"); mask-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='currentColor'><circle cx='12' cy='8' r='5'/><path d='M3 22c0-5 4-8 9-8s9 3 9 8z'/></svg>"); }
+.tab-btn .lbl { font: 600 10.5px -apple-system, 'Inter', 'Sarabun', sans-serif; }
+.tab-btn.active .glyph {
+ transform: scale(1.1);
+ filter: drop-shadow(0 0 10px rgba(30,58,138,0.4));
+}
+.tab-btn.active::after {
+ content:''; display:block; width:4px; height:4px;
+ background: var(--navy); border-radius:50%;
+ margin: 4px auto 0;
+}
+
+/* ============================================================
+   LOGIN
+============================================================ */
+.login-wrap {
+ height: 100%; display: flex; flex-direction: column;
+ align-items: center; justify-content: center;
+ padding: 0 14px; gap: 22px;
+}
+.crochet-frame {
+ width: 120px; height: 140px;
+ padding: 14px;
+ border-radius: 26px;
+ background: rgba(255,255,255,0.6);
+ backdrop-filter: blur(20px) saturate(180%);
+ -webkit-backdrop-filter: blur(20px) saturate(180%);
+ border: 1px solid rgba(255,255,255,0.9);
+ box-shadow:
+  inset 0 2px 0 rgba(255,255,255,1),
+  0 14px 40px rgba(30,58,138,0.25),
+  0 0 50px rgba(147,197,253,0.5);
+ display: flex; align-items: center; justify-content: center;
+}
+.crochet-frame img {
+ width: 100%; height: 100%;
+ object-fit: contain;
+ filter: drop-shadow(0 4px 10px rgba(30,58,138,0.25));
+}
+.brand-text { text-align: center; }
+.brand-text h1 {
+ font: 700 24px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.18em;
+ color: var(--navy-dark);
+ text-shadow: 0 1px 0 rgba(255,255,255,0.8);
+}
+.brand-text .sub {
+ font: 500 10.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.22em;
+ color: rgba(15,37,87,0.6);
+ text-transform: uppercase;
+ margin-top: 5px;
+}
+
+.glass-card { width: 100%; padding: 6px; }
+.field {
+ padding: 12px 16px;
+ border-bottom: 1px solid rgba(30,58,138,0.10);
+}
+.field:last-child { border-bottom: none; }
+.field label {
+ display: block;
+ font: 600 11px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: rgba(15,37,87,0.65);
+ letter-spacing: 0.08em;
+ text-transform: uppercase;
+ margin-bottom: 4px;
+}
+.field input {
+ width: 100%;
+ background: transparent;
+ border: none; outline: none;
+ color: var(--navy-dark);
+ font: 600 16px -apple-system, 'Inter', 'Sarabun', sans-serif;
+}
+
+.cta {
+ display: block;
+ width: 100%;
+ padding: 15px;
+ background: var(--navy);
+ color: #fff;
+ border: none;
+ border-radius: 50px;
+ font: 700 15px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.04em;
+ cursor: pointer;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.25),
+  0 12px 30px rgba(30,58,138,0.4),
+  0 2px 4px rgba(30,58,138,0.3);
+ transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.cta:hover {
+ transform: translateY(-1px);
+ background: var(--navy-dark);
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.25),
+  0 16px 38px rgba(30,58,138,0.45),
+  0 2px 6px rgba(30,58,138,0.35);
+}
+.cta.ghost {
+ background: rgba(255,255,255,0.65);
+ backdrop-filter: blur(20px);
+ -webkit-backdrop-filter: blur(20px);
+ color: var(--navy);
+ border: 1px solid rgba(30,58,138,0.20);
+ box-shadow: inset 0 1px 0 rgba(255,255,255,0.9), 0 6px 16px rgba(30,58,138,0.1);
+}
+
+/* ============================================================
+   DASHBOARD pieces
+============================================================ */
+.greeting { margin-bottom: 18px; padding: 4px 4px; }
+.greeting .hi {
+ font: 500 13.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: rgba(15,37,87,0.55);
+}
+.greeting .name {
+ font: 700 24px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+ margin-top: 2px;
+ letter-spacing: 0.01em;
+}
+.greeting .meta {
+ font: 500 12px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: rgba(15,37,87,0.5);
+ margin-top: 2px;
+}
+
+/* Big stat hero */
+.hero-stat {
+ padding: 20px; margin-bottom: 14px; position: relative; overflow: hidden;
+}
+.hero-stat::before {
+ content:''; position:absolute; top:-30px; right:-30px;
+ width:140px; height:140px;
+ background: radial-gradient(circle, rgba(59,130,246,0.4), transparent 65%);
+ border-radius:50%; filter:blur(10px); pointer-events:none;
+}
+.hero-stat .lbl {
+ font: 600 11px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: rgba(15,37,87,0.65);
+ text-transform: uppercase;
+ letter-spacing: 0.1em;
+ position: relative;
+}
+.hero-stat .v {
+ font: 700 40px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+ line-height: 1;
+ margin-top: 6px;
+ position: relative;
+}
+.hero-stat .v small {
+ font-size: 17px;
+ color: rgba(15,37,87,0.5);
+ font-weight: 500;
+}
+.hero-stat .delta {
+ display:inline-flex; align-items:center; gap:5px;
+ margin-top: 10px;
+ padding: 4px 12px;
+ background: rgba(34, 197, 94, 0.15);
+ color: #15803d;
+ font: 700 12px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ border-radius: 50px;
+ border: 1px solid rgba(34, 197, 94, 0.3);
+ position: relative;
+}
+
+/* Mini stat row */
+.stat-row {
+ display: grid;
+ grid-template-columns: 1fr 1fr;
+ gap: 12px;
+ margin-bottom: 14px;
+}
+.stat-mini {
+ padding: 14px; position: relative; overflow: hidden;
+}
+.stat-mini .lbl {
+ font: 600 10.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: rgba(15,37,87,0.6);
+ text-transform: uppercase;
+ letter-spacing: 0.07em;
+}
+.stat-mini .v {
+ font: 700 26px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+ margin-top: 4px;
+}
+.stat-mini .v small { font-size: 13px; color: rgba(15,37,87,0.5); font-weight: 500; }
+.stat-mini .ic {
+ position: absolute; top: 14px; right: 14px;
+ width: 30px; height: 30px;
+ border-radius: 10px;
+ display:flex; align-items:center; justify-content:center;
+ box-shadow:
+  inset 0 1px 0 rgba(255,255,255,0.5),
+  0 3px 8px rgba(30,58,138,0.18);
+}
+.stat-mini.ot .ic { background: linear-gradient(135deg, var(--sky), var(--navy-mid)); }
+.stat-mini.pending .ic { background: linear-gradient(135deg, #fbbf24, #f59e0b); }
+
+/* Section header */
+.sect {
+ display: flex; justify-content:space-between; align-items:center;
+ padding: 14px 4px 10px;
+}
+.sect .ttl {
+ font: 700 14px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-dark);
+ letter-spacing: 0.02em;
+}
+.sect .more {
+ font: 600 12px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy-mid);
+}
+
+/* Request tiles */
+.req-tiles {
+ display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+}
+.req-tile {
+ padding: 14px;
+ display:flex; align-items:center; gap:12px;
+ cursor: pointer;
+ transition: transform 0.2s;
+}
+.req-tile:hover { transform: translateY(-2px); }
+.req-tile .orb {
+ width: 42px; height: 42px;
+ border-radius: 14px;
+ position: relative; overflow: hidden;
+ box-shadow:
+  inset 0 2px 2px rgba(255,255,255,0.6),
+  inset 0 -2px 4px rgba(0,0,0,0.1),
+  0 4px 12px rgba(30,58,138,0.2);
+ flex-shrink: 0;
+}
+.req-tile .orb::after {
+ content:''; position:absolute; top:5px; left:5px; right:5px;
+ height:14px; border-radius:50% 50% 0 0;
+ background: linear-gradient(180deg, rgba(255,255,255,0.7), rgba(255,255,255,0));
+}
+.req-tile.leave .orb { background: linear-gradient(135deg, var(--sky), var(--navy-mid)); }
+.req-tile.ot .orb { background: linear-gradient(135deg, #6366f1, #4f46e5); }
+.req-tile.field .orb { background: linear-gradient(135deg, #14b8a6, #0891b2); }
+.req-tile.maint .orb { background: linear-gradient(135deg, #8b5cf6, #6d28d9); }
+.req-tile .name {
+ font: 700 13px -apple-system, 'Inter', 'Sarabun', sans-serif; color: var(--navy-dark);
+}
+.req-tile .desc {
+ font: 500 11px -apple-system, 'Inter', 'Sarabun', sans-serif; color: rgba(15,37,87,0.55);
+ margin-top: 2px;
+}
+
+/* Progress rows */
+.prog-row {
+ padding: 12px 14px;
+ border-bottom: 1px solid rgba(30,58,138,0.08);
+}
+.prog-row:last-child { border-bottom: none; }
+.prog-row .top {
+ display: flex; justify-content: space-between; margin-bottom: 6px;
+}
+.prog-row .top .l {
+ font: 600 12.5px -apple-system, 'Inter', 'Sarabun', sans-serif; color: rgba(15,37,87,0.8);
+}
+.prog-row .top .r {
+ font: 700 12.5px -apple-system, 'Inter', 'Sarabun', sans-serif; color: var(--navy-dark);
+}
+.prog-bar {
+ height: 8px; border-radius: 4px;
+ background: rgba(30,58,138,0.08);
+ overflow: hidden; position: relative;
+}
+.prog-fill {
+ height: 100%; border-radius: 4px;
+ background: linear-gradient(90deg, var(--sky), var(--navy-mid));
+ box-shadow: 0 0 10px rgba(59,130,246,0.4);
+}
+.prog-fill.green { background: linear-gradient(90deg, #22c55e, #16a34a); box-shadow: 0 0 10px rgba(34,197,94,0.4); }
+.prog-fill.amber { background: linear-gradient(90deg, #fbbf24, #f59e0b); box-shadow: 0 0 10px rgba(245,158,11,0.4); }
+
+/* Activity feed */
+.feed-item {
+ padding: 12px 14px;
+ display: flex; gap: 12px; align-items: center;
+ border-bottom: 1px solid rgba(30,58,138,0.08);
+}
+.feed-item:last-child { border-bottom: none; }
+.feed-item .avatar {
+ width: 38px; height: 38px;
+ border-radius: 50%;
+ background: linear-gradient(135deg, var(--sky), var(--navy));
+ display:flex; align-items:center; justify-content:center;
+ font: 700 14px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: #fff;
+ flex-shrink: 0;
+ box-shadow:
+  inset 0 2px 2px rgba(255,255,255,0.4),
+  0 4px 10px rgba(30,58,138,0.25);
+}
+.feed-item .body { flex: 1; min-width: 0; }
+.feed-item .text {
+ font: 500 13px -apple-system, 'Inter', 'Sarabun', sans-serif; color: var(--navy-dark);
+}
+.feed-item .text strong { font-weight: 700; }
+.feed-item .when {
+ font: 500 11px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: rgba(15,37,87,0.5);
+ margin-top: 2px;
+}
+.feed-item .chip {
+ padding: 3px 10px;
+ background: rgba(34, 197, 94, 0.15);
+ color: #15803d;
+ border: 1px solid rgba(34, 197, 94, 0.35);
+ border-radius: 50px;
+ font: 700 10px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.04em;
+}
+.feed-item .chip.pending {
+ background: rgba(245, 158, 11, 0.15);
+ color: #b45309;
+ border-color: rgba(245, 158, 11, 0.4);
+}
+
+/* Filter chips */
+.filter-chips {
+ display: flex; gap: 8px; padding: 4px 0 14px;
+ overflow-x: auto;
+}
+.filter-chips::-webkit-scrollbar { display: none; }
+.fchip {
+ padding: 8px 16px;
+ background: rgba(255,255,255,0.7);
+ backdrop-filter: blur(15px);
+ -webkit-backdrop-filter: blur(15px);
+ border: 1px solid rgba(30,58,138,0.15);
+ border-radius: 50px;
+ font: 600 12px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ color: var(--navy);
+ white-space: nowrap;
+ cursor: pointer;
+}
+.fchip.active {
+ background: var(--navy);
+ color: #fff;
+ border-color: var(--navy-dark);
+ box-shadow: 0 4px 14px rgba(30,58,138,0.35);
+}
+
+.fab {
+ position: absolute;
+ bottom: 110px; right: 20px;
+ width: 56px; height: 56px;
+ border-radius: 50%;
+ background: linear-gradient(135deg, var(--sky) 0%, var(--navy) 100%);
+ display: flex; align-items: center; justify-content: center;
+ color: #fff;
+ font: 700 28px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ line-height: 1;
+ cursor: pointer;
+ box-shadow:
+  inset 0 2px 2px rgba(255,255,255,0.4),
+  0 12px 32px rgba(30,58,138,0.45),
+  0 0 50px rgba(59,130,246,0.4);
+ z-index: 9;
+ transition: transform 0.2s;
+}
+.fab:hover { transform: scale(1.08); }
+
+.brand-mark {
+ text-align: center;
+ margin-top: 38px;
+ color: rgba(15,37,87,0.55);
+ font: 600 10.5px -apple-system, 'Inter', 'Sarabun', sans-serif;
+ letter-spacing: 0.22em;
+ text-transform: uppercase;
+}
+.brand-mark span { color: var(--navy); }
+
+@media (max-width: 768px) {
+ .phone-row { gap: 22px; }
+ .iphone { transform: scale(0.86); transform-origin: top center; margin-bottom: -110px; }
+}
+</style>
+</head>
+<body>
+
+<div class="demo-tabs">
+ <button class="demo-tab active" onclick="show('login', this)">Login</button>
+ <button class="demo-tab" onclick="show('home', this)">Dashboard</button>
+ <button class="demo-tab" onclick="show('list', this)">Leave &amp; OT</button>
+</div>
+
+<div class="phone-row">
+
+ <!-- ===== Phone 1: Login ===== -->
+ <div class="iphone" data-tab="login">
+  <div class="screen-inner">
+   <div class="wallpaper"></div>
+   <div class="island"></div>
+   <div class="statusbar">
+    <span class="left">9:41</span>
+    <span class="right">
+     <span class="signal"><i></i><i></i><i></i><i></i></span>
+     <span class="battery"><i></i></span>
+    </span>
+   </div>
+
+   <div class="content" style="padding-bottom:30px;">
+    <div class="login-wrap">
+     <div class="crochet-frame">
+      <img src="Asset 4 Black.png" alt="CROCHET" onerror="this.src='logo-black.png'">
+     </div>
+     <div class="brand-text">
+      <h1>CROCHET</h1>
+      <div class="sub">HR Management System</div>
+     </div>
+
+     <div class="glass glass-card">
+      <div class="field">
+       <label>รหัสพนักงาน</label>
+       <input type="text" value="ADMIN001">
+      </div>
+      <div class="field">
+       <label>รหัสผ่าน</label>
+       <input type="password" value="••••••••">
+      </div>
+     </div>
+
+     <button class="cta">เข้าสู่ระบบ</button>
+     <button class="cta ghost">ลืมรหัสผ่าน</button>
+    </div>
+   </div>
+  </div>
+ </div>
+
+ <!-- ===== Phone 2: Dashboard ===== -->
+ <div class="iphone" data-tab="home" style="display:none;">
+  <div class="screen-inner">
+   <div class="wallpaper"></div>
+   <div class="island"></div>
+   <div class="statusbar">
+    <span class="left">9:41</span>
+    <span class="right">
+     <span class="signal"><i></i><i></i><i></i><i></i></span>
+     <span class="battery"><i></i></span>
+    </span>
+   </div>
+
+   <div class="content">
+    <div class="greeting">
+     <div class="hi">สวัสดีตอนเช้า</div>
+     <div class="name">แอดมิน ระบบ</div>
+     <div class="meta">วันพุธ 19 มิ.ย. 2569 · 3 คำขอรอ</div>
+    </div>
+
+    <div class="glass hero-stat">
+     <div class="lbl">วันลาพักร้อนคงเหลือ</div>
+     <div class="v">8.5 <small>/ 12 วัน</small></div>
+     <div class="delta">↑ ยกยอด 5 วันจากปีที่แล้ว</div>
+    </div>
+
+    <div class="stat-row">
+     <div class="glass stat-mini ot">
+      <div class="ic"></div>
+      <div class="lbl">OT เดือนนี้</div>
+      <div class="v">14<small> ชม.</small></div>
+     </div>
+     <div class="glass stat-mini pending">
+      <div class="ic"></div>
+      <div class="lbl">รออนุมัติ</div>
+      <div class="v">3</div>
+     </div>
+    </div>
+
+    <div class="sect">
+     <div class="ttl">One Request Center</div>
+     <div class="more">ดูทั้งหมด →</div>
+    </div>
+
+    <div class="req-tiles">
+     <div class="glass req-tile leave">
+      <div class="orb"></div>
+      <div><div class="name">ขอลา</div><div class="desc">ป่วย กิจ พักร้อน</div></div>
+     </div>
+     <div class="glass req-tile ot">
+      <div class="orb"></div>
+      <div><div class="name">ขอ OT</div><div class="desc">ล่วงเวลา</div></div>
+     </div>
+     <div class="glass req-tile field">
+      <div class="orb"></div>
+      <div><div class="name">งานนอกสถานที่</div><div class="desc">พบลูกค้า</div></div>
+     </div>
+     <div class="glass req-tile maint">
+      <div class="orb"></div>
+      <div><div class="name">แจ้งซ่อม</div><div class="desc">อาคาร อุปกรณ์</div></div>
+     </div>
+    </div>
+
+    <div class="sect"><div class="ttl">สิทธิ์การลา</div></div>
+    <div class="glass">
+     <div class="prog-row">
+      <div class="top"><span class="l">ลาพักร้อน</span><span class="r">8.5 / 12</span></div>
+      <div class="prog-bar"><div class="prog-fill" style="width:71%;"></div></div>
+     </div>
+     <div class="prog-row">
+      <div class="top"><span class="l">ลาป่วย</span><span class="r">27 / 30</span></div>
+      <div class="prog-bar"><div class="prog-fill green" style="width:90%;"></div></div>
+     </div>
+     <div class="prog-row">
+      <div class="top"><span class="l">ลากิจ</span><span class="r">4 / 6</span></div>
+      <div class="prog-bar"><div class="prog-fill amber" style="width:67%;"></div></div>
+     </div>
+    </div>
+
+    <div class="sect"><div class="ttl">กิจกรรมล่าสุด</div></div>
+    <div class="glass">
+     <div class="feed-item">
+      <div class="avatar">สม</div>
+      <div class="body">
+       <div class="text">สมชาย อนุมัติ <strong>ลาพักร้อน 22-24 มิ.ย.</strong></div>
+       <div class="when">2 ชั่วโมงที่แล้ว</div>
+      </div>
+      <div class="chip">อนุมัติ</div>
+     </div>
+     <div class="feed-item">
+      <div class="avatar" style="background:linear-gradient(135deg,#6366f1,#4338ca);">OT</div>
+      <div class="body">
+       <div class="text">คุณส่ง <strong>ขอ OT 4 ชั่วโมง</strong></div>
+       <div class="when">เมื่อวานนี้</div>
+      </div>
+      <div class="chip pending">รอ</div>
+     </div>
+    </div>
+
+    <div style="height:30px;"></div>
+   </div>
+
+   <nav class="tabbar">
+    <div class="tab-btn active" data-i="home"><div class="glyph"></div><div class="lbl">หน้าหลัก</div></div>
+    <div class="tab-btn" data-i="cal"><div class="glyph"></div><div class="lbl">ปฏิทิน</div></div>
+    <div class="tab-btn" data-i="check"><div class="glyph"></div><div class="lbl">อนุมัติ</div></div>
+    <div class="tab-btn" data-i="user"><div class="glyph"></div><div class="lbl">โปรไฟล์</div></div>
+   </nav>
+  </div>
+ </div>
+
+ <!-- ===== Phone 3: List ===== -->
+ <div class="iphone" data-tab="list" style="display:none;">
+  <div class="screen-inner">
+   <div class="wallpaper"></div>
+   <div class="island"></div>
+   <div class="statusbar">
+    <span class="left">9:41</span>
+    <span class="right">
+     <span class="signal"><i></i><i></i><i></i><i></i></span>
+     <span class="battery"><i></i></span>
+    </span>
+   </div>
+
+   <div class="content">
+    <div class="greeting" style="margin-bottom:8px;">
+     <div class="name" style="font-size:22px;">ลางาน &amp; OT</div>
+     <div class="meta">รายการของฉัน · 5 รายการล่าสุด</div>
+    </div>
+
+    <div class="filter-chips">
+     <div class="fchip active">ทั้งหมด · 5</div>
+     <div class="fchip">ลา · 3</div>
+     <div class="fchip">OT · 2</div>
+     <div class="fchip">รออนุมัติ · 2</div>
+    </div>
+
+    <div class="sect" style="padding-top:0;"><div class="ttl">คำขอลาล่าสุด</div></div>
+    <div class="glass">
+     <div class="feed-item">
+      <div class="avatar" style="background:linear-gradient(135deg,#3b82f6,#1d4ed8);">ลพ</div>
+      <div class="body">
+       <div class="text"><strong>ลาพักร้อน · 3 วัน</strong></div>
+       <div class="when">22-24 มิ.ย. 2569</div>
+      </div>
+      <div class="chip">อนุมัติ</div>
+     </div>
+     <div class="feed-item">
+      <div class="avatar" style="background:linear-gradient(135deg,#8b5cf6,#6d28d9);">ลป</div>
+      <div class="body">
+       <div class="text"><strong>ลาป่วย · 1 วัน</strong></div>
+       <div class="when">10 มิ.ย. 2569</div>
+      </div>
+      <div class="chip">อนุมัติ</div>
+     </div>
+     <div class="feed-item">
+      <div class="avatar" style="background:linear-gradient(135deg,#fbbf24,#f59e0b);">ลก</div>
+      <div class="body">
+       <div class="text"><strong>ลากิจ · 0.5 วัน</strong></div>
+       <div class="when">2 มิ.ย. 2569</div>
+      </div>
+      <div class="chip pending">รอ</div>
+     </div>
+    </div>
+
+    <div class="sect"><div class="ttl">คำขอ OT ล่าสุด</div></div>
+    <div class="glass">
+     <div class="feed-item">
+      <div class="avatar" style="background:linear-gradient(135deg,#14b8a6,#0891b2);">OT</div>
+      <div class="body">
+       <div class="text"><strong>OT 4 ชม.</strong> · วันธรรมดา ×1.5</div>
+       <div class="when">15 มิ.ย. 2569 · ปิดบัญชี Q2</div>
+      </div>
+      <div class="chip pending">รอ</div>
+     </div>
+     <div class="feed-item">
+      <div class="avatar" style="background:linear-gradient(135deg,#6366f1,#4338ca);">OT</div>
+      <div class="body">
+       <div class="text"><strong>OT 8 ชม.</strong> · วันหยุด ×3</div>
+       <div class="when">8 มิ.ย. 2569 · ติดตั้งระบบ</div>
+      </div>
+      <div class="chip">อนุมัติ</div>
+     </div>
+    </div>
+
+    <div style="height:30px;"></div>
+   </div>
+
+   <div class="fab">+</div>
+   <nav class="tabbar">
+    <div class="tab-btn" data-i="home"><div class="glyph"></div><div class="lbl">หน้าหลัก</div></div>
+    <div class="tab-btn active" data-i="cal"><div class="glyph"></div><div class="lbl">ปฏิทิน</div></div>
+    <div class="tab-btn" data-i="check"><div class="glyph"></div><div class="lbl">อนุมัติ</div></div>
+    <div class="tab-btn" data-i="user"><div class="glyph"></div><div class="lbl">โปรไฟล์</div></div>
+   </nav>
+  </div>
+ </div>
+
+</div>
+
+<div class="brand-mark"><span>CROCHET HR</span> · Corporate Liquid Glass</div>
+
+<script>
+function show(name, el) {
+ document.querySelectorAll('.iphone').forEach(p => p.style.display = (p.dataset.tab === name) ? '' : 'none');
+ document.querySelectorAll('.demo-tab').forEach(t => t.classList.remove('active'));
+ el.classList.add('active');
+}
+</script>
+</body>
+</html>
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 

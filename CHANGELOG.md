@@ -6,6 +6,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.9] — 2026-06-28
+
+**Critical Hotfix — 3 Bugs**
+
+### Fixed
+**Bug #1: Approval Center ว่างเปล่าสำหรับ Admin (Critical)**
+- Root cause: `renderApprovals()` filter `r.managerId === myId` — Admin ไม่ได้เป็น manager ของใคร → เห็น 0 เสมอ
+- Fix: เพิ่ม `isAdmin` check → Admin เห็น **ทุก** pending request ในระบบ (manager ยังเห็นเฉพาะลูกน้องตัวเอง)
+- ครอบคลุม: `renderApprovals()`, `drawApprovalList()`, `getPendingApprovals()` (sidebar badge)
+
+**Bug #2: Data loss วันที่ 27 มิ.ย. (vacation-accrual หาย)**
+- Root cause: v1.4.5 fix ครอบคลุม "refresh push" — แต่ไม่ครอบคลุม **multi-tab race** ที่ stale tab push `[]` ทับ
+- Evidence: cloud `leaveRequests = []` updated_at 16:53 UTC (23:53 ไทย) — หลัง user ปิดงานไปแล้ว
+- Fix: เพิ่ม **anti-data-loss guard** ใน `_cloudUpsert()`
+ - ถ้ากำลังจะ push `[]` ของ key สำคัญ (`*Requests`, `employees`, `shifts`)
+ - ตรวจ cloud ก่อน → ถ้า cloud มีข้อมูล → **REFUSE push** + restore local จาก cloud + toast แจ้งเตือน
+ - User เห็นข้อมูลกลับมาทันที ไม่หายแน่นอน
+
+**Bug #3: วันอาทิตย์ในปฏิทินมองเลขไม่เห็น**
+- Root cause: `.weekend` background `#fafafa` (เกือบขาว) — Sunday ถูก override โดย `.today` ทำให้ text กลืนพื้น
+- Fix: เพิ่ม CSS class `.sunday` → background `#1e3a8a` (navy) + color `#ffffff` (ขาว) — สีไม่ซ้ำกับ "ลา" (น้ำเงิน primary) หรือ "วันหยุด" (แดง) หรือ "วันนี้" (primary)
+- Legend อัปเดต: แยก "วันอาทิตย์" กับ "วันเสาร์"
+
+### Postmortem (Bug #2)
+ลำดับเหตุการณ์:
+1. 21:00-22:00 ไทย — Tab A submit `vacation-accrual` → cloud มี item แล้ว
+2. มี Tab B (อีก device หรือ tab ที่เปิดไว้นานแล้ว) state เก่า `leaveRequests = []`
+3. Tab B trigger action ใดๆ ที่ทำให้ `DB.save('leaveRequests', staleArray)` ถูกเรียก → `_cloudUpsert([])`
+4. cloud ถูก overwrite ด้วย `[]` → ข้อมูลใหม่หาย
+5. 23:53 ไทย (16:53 UTC) = timestamp ที่ Tab B push
+
+ทำไม Realtime ไม่ป้องกัน? — Realtime ทำงาน แต่ Tab B ไม่ได้ trigger render หลังจาก submit ดังนั้น state ของ Tab B ยังเก่า ขณะที่ครั้งสุดท้ายที่ Tab B `DB.save` มันใช้ in-memory state เก่า
+
+Guard ใหม่ block ที่ point write — ทุกครั้งที่ array critical จะ pushed empty จะถูก check กับ cloud ก่อน
+
+---
+
 ## [1.4.8] — 2026-06-27
 
 **Add "มาสายสะสม (นาที)" Report Tab**

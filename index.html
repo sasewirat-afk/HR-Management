@@ -649,6 +649,10 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 }
 .calendar-day.leave { background: rgba(219,234,254,0.7); color: var(--primary-dark); font-weight: 700; }
 .calendar-day.weekend { background: #fafafa; }
+.calendar-day.sunday { background: #1e3a8a; color: #ffffff; font-weight: 700; }
+.calendar-day.sunday.today { background: #1e3a8a; color: #fde047; box-shadow: inset 0 0 0 3px #fde047; }
+.calendar-day.sunday.leave { background: #1e3a8a; color: #fde047; }
+.calendar-day.sunday.holiday { background: #1e3a8a; color: #fecaca; }
 .calendar-day.holiday { background: rgba(254,226,226,0.7); color: var(--danger); }
 
 /* ===== Tabs ===== */
@@ -777,7 +781,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.8</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.9</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -801,7 +805,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.8';
+const APP_VERSION = '1.4.9';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -878,6 +882,24 @@ const DB = {
  const size = JSON.stringify(val)?.length || 0;
  if (size > 900_000) {
  console.warn(`[CloudUpsert] '${key}' is ${(size/1024/1024).toFixed(2)} MB — may exceed Supabase row limit`);
+ }
+ // ANTI-DATA-LOSS GUARD (v1.4.9): refuse to push empty array if cloud has data.
+ // Protects against multi-tab/multi-device races where a stale tab pushes [] over real data.
+ // Critical keys = anything ending in 'Requests', plus 'employees', 'shifts'.
+ const isCriticalKey = /Requests$/.test(key) || key === 'employees' || key === 'shifts';
+ if (isCriticalKey && Array.isArray(val) && val.length === 0) {
+ try {
+ const { data: existing } = await supa.from('hr_data').select('value').eq('key', key).maybeSingle();
+ if (existing && Array.isArray(existing.value) && existing.value.length > 0) {
+ console.error(`[CloudUpsert] REFUSED to push empty array for '${key}' — cloud has ${existing.value.length} items`);
+ if (typeof toast === 'function') toast(`ป้องกันข้อมูลหาย: ดึง '${key}' จาก cloud (${existing.value.length} รายการ)`, 'error');
+ // Restore local from cloud so the user's view recovers
+ localStorage.setItem('hr_' + key, JSON.stringify(existing.value));
+ if (this._localDirty) this._localDirty.delete(key);
+ if (typeof renderPage === 'function' && typeof currentUser !== 'undefined' && currentUser) renderPage();
+ return;
+ }
+ } catch (e) { console.warn('[CloudUpsert] guard check failed, proceeding:', e); }
  }
  this._pendingWrites++;
  try {
@@ -1414,12 +1436,15 @@ function getUnreadCount(empId) {
 }
 
 function getPendingApprovals(managerId) {
+ // Admin sees ALL pending; manager sees only their direct reports'
+ const isAdmin = currentUser && currentUser.role === 'admin';
+ const match = r => isAdmin ? true : r.managerId === managerId;
  const all = [
- ...DB.load('leaveRequests').filter(r => r.managerId === managerId && r.status === 'pending'),
- ...DB.load('otRequests').filter(r => r.managerId === managerId && r.status === 'pending'),
- ...DB.load('compOffRequests').filter(r => r.managerId === managerId && r.status === 'pending'),
- ...DB.load('fieldWorkRequests').filter(r => r.managerId === managerId && r.status === 'pending'),
- ...DB.load('timeCertRequests', []).filter(r => r.managerId === managerId && r.status === 'pending')
+ ...DB.load('leaveRequests').filter(r => match(r) && r.status === 'pending'),
+ ...DB.load('otRequests').filter(r => match(r) && r.status === 'pending'),
+ ...DB.load('compOffRequests').filter(r => match(r) && r.status === 'pending'),
+ ...DB.load('fieldWorkRequests').filter(r => match(r) && r.status === 'pending'),
+ ...DB.load('timeCertRequests', []).filter(r => match(r) && r.status === 'pending')
  ];
  return all.length;
 }
@@ -2705,7 +2730,8 @@ function renderMyCalendar() {
  <div class="flex mt-3" style="gap:16px;font-size:13px;">
  <span class="flex"><span style="width:16px;height:16px;background:var(--primary-light);border-radius:3px;"></span> วันลา</span>
  <span class="flex"><span style="width:16px;height:16px;background:var(--danger-light);border-radius:3px;"></span> วันหยุดบริษัท</span>
- <span class="flex"><span style="width:16px;height:16px;background:var(--gray-100);border-radius:3px;"></span> เสาร์-อาทิตย์</span>
+ <span class="flex"><span style="width:16px;height:16px;background:#1e3a8a;border-radius:3px;"></span> วันอาทิตย์</span>
+ <span class="flex"><span style="width:16px;height:16px;background:#fafafa;border:1px solid var(--gray-300);border-radius:3px;"></span> วันเสาร์</span>
  </div>
  </div>
  </div>
@@ -2754,9 +2780,10 @@ function drawCalendar() {
  const dow = new Date(calYear, calMonth, d).getDay();
  let cls = 'calendar-day';
  if (dStr === todayStr) cls += ' today';
+ if (dow === 0) cls += ' sunday';
  if (leaveDates.has(dStr)) cls += ' leave';
  else if (holidays.has(dStr)) cls += ' holiday';
- else if (dow === 0 || dow === 6) cls += ' weekend';
+ else if (dow === 6) cls += ' weekend';
  html += `<div class="${cls}">${d}</div>`;
  }
  html += '</div>';
@@ -3987,11 +4014,13 @@ let approvalTab = 'leave';
 
 function renderApprovals() {
  const myId = currentUser.id;
- const leaves = DB.load('leaveRequests').filter(r => r.managerId === myId && r.status === 'pending');
- const ots = DB.load('otRequests').filter(r => r.managerId === myId && r.status === 'pending');
- const cos = DB.load('compOffRequests').filter(r => r.managerId === myId && r.status === 'pending');
- const fws = DB.load('fieldWorkRequests').filter(r => r.managerId === myId && r.status === 'pending');
- const tcs = DB.load('timeCertRequests', []).filter(r => r.managerId === myId && r.status === 'pending');
+ const isAdmin = currentUser.role === 'admin';
+ const matchScope = r => isAdmin ? true : r.managerId === myId;
+ const leaves = DB.load('leaveRequests').filter(r => matchScope(r) && r.status === 'pending');
+ const ots = DB.load('otRequests').filter(r => matchScope(r) && r.status === 'pending');
+ const cos = DB.load('compOffRequests').filter(r => matchScope(r) && r.status === 'pending');
+ const fws = DB.load('fieldWorkRequests').filter(r => matchScope(r) && r.status === 'pending');
+ const tcs = DB.load('timeCertRequests', []).filter(r => matchScope(r) && r.status === 'pending');
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
@@ -4016,10 +4045,12 @@ function setApprovalTab(t) {
 
 function drawApprovalList() {
  const myId = currentUser.id;
+ const isAdmin = currentUser.role === 'admin';
+ const matchScope = r => isAdmin ? true : r.managerId === myId;
  let html = '';
 
  if (approvalTab === 'leave') {
- const items = DB.load('leaveRequests').filter(r => r.managerId === myId && r.status === 'pending');
+ const items = DB.load('leaveRequests').filter(r => matchScope(r) && r.status === 'pending');
  html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr><th>วันที่ขอ</th><th>พนักงาน</th><th>ประเภท</th><th>วันที่ลา</th><th>จำนวน</th><th>เหตุผล</th><th>การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {
@@ -4040,7 +4071,7 @@ function drawApprovalList() {
  }
 
  else if (approvalTab === 'ot') {
- const items = DB.load('otRequests').filter(r => r.managerId === myId && r.status === 'pending');
+ const items = DB.load('otRequests').filter(r => matchScope(r) && r.status === 'pending');
  html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr><th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ทำ OT</th><th>เวลา</th><th>ชั่วโมง</th><th>เหตุผล</th><th>การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {
@@ -4061,7 +4092,7 @@ function drawApprovalList() {
  }
 
  else if (approvalTab === 'comp-off') {
- const items = DB.load('compOffRequests').filter(r => r.managerId === myId && r.status === 'pending');
+ const items = DB.load('compOffRequests').filter(r => matchScope(r) && r.status === 'pending');
  html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr><th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ทำงาน</th><th>เหตุผล</th><th>การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {
@@ -4080,7 +4111,7 @@ function drawApprovalList() {
  }
 
  else if (approvalTab === 'field-work') {
- const items = DB.load('fieldWorkRequests').filter(r => r.managerId === myId && r.status === 'pending');
+ const items = DB.load('fieldWorkRequests').filter(r => matchScope(r) && r.status === 'pending');
  html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr><th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ปฏิบัติงาน</th><th>เวลา</th><th>วัตถุประสงค์</th><th>การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {
@@ -4100,7 +4131,7 @@ function drawApprovalList() {
  }
 
  else if (approvalTab === 'time-cert') {
- const items = DB.load('timeCertRequests', []).filter(r => r.managerId === myId && r.status === 'pending');
+ const items = DB.load('timeCertRequests', []).filter(r => matchScope(r) && r.status === 'pending');
  html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr><th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ทำงาน</th><th>เวลาเข้าจริง</th><th>เวลาเลิก</th><th>เหตุผล</th><th>สแกนจริง</th><th>การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {

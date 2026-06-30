@@ -781,7 +781,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.9</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.10</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -805,7 +805,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.9';
+const APP_VERSION = '1.4.10';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -864,12 +864,13 @@ const DB = {
  return;
  }
  localStorage.setItem('hr_' + key, JSON.stringify(val));
- // Mark this key as locally-modified so realtime handler won't overwrite our pending write
- this._localDirty = this._localDirty || new Set();
- this._localDirty.add(key);
+ // v1.4.10: use a counter (not Set) so concurrent saves to the same key are tracked separately.
+ // Bug fix: Set semantics caused 1st upsert.then to clear dirty even if 2nd upsert was still pending,
+ // allowing a stale realtime echo to overwrite the newer local value (Shift Schedule revert bug).
+ this._localDirty = this._localDirty || {};
+ this._localDirty[key] = (this._localDirty[key] || 0) + 1;
  if (cloudSync) this._cloudUpsert(key, val).then(() => {
- // Clear dirty after cloud confirms write — realtime can now safely accept echoes
- if (this._localDirty) this._localDirty.delete(key);
+ if (this._localDirty && this._localDirty[key] > 0) this._localDirty[key]--;
  });
  },
 
@@ -895,7 +896,7 @@ const DB = {
  if (typeof toast === 'function') toast(`ป้องกันข้อมูลหาย: ดึง '${key}' จาก cloud (${existing.value.length} รายการ)`, 'error');
  // Restore local from cloud so the user's view recovers
  localStorage.setItem('hr_' + key, JSON.stringify(existing.value));
- if (this._localDirty) this._localDirty.delete(key);
+ if (this._localDirty && this._localDirty[key] > 0) this._localDirty[key]--;
  if (typeof renderPage === 'function' && typeof currentUser !== 'undefined' && currentUser) renderPage();
  return;
  }
@@ -997,10 +998,10 @@ function setupCloudRealtime() {
  .on('postgres_changes', { event: '*', schema: 'public', table: 'hr_data' }, payload => {
  const row = payload.new || payload.old;
  if (!row || !row.key) return;
- // CRITICAL: Don't overwrite a key that we just locally modified — wait until our upsert resolves
- // This prevents the race where realtime echoes back STALE cloud state mid-write
- if (DB._localDirty && DB._localDirty.has(row.key)) {
- console.log(`[Realtime] skip '${row.key}' — local write pending`);
+ // CRITICAL: Don't overwrite a key that we just locally modified — wait until ALL pending upserts resolve
+ // v1.4.10: counter-based (Set caused Shift Schedule revert when user clicked fast)
+ if (DB._localDirty && DB._localDirty[row.key] > 0) {
+ console.log(`[Realtime] skip '${row.key}' — ${DB._localDirty[row.key]} local write(s) pending`);
  return;
  }
  if (payload.eventType === 'DELETE') {
@@ -1031,6 +1032,30 @@ function setupCloudRealtime() {
 // ============================================================
 // INITIAL SEED DATA
 // ============================================================
+// v1.4.10: idempotent migration to update legacy defaults
+function migrateSettings_v1_4_10() {
+ const s = DB.load('settings', null);
+ if (!s) return;
+ let changed = false;
+ if (s._settingsVersion !== '1.4.10') {
+ // Personal leave: legacy default 6 → new default 3 (only if still at legacy default)
+ if (s.leaveQuotas && s.leaveQuotas.personal === 6) {
+ s.leaveQuotas.personal = 3;
+ changed = true;
+ console.log('[migrate v1.4.10] personal quota: 6 → 3');
+ }
+ // Comp-off expire months: add if missing
+ if (s.compOffExpireMonths === undefined || s.compOffExpireMonths === null) {
+ s.compOffExpireMonths = 12;
+ changed = true;
+ console.log('[migrate v1.4.10] compOffExpireMonths: 12 (added)');
+ }
+ s._settingsVersion = '1.4.10';
+ changed = true;
+ }
+ if (changed) DB.save('settings', s);
+}
+
 function seedData() {
  if (DB.load('initialized', false)) return;
 
@@ -1099,8 +1124,9 @@ function seedData() {
  DB.save('onboardingTasks', []);
  DB.save('settings', {
  probationDays: 90,
- leaveQuotas: { personal: 6, vacation: 6, sick: 30, maternity: 90, ordination: 15, unpaid: 0 },
- probationPersonalCap: 3, // ลากิจช่วงทดลองงาน (วัน)
+ leaveQuotas: { personal: 3, vacation: 6, sick: 30, maternity: 90, ordination: 15, unpaid: 0 },
+ probationPersonalCap: 3, // ลากิจช่วงทดลองงาน (วัน) — legacy, now same as personal default
+ compOffExpireMonths: 12, // อายุของวันสะสมหยุด (เดือน)
  vacationAccrual: {
  enabled: true,
  base: 6, // ปีที่ 1 (หลังผ่านทดลอง)
@@ -3269,7 +3295,10 @@ function renderShiftSchedule() {
  <h1> ตารางลงกะงาน</h1>
  <div class="flex" style="gap:8px;flex-wrap:wrap;">
  <input type="month" value="${_shiftMonth}" onchange="_shiftMonth=this.value; renderShiftSchedule()" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
- <button class="btn btn-success btn-sm" onclick="exportShiftScheduleXLSX()">Export Excel</button>
+ <button class="btn btn-success btn-sm" onclick="exportShiftScheduleXLSX()">⬇ Export Excel (Template)</button>
+ <label class="btn btn-warning btn-sm" style="margin:0;cursor:pointer;">⬆ Import Excel
+ <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="importShiftScheduleXLSX(this.files[0]); this.value='';">
+ </label>
  <button class="btn btn-secondary btn-sm" onclick="downloadShiftImage()">ดาวน์โหลด PNG</button>
  <button class="btn btn-primary btn-sm" onclick="shareShiftImage()">แชร์</button>
  </div>
@@ -3536,6 +3565,83 @@ function exportShiftScheduleXLSX() {
 
  XLSX.writeFile(wb, `ตารางลงกะ-${_shiftMonth}.xlsx`);
  toast(`Export สำเร็จ — 3 sheets · ${team.length} คน · ${daysInMonth} วัน`);
+}
+
+// ============================================================
+// IMPORT SHIFT SCHEDULE ← XLSX (v1.4.10)
+// Accepts the same template that exportShiftScheduleXLSX produced.
+// Reads sheet "ตารางกะ", expects header row at row index 4 (5th row).
+// Cell values: W/M/A/N/O. L is auto-derived from leave requests — ignored on import.
+// ============================================================
+function importShiftScheduleXLSX(file) {
+ if (!file) return;
+ if (!_xlsxCheck()) return;
+ const reader = new FileReader();
+ reader.onload = e => {
+ try {
+ const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
+ const sheetName = wb.SheetNames.find(n => n === 'ตารางกะ') || wb.SheetNames[0];
+ const ws = wb.Sheets[sheetName];
+ const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+ if (aoa.length < 6) { toast('ไฟล์ไม่ถูกรูปแบบ (ข้อมูลน้อยเกินไป)', 'error'); return; }
+
+ // Header at index 4 (5th row). Day columns start at index 3.
+ const header = aoa[4];
+ if (!header || header[0] !== 'รหัส') {
+ toast('ไม่พบ header แถวที่ 5 (รหัส, ชื่อ-นามสกุล, แผนก, ...)', 'error');
+ return;
+ }
+ // Find where day columns end (before "ทำงานรวม")
+ let lastDayCol = header.length - 1;
+ for (let c = 3; c < header.length; c++) {
+ if (typeof header[c] === 'string' && /ทำงานรวม|หยุดรวม|ลารวม/.test(header[c])) {
+ lastDayCol = c - 1; break;
+ }
+ }
+ const daysInMonth = lastDayCol - 2; // columns 3..lastDayCol are days 1..daysInMonth
+ const monthStr = _shiftMonth;
+ const [y, mo] = monthStr.split('-').map(Number);
+ const expectedDays = new Date(y, mo, 0).getDate();
+ if (daysInMonth !== expectedDays) {
+ if (!confirm(`ไฟล์มี ${daysInMonth} วัน แต่เดือน ${monthStr} ควรมี ${expectedDays} วัน — Import ต่อหรือไม่?`)) return;
+ }
+
+ const validShifts = new Set(['W', 'M', 'A', 'N', 'O']); // L = auto from leave, ignore
+ const emps = DB.load('employees');
+ const shifts = DB.load('shifts', []).filter(s => !s.date.startsWith(monthStr)); // wipe this month
+ let updated = 0, skipped = 0, unknownEmp = 0;
+
+ for (let r = 5; r < aoa.length; r++) {
+ const row = aoa[r];
+ if (!row || !row[0]) continue;
+ const empId = String(row[0]).trim();
+ const emp = emps.find(e => e.id === empId);
+ if (!emp) { unknownEmp++; continue; }
+ for (let d = 1; d <= daysInMonth; d++) {
+ const cell = String(row[2 + d] || '').trim().toUpperCase();
+ if (!cell || cell === '-') continue;
+ if (cell === 'L') continue; // auto from leave
+ if (!validShifts.has(cell)) { skipped++; continue; }
+ const ds = `${monthStr}-${String(d).padStart(2,'0')}`;
+ shifts.push({
+ id: uid('SH'), employeeId: empId, date: ds, type: cell, customLabel: '',
+ updatedBy: currentUser.id, updatedAt: new Date().toISOString()
+ });
+ updated++;
+ }
+ }
+
+ if (!confirm(`พบ ${updated} กะ จาก ${aoa.length - 5} แถว\n${unknownEmp ? `· ไม่พบพนักงาน ${unknownEmp} คน\n` : ''}${skipped ? `· ค่าผิดรูปแบบ ${skipped} ช่อง\n` : ''}\n*ข้อมูลเดือน ${monthStr} เดิมจะถูกแทนที่ทั้งหมด*\n\nยืนยัน Import?`)) return;
+
+ DB.save('shifts', shifts);
+ toast(`Import สำเร็จ — ${updated} กะ บันทึกแล้ว`);
+ renderShiftSchedule();
+ } catch (err) {
+ console.error('[importShift] error:', err);
+ toast('Import ล้มเหลว: ' + err.message, 'error');
+ }
+ };
+ reader.readAsArrayBuffer(file);
 }
 
 function fillAllShifts(type) {
@@ -4174,8 +4280,12 @@ function approveRequest(type, id, approve) {
  // If comp-off approved, add to accumulated holidays
  if (type === 'comp-off' && approve) {
  const stocks = DB.load('accumulatedHolidays');
+ const settings = DB.load('settings');
+ const expireMonths = settings.compOffExpireMonths || 12; // configurable in Settings
  const earned = r.workDate;
- const expire = new Date(new Date(earned).getTime() + 365 * 86400000).toISOString().split('T')[0];
+ const expireDt = new Date(earned);
+ expireDt.setMonth(expireDt.getMonth() + expireMonths);
+ const expire = expireDt.toISOString().split('T')[0];
  stocks.push({
  id: uid('AH'), employeeId: r.employeeId,
  earnedDate: earned, expireDate: expire,
@@ -7439,10 +7549,17 @@ function renderSettings() {
  <div class="form-group"><label>ระยะทดลองงาน (วัน)</label><input type="number" id="qProb" value="${s.probationDays}"></div>
  </div>
  <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
+ <div class="form-row">
  <div class="form-group">
  <label>สิทธิ์ลากิจในช่วงทดลองงาน (วัน)</label>
  <input type="number" id="qProbPersonalCap" min="0" step="0.5" value="${s.probationPersonalCap ?? 3}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ค่า default ของระบบ — พนักงานในช่วงทดลองงานจะมีสิทธิ์ลากิจตามตัวเลขนี้ (ตั้ง 0 = ไม่มีสิทธิ์ลากิจช่วงทดลองงาน)</div>
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ตั้ง 0 = ไม่มีสิทธิ์ลากิจช่วงทดลองงาน</div>
+ </div>
+ <div class="form-group">
+ <label>อายุของวันสะสมหยุด (เดือน)</label>
+ <input type="number" id="qCompOffExpire" min="1" max="60" step="1" value="${s.compOffExpireMonths ?? 12}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">วันสะสมหยุดจะหมดอายุภายในกี่เดือนหลังได้รับ (default 12 เดือน)</div>
+ </div>
  </div>
  <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
  <div class="form-row">
@@ -7817,6 +7934,7 @@ function saveSettings() {
  s.leaveQuotas.ordination = parseFloat(document.getElementById('qOrdination').value);
  s.probationDays = parseInt(document.getElementById('qProb').value);
  s.probationPersonalCap = parseFloat(document.getElementById('qProbPersonalCap').value) || 0;
+ s.compOffExpireMonths = parseInt(document.getElementById('qCompOffExpire').value) || 12;
  s.sickCertThreshold = parseFloat(document.getElementById('qSickCertThreshold').value) || 0;
  s.backDatedLeaveMaxDays = parseInt(document.getElementById('qBackDatedMax').value) || 0;
  s.leaveCarryOverMax = parseFloat(document.getElementById('qCarryOverMax').value) || 0;
@@ -9128,6 +9246,9 @@ document.addEventListener('DOMContentLoaded', async () => {
  }
  // IMPORTANT: NO unconditional cloudPushAll() here.
  // Every save goes through DB.save → _cloudUpsert. That's sufficient.
+
+ // v1.4.10 settings migration: update old defaults to new defaults (idempotent)
+ migrateSettings_v1_4_10();
 
  if (restoreSession()) {
  showApp();

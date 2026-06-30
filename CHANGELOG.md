@@ -6,6 +6,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.10] — 2026-06-28
+
+**3 Features + Shift Schedule Race Fix**
+
+### Changed
+- **ลากิจ Default:** จาก 6 วัน → **3 วัน** (เท่ากันทั้งทดลองงาน + ผ่านทดลอง)
+- ใช้ค่าจาก `settings.leaveQuotas.personal` (default 3) ทุก case
+- Migration: ถ้าระบบเดิมยังเป็น 6 (default เก่า) → auto-migrate เป็น 3
+- ถ้า Admin เคยตั้งค่าอื่น (เช่น 4) → ไม่แตะ
+
+### Added — Shift Schedule
+- **⬆ Import Excel button** ในหน้าตารางลงกะ (ข้างปุ่ม Export)
+- ใช้ไฟล์ template เดียวกับที่ Export ออกมา → กรอกค่า W/M/A/N/O ลงในช่องวันที่ → upload กลับ
+- รับ Sheet "ตารางกะ" — header row ที่ 5, day columns 4 ถึง 4+daysInMonth
+- ก่อน save: confirm dialog แสดงจำนวนกะที่ parse ได้ + จำนวนพนักงานไม่พบ + ข้อมูลเดือนเดิมจะถูกแทนที่
+- L (ลา) ถูก skip — auto-derived จาก leaveRequests
+
+### Added — Comp-off Expire
+- **Setting ใหม่:** "อายุของวันสะสมหยุด (เดือน)" ใน Settings → Leave Policy
+- Default 12 เดือน · ตั้งได้ 1-60
+- ใช้ใน `approveRequest('comp-off', true)` — เปลี่ยนจาก hardcoded 365 วัน
+
+### Fixed — Shift Schedule Sync Bug (Critical Race)
+**Root cause:** `_localDirty` ใช้ `Set` semantics — concurrent saves ของ key เดียวกัน collapse เหลือ entry เดียว → 1st upsert.then() คลีย flag → stale realtime echo overwrite local
+
+```js
+// Before (buggy)
+this._localDirty = new Set();
+this._localDirty.add(key);          // duplicate adds collapse
+this._localDirty.delete(key);       // clears even if 2nd save pending!
+
+// After (v1.4.10)
+this._localDirty = {};
+this._localDirty[key] = (this._localDirty[key] || 0) + 1;
+// ...
+this._localDirty[key]--;
+// check: if (this._localDirty[key] > 0) skip echo
+```
+
+ผลคือ: คลิกตาราง shift เร็วๆ ติดกันแล้วช่องไม่ revert อีกแล้ว
+
+---
+
 ## [1.4.9] — 2026-06-28
 
 **Critical Hotfix — 3 Bugs**

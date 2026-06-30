@@ -6,6 +6,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.12] — 2026-06-28
+
+**Critical Hotfix — Shift Import Cross-Team Wipe (P0)**
+
+### Fixed
+**Bug:** เมื่อ Manager A import Excel ตารางลงกะ → ลบกะของทีมอื่น (ทีม B, C, ...) **ทั้งเดือน** → เห็นแค่ทีม A
+ต่อมา Manager B import → ลบ ทีม A ออกอีก → วนแบบนี้
+
+**Root cause (line 3642):**
+```js
+const shifts = DB.load('shifts', []).filter(s => !s.date.startsWith(monthStr));
+// ↑ wipe ENTIRE month, not scoped to importer's team
+```
+
+Export scope = ทีมของ Manager เท่านั้น (ถูก) แต่ Import wipe = ทั้งบริษัท → mismatch
+
+**Fix:**
+```js
+const importerTeamIds = role === 'admin'
+  ? new Set(emps.map(e => e.id))                                          // Admin: all
+  : new Set(emps.filter(e => e.managerId === currentUser.id).map(e => e.id)); // Manager: team only
+const shifts = DB.load('shifts', []).filter(s =>
+  !s.date.startsWith(monthStr) || !importerTeamIds.has(s.employeeId)        // scoped wipe
+);
+// + Defensive: ถ้า file มีแถวของพนักงานนอก team → skip
+```
+
+### Improved
+- Confirm dialog ของ Import แสดงขอบเขตชัด: `*ขอบเขต: ทีมของคุณ (10 คน)* · *ทีมอื่นไม่ถูกแตะ*`
+- Added counter `notInTeam` — แจ้งถ้า file มีพนักงานนอก team
+
+### Debug Mantra Trace
+- ✅ Reproduce: code path confirms
+- ✅ Trace: line 3642 wipe
+- ✅ Falsify: 3 disprove attempts ทั้งสามตาย
+- ✅ Cross-ref: 3 symptoms ตรงกับ hypothesis
+
+---
+
 ## [1.4.11] — 2026-06-28
 
 **Shift Code C + Diligence Exclusion + Critical Counter Leak Fix**

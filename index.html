@@ -781,7 +781,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.11</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.12</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -805,7 +805,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.11';
+const APP_VERSION = '1.4.12';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -3639,8 +3639,15 @@ function importShiftScheduleXLSX(file) {
 
  const validShifts = new Set(['W', 'M', 'A', 'N', 'O']); // L/C = auto from leave, ignore
  const emps = DB.load('employees');
- const shifts = DB.load('shifts', []).filter(s => !s.date.startsWith(monthStr)); // wipe this month
- let updated = 0, skipped = 0, unknownEmp = 0;
+ // v1.4.12 FIX: scope the wipe to importer's team only (was wiping entire month, deleting other teams' shifts)
+ const role = currentUser.role;
+ const importerTeamIds = role === 'admin'
+ ? new Set(emps.map(e => e.id)) // Admin: all employees
+ : new Set(emps.filter(e => e.managerId === currentUser.id).map(e => e.id)); // Manager: their team only
+ const shifts = DB.load('shifts', []).filter(s =>
+ !s.date.startsWith(monthStr) || !importerTeamIds.has(s.employeeId)
+ );
+ let updated = 0, skipped = 0, unknownEmp = 0, notInTeam = 0;
 
  for (let r = 5; r < aoa.length; r++) {
  const row = aoa[r];
@@ -3648,6 +3655,8 @@ function importShiftScheduleXLSX(file) {
  const empId = String(row[0]).trim();
  const emp = emps.find(e => e.id === empId);
  if (!emp) { unknownEmp++; continue; }
+ // Defensive: refuse to write shifts for employees outside importer's scope
+ if (!importerTeamIds.has(empId)) { notInTeam++; continue; }
  for (let d = 1; d <= daysInMonth; d++) {
  const cell = String(row[2 + d] || '').trim().toUpperCase();
  if (!cell || cell === '-') continue;
@@ -3662,7 +3671,8 @@ function importShiftScheduleXLSX(file) {
  }
  }
 
- if (!confirm(`พบ ${updated} กะ จาก ${aoa.length - 5} แถว\n${unknownEmp ? `· ไม่พบพนักงาน ${unknownEmp} คน\n` : ''}${skipped ? `· ค่าผิดรูปแบบ ${skipped} ช่อง\n` : ''}\n*ข้อมูลเดือน ${monthStr} เดิมจะถูกแทนที่ทั้งหมด*\n\nยืนยัน Import?`)) return;
+ const scopeLabel = role === 'admin' ? 'ทุกพนักงาน' : `ทีมของคุณ (${importerTeamIds.size} คน)`;
+ if (!confirm(`พบ ${updated} กะ จาก ${aoa.length - 5} แถว\n${unknownEmp ? `· ไม่พบพนักงาน ${unknownEmp} คน\n` : ''}${notInTeam ? `· นอกขอบเขตทีม ${notInTeam} แถว (จะ skip)\n` : ''}${skipped ? `· ค่าผิดรูปแบบ ${skipped} ช่อง\n` : ''}\n*ขอบเขต: ${scopeLabel}*\n*ข้อมูลเดือน ${monthStr} ของขอบเขตนี้จะถูกแทนที่ — ทีมอื่นไม่ถูกแตะ*\n\nยืนยัน Import?`)) return;
 
  DB.save('shifts', shifts);
  toast(`Import สำเร็จ — ${updated} กะ บันทึกแล้ว`);

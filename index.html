@@ -781,7 +781,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.10</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.11</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -805,7 +805,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.10';
+const APP_VERSION = '1.4.11';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -864,14 +864,19 @@ const DB = {
  return;
  }
  localStorage.setItem('hr_' + key, JSON.stringify(val));
- // v1.4.10: use a counter (not Set) so concurrent saves to the same key are tracked separately.
- // Bug fix: Set semantics caused 1st upsert.then to clear dirty even if 2nd upsert was still pending,
- // allowing a stale realtime echo to overwrite the newer local value (Shift Schedule revert bug).
+ // v1.4.10: counter (not Set) for concurrent saves to same key
+ // v1.4.11: decrement moved into _cloudUpsert's finally (guarantees decrement on ANY exit path
+ // — fixes leak when upsert hangs and .then() never runs, causing realtime echoes to be permanently skipped)
  this._localDirty = this._localDirty || {};
  this._localDirty[key] = (this._localDirty[key] || 0) + 1;
- if (cloudSync) this._cloudUpsert(key, val).then(() => {
- if (this._localDirty && this._localDirty[key] > 0) this._localDirty[key]--;
- });
+ if (cloudSync) this._cloudUpsert(key, val);
+ },
+
+ // Debug helper — manually clear stuck dirty flags (callable from console)
+ clearDirty(key) {
+ if (!this._localDirty) return;
+ if (key) { delete this._localDirty[key]; console.log(`[DB] dirty cleared for '${key}'`); }
+ else { this._localDirty = {}; console.log('[DB] all dirty flags cleared'); }
  },
 
  async _cloudUpsert(key, val) {
@@ -879,14 +884,15 @@ const DB = {
  console.warn(`[CloudUpsert] refused undefined for '${key}'`);
  return;
  }
+ // v1.4.11: outer try/finally GUARANTEES dirty counter is always decremented,
+ // even if upsert hangs/throws/returns early — fixes "realtime skip permanent" leak
+ try {
  // Warn on large payloads — Supabase row limit ~1MB on free tier
  const size = JSON.stringify(val)?.length || 0;
  if (size > 900_000) {
  console.warn(`[CloudUpsert] '${key}' is ${(size/1024/1024).toFixed(2)} MB — may exceed Supabase row limit`);
  }
  // ANTI-DATA-LOSS GUARD (v1.4.9): refuse to push empty array if cloud has data.
- // Protects against multi-tab/multi-device races where a stale tab pushes [] over real data.
- // Critical keys = anything ending in 'Requests', plus 'employees', 'shifts'.
  const isCriticalKey = /Requests$/.test(key) || key === 'employees' || key === 'shifts';
  if (isCriticalKey && Array.isArray(val) && val.length === 0) {
  try {
@@ -894,9 +900,7 @@ const DB = {
  if (existing && Array.isArray(existing.value) && existing.value.length > 0) {
  console.error(`[CloudUpsert] REFUSED to push empty array for '${key}' — cloud has ${existing.value.length} items`);
  if (typeof toast === 'function') toast(`ป้องกันข้อมูลหาย: ดึง '${key}' จาก cloud (${existing.value.length} รายการ)`, 'error');
- // Restore local from cloud so the user's view recovers
  localStorage.setItem('hr_' + key, JSON.stringify(existing.value));
- if (this._localDirty && this._localDirty[key] > 0) this._localDirty[key]--;
  if (typeof renderPage === 'function' && typeof currentUser !== 'undefined' && currentUser) renderPage();
  return;
  }
@@ -915,6 +919,10 @@ const DB = {
  console.warn(' Cloud sync failed for', key, e);
  } finally {
  this._pendingWrites--;
+ }
+ } finally {
+ // v1.4.11: GUARANTEED decrement — fires on every exit (success, error, early return, hang-cancelled)
+ if (this._localDirty && this._localDirty[key] > 0) this._localDirty[key]--;
  }
  },
 
@@ -1000,9 +1008,21 @@ function setupCloudRealtime() {
  if (!row || !row.key) return;
  // CRITICAL: Don't overwrite a key that we just locally modified — wait until ALL pending upserts resolve
  // v1.4.10: counter-based (Set caused Shift Schedule revert when user clicked fast)
+ // v1.4.11: auto-recovery — if dirty has been stuck >0 for many consecutive skips, force clear (escape hatch)
  if (DB._localDirty && DB._localDirty[row.key] > 0) {
- console.log(`[Realtime] skip '${row.key}' — ${DB._localDirty[row.key]} local write(s) pending`);
+ DB._skipCount = DB._skipCount || {};
+ DB._skipCount[row.key] = (DB._skipCount[row.key] || 0) + 1;
+ console.log(`[Realtime] skip '${row.key}' — ${DB._localDirty[row.key]} local write(s) pending (skip #${DB._skipCount[row.key]})`);
+ if (DB._skipCount[row.key] >= 5) {
+ console.warn(`[Realtime] AUTO-RECOVER '${row.key}' — stuck >5 skips, force clearing dirty flag`);
+ DB._localDirty[row.key] = 0;
+ DB._skipCount[row.key] = 0;
+ // fall through to process this event
+ } else {
  return;
+ }
+ } else if (DB._skipCount) {
+ DB._skipCount[row.key] = 0;
  }
  if (payload.eventType === 'DELETE') {
  localStorage.removeItem('hr_' + row.key);
@@ -1200,6 +1220,9 @@ function login(empId, password) {
  if (user) {
  currentUser = user;
  sessionStorage.setItem('hr_currentUser', JSON.stringify(user));
+ // v1.4.11: clear any stuck dirty flags from prior session — fresh state per login
+ if (DB._localDirty) DB._localDirty = {};
+ if (DB._skipCount) DB._skipCount = {};
  auditLog('login', 'user', user.id, `Role: ${user.role}`);
  return true;
  }
@@ -3217,7 +3240,8 @@ const SHIFT_TYPES = {
  'N': { label: 'ดึก', emoji: 'N', color: '#8b5cf6', bg: '#ede9fe' },
  'W': { label: 'ทำงาน', emoji: '', color: '#16a34a', bg: '#dcfce7' },
  'O': { label: 'หยุด', emoji: 'O', color: '#94a3b8', bg: '#f1f5f9' },
- 'L': { label: 'ลา', emoji: 'L', color: '#dc2626', bg: '#fecaca' }
+ 'L': { label: 'ลา', emoji: 'L', color: '#dc2626', bg: '#fecaca' },
+ 'C': { label: 'ลาสะสมวันหยุด', emoji: 'C', color: '#065f46', bg: '#d1fae5' }
 };
 
 function getShift(employeeId, date) {
@@ -3363,10 +3387,12 @@ function renderShiftSchedule() {
  let content = '', title = ds;
 
  if (leaveType) {
- const t = SHIFT_TYPES['L'];
+ // v1.4.11: comp-off ใช้ตัว C (ลาสะสมวันหยุด — สลับวันหยุด ไม่ตัดเบี้ยขยัน)
+ const code = leaveType === 'comp-off' ? 'C' : 'L';
+ const t = SHIFT_TYPES[code];
  bg = t.bg;
- content = `<span style="color:${t.color};font-weight:700;" title="ลา (${getLeaveTypeName(leaveType)})">L</span>`;
- title += ` — ลา: ${getLeaveTypeName(leaveType)}`;
+ content = `<span style="color:${t.color};font-weight:700;" title="${t.label} (${getLeaveTypeName(leaveType)})">${code}</span>`;
+ title += ` — ${t.label}: ${getLeaveTypeName(leaveType)}`;
  } else if (sh) {
  const t = SHIFT_TYPES[sh.type];
  if (t) {
@@ -3465,17 +3491,18 @@ function exportShiftScheduleXLSX() {
  const sheet1 = [
  [`ตารางลงกะงาน — ${monthName}`],
  [`ขอบเขต: ${role === 'admin' ? 'ทุกพนักงาน Active' : 'ทีมของฉัน'} (${team.length} คน)`],
- [`* = วันหยุดบริษัท · M=เช้า A=บ่าย N=ดึก W=ทำงาน O=หยุด L=ลา`],
+ [`* = วันหยุดบริษัท · M=เช้า A=บ่าย N=ดึก W=ทำงาน O=หยุด L=ลา C=ลาสะสมวันหยุด`],
  [],
- ['รหัส', 'ชื่อ-นามสกุล', 'แผนก', ...dayHeaders, 'ทำงานรวม', 'หยุดรวม', 'ลารวม']
+ ['รหัส', 'ชื่อ-นามสกุล', 'แผนก', ...dayHeaders, 'ทำงานรวม', 'หยุดรวม', 'ลารวม', 'สะสมหยุดรวม']
  ];
 
  team.forEach(emp => {
- let workCount = 0, offCount = 0, leaveCount = 0;
+ let workCount = 0, offCount = 0, leaveCount = 0, compOffCount = 0;
  const cells = [...Array(daysInMonth)].map((_, i) => {
  const d = i + 1;
  const ds = `${_shiftMonth}-${String(d).padStart(2,'0')}`;
  const leaveType = leaveMap[`${emp.id}|${ds}`];
+ if (leaveType === 'comp-off') { compOffCount++; return 'C'; }
  if (leaveType) { leaveCount++; return 'L'; }
  const sh = shiftMap[`${emp.id}|${ds}`];
  if (!sh) return '';
@@ -3483,7 +3510,7 @@ function exportShiftScheduleXLSX() {
  if (sh.type) { workCount++; return sh.type; }
  return '';
  });
- sheet1.push([emp.id, `${emp.firstName} ${emp.lastName}`, emp.department || '-', ...cells, workCount, offCount, leaveCount]);
+ sheet1.push([emp.id, `${emp.firstName} ${emp.lastName}`, emp.department || '-', ...cells, workCount, offCount, leaveCount, compOffCount]);
  });
 
  const ws1 = XLSX.utils.aoa_to_sheet(sheet1);
@@ -3492,7 +3519,7 @@ function exportShiftScheduleXLSX() {
  ws1['!cols'] = [
  { wch: 12 }, { wch: 22 }, { wch: 16 },
  ...new Array(daysInMonth).fill({ wch: 8 }),
- { wch: 10 }, { wch: 10 }, { wch: 8 }
+ { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 12 }
  ];
  XLSX.utils.book_append_sheet(wb, ws1, 'ตารางกะ');
 
@@ -3500,13 +3527,15 @@ function exportShiftScheduleXLSX() {
  const sheet2 = [
  [`สรุปกะต่อพนักงาน — ${monthName}`],
  [],
- ['รหัส', 'ชื่อ-นามสกุล', 'แผนก', 'ตำแหน่ง', 'เช้า (M)', 'บ่าย (A)', 'ดึก (N)', 'ทำงาน (W)', 'หยุด (O)', 'ลา (L)', 'ยังไม่ระบุ', 'รวมทำงาน', 'รวมหยุด']
+ ['รหัส', 'ชื่อ-นามสกุล', 'แผนก', 'ตำแหน่ง', 'เช้า (M)', 'บ่าย (A)', 'ดึก (N)', 'ทำงาน (W)', 'หยุด (O)', 'ลา (L)', 'สะสมหยุด (C)', 'ยังไม่ระบุ', 'รวมทำงาน', 'รวมหยุด']
  ];
  team.forEach(emp => {
- const counts = { M:0, A:0, N:0, W:0, O:0, L:0, blank:0 };
+ const counts = { M:0, A:0, N:0, W:0, O:0, L:0, C:0, blank:0 };
  for (let d = 1; d <= daysInMonth; d++) {
  const ds = `${_shiftMonth}-${String(d).padStart(2,'0')}`;
- if (leaveMap[`${emp.id}|${ds}`]) { counts.L++; continue; }
+ const lv = leaveMap[`${emp.id}|${ds}`];
+ if (lv === 'comp-off') { counts.C++; continue; }
+ if (lv) { counts.L++; continue; }
  const sh = shiftMap[`${emp.id}|${ds}`];
  if (!sh) { counts.blank++; continue; }
  if (counts.hasOwnProperty(sh.type)) counts[sh.type]++;
@@ -3517,14 +3546,14 @@ function exportShiftScheduleXLSX() {
  `${emp.firstName} ${emp.lastName}`,
  emp.department || '-',
  emp.position || '-',
- counts.M, counts.A, counts.N, counts.W, counts.O, counts.L, counts.blank,
+ counts.M, counts.A, counts.N, counts.W, counts.O, counts.L, counts.C, counts.blank,
  totalWork, counts.O
  ]);
  });
  const ws2 = XLSX.utils.aoa_to_sheet(sheet2);
  ws2['!cols'] = [
  { wch: 12 }, { wch: 22 }, { wch: 16 }, { wch: 18 },
- { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 8 }, { wch: 12 },
+ { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 12 },
  { wch: 12 }, { wch: 10 }
  ];
  XLSX.utils.book_append_sheet(wb, ws2, 'สรุปต่อคน');
@@ -3534,16 +3563,18 @@ function exportShiftScheduleXLSX() {
  [`สรุปกะต่อวัน — ${monthName}`],
  ['(แสดงจำนวนพนักงานที่อยู่กะแต่ละประเภทในแต่ละวัน)'],
  [],
- ['วันที่', 'ชื่อวัน', 'ประเภทวัน', 'เช้า (M)', 'บ่าย (A)', 'ดึก (N)', 'ทำงาน (W)', 'หยุด (O)', 'ลา (L)', 'ยังไม่ระบุ', 'รวม Active']
+ ['วันที่', 'ชื่อวัน', 'ประเภทวัน', 'เช้า (M)', 'บ่าย (A)', 'ดึก (N)', 'ทำงาน (W)', 'หยุด (O)', 'ลา (L)', 'สะสมหยุด (C)', 'ยังไม่ระบุ', 'รวม Active']
  ];
  for (let d = 1; d <= daysInMonth; d++) {
  const ds = `${_shiftMonth}-${String(d).padStart(2,'0')}`;
  const dow = new Date(y, mo-1, d).getDay();
  const isWeekend = dow === 0 || dow === 6;
  const isHoliday = holidays.has(ds);
- const counts = { M:0, A:0, N:0, W:0, O:0, L:0, blank:0 };
+ const counts = { M:0, A:0, N:0, W:0, O:0, L:0, C:0, blank:0 };
  team.forEach(emp => {
- if (leaveMap[`${emp.id}|${ds}`]) { counts.L++; return; }
+ const lv = leaveMap[`${emp.id}|${ds}`];
+ if (lv === 'comp-off') { counts.C++; return; }
+ if (lv) { counts.L++; return; }
  const sh = shiftMap[`${emp.id}|${ds}`];
  if (!sh) { counts.blank++; return; }
  if (counts.hasOwnProperty(sh.type)) counts[sh.type]++;
@@ -3551,14 +3582,14 @@ function exportShiftScheduleXLSX() {
  const dayType = isHoliday ? 'วันหยุดบริษัท' : isWeekend ? 'เสาร์-อาทิตย์' : 'ทำการ';
  sheet3.push([
  ds, dayNames[dow], dayType,
- counts.M, counts.A, counts.N, counts.W, counts.O, counts.L, counts.blank,
+ counts.M, counts.A, counts.N, counts.W, counts.O, counts.L, counts.C, counts.blank,
  team.length
  ]);
  }
  const ws3 = XLSX.utils.aoa_to_sheet(sheet3);
  ws3['!cols'] = [
  { wch: 12 }, { wch: 10 }, { wch: 18 },
- { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 8 }, { wch: 12 },
+ { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 12 },
  { wch: 12 }
  ];
  XLSX.utils.book_append_sheet(wb, ws3, 'สรุปต่อวัน');
@@ -3606,7 +3637,7 @@ function importShiftScheduleXLSX(file) {
  if (!confirm(`ไฟล์มี ${daysInMonth} วัน แต่เดือน ${monthStr} ควรมี ${expectedDays} วัน — Import ต่อหรือไม่?`)) return;
  }
 
- const validShifts = new Set(['W', 'M', 'A', 'N', 'O']); // L = auto from leave, ignore
+ const validShifts = new Set(['W', 'M', 'A', 'N', 'O']); // L/C = auto from leave, ignore
  const emps = DB.load('employees');
  const shifts = DB.load('shifts', []).filter(s => !s.date.startsWith(monthStr)); // wipe this month
  let updated = 0, skipped = 0, unknownEmp = 0;
@@ -3620,7 +3651,7 @@ function importShiftScheduleXLSX(file) {
  for (let d = 1; d <= daysInMonth; d++) {
  const cell = String(row[2 + d] || '').trim().toUpperCase();
  if (!cell || cell === '-') continue;
- if (cell === 'L') continue; // auto from leave
+ if (cell === 'L' || cell === 'C') continue; // auto from leave/comp-off
  if (!validShifts.has(cell)) { skipped++; continue; }
  const ds = `${monthStr}-${String(d).padStart(2,'0')}`;
  shifts.push({
@@ -6031,7 +6062,9 @@ function calculatePaySlip(employeeId, year, month) {
  const unpaidHoursThisMonth = unpaidDaysThisMonth * workHoursPerDay + unpaidHoursLegacy; // total hours for display compat
 
  // Diligence bonus - eligibility check
+ // v1.4.11: comp-off (ลาสะสมวันหยุด) = สลับวันหยุด ไม่ใช่ลาจริง → ไม่ตัดเบี้ยขยัน
  const hasLeaveThisMonth = leaves.some(r => {
+ if (r.type === 'comp-off') return false; // exclude — comp-off คือสลับวันหยุด
  if (r.type === 'unpaid' && r.startDate.startsWith(monthStr)) return true;
  const s = new Date(r.startDate), e = new Date(r.endDate);
  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {

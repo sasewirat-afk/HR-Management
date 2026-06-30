@@ -6,6 +6,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.11] — 2026-06-28
+
+**Shift Code C + Diligence Exclusion + Critical Counter Leak Fix**
+
+### Changed — Shift Schedule
+- **เพิ่ม Shift Code `C`** = ลาสะสมวันหยุด (สีเขียวอ่อน)
+- Cell ในตารางลงกะแยก L (ลาทั่วไป) กับ C (สลับวันหยุด) ออกจากกัน
+- Excel Export Sheet 1/2/3 มี column "สะสมหยุด (C)" แยกจาก "ลา (L)"
+- Header แสดงคีย์: `M=เช้า A=บ่าย N=ดึก W=ทำงาน O=หยุด L=ลา C=ลาสะสมวันหยุด`
+- Import: skip both L and C (auto-derived)
+
+### Changed — Diligence Bonus
+- **ลาสะสมวันหยุด (comp-off) ไม่ตัดเบี้ยขยัน** อีกแล้ว
+- เพราะเป็นการสลับวันหยุดเท่านั้น ไม่ใช่ลาจริง
+- Logic: `hasLeaveThisMonth = leaves.some(r => r.type !== 'comp-off' && ...)`
+
+### Fixed — Critical: Realtime Sync Permanent Skip (P0)
+**Symptom:** หลัง Manager import 217 shifts ผ่าน Excel — Admin (และทุก session อื่น) **ไม่เห็น shifts ที่ import** แม้ refresh
+
+**Root cause:**
+1. Manager import → `DB.save('shifts', [...large array])` → `_localDirty['shifts'] = 1`
+2. Cloud upsert payload ใหญ่ (>500KB) → network hang หรือ Promise timeout
+3. `.then()` callback ใน save() ไม่ทำงาน → counter ไม่ลด → stuck = 1
+4. ทุก realtime echo ของ key `shifts` → handler check `_localDirty['shifts'] > 0` → **SKIP** ตลอดไป
+5. localStorage ของ Admin ค้างเก่า ไม่อัปเดต → render เห็น 0
+
+Console hint ที่เปิดเผย: `[Realtime] skip 'shifts' — 1 local write(s) pending` ซ้ำๆ 24+ ครั้ง
+
+**Fix (4 ชั้น):**
+1. **ย้าย decrement ไป outer `finally`** ใน `_cloudUpsert` — guarantee ทำงานทุก exit path (success/error/throw/return/hang)
+2. **Auto-recovery escape hatch:** ถ้า skip ติดกัน ≥ 5 ครั้ง → force clear dirty flag + process event
+3. **Clear dirty on login** — fresh state ทุก session
+4. **Debug helper** `DB.clearDirty(key?)` — manual reset จาก console
+
+---
+
 ## [1.4.10] — 2026-06-28
 
 **3 Features + Shift Schedule Race Fix**

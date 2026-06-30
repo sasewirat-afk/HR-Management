@@ -6,6 +6,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.13] — 2026-06-30
+
+**P0 Hotfix — Shift Import Stale-Local Race**
+
+### Fixed
+**Bug:** ถึงแม้ v1.4.12 จะ scope wipe ที่ team ของ importer แล้ว Manager B import → ทีมของ Manager A หาย
+
+**Root cause (NEW finding):**
+- v1.4.12 filter ทำงานบน **localStorage state** ของ Manager B
+- ถ้า Manager B's local **ไม่ทันได้ sync** ของ Manager A (ที่เพิ่ง import ก่อนหน้า) → local ไม่มี A's data → filter "preserve" ของ A ไม่ได้ เพราะไม่มีอะไรให้ preserve
+- Save = team B only → push to cloud → cloud's A data ถูกทับด้วยเลย
+
+**Mantra Trace:**
+- Step 1 (Reproduce): cloud data confirms — Mgr 690615001 imported July first, then Mgr 690302002 wiped it
+- Step 2 (Trace): code filter operates on local, not cloud
+- Step 3 (Falsify): tried hypothesis "filter bug" — but filter is correct on full data
+- Step 4 (Breadcrumbs): cloud has team 690615001 in June, team 690302002 in July → consistent with "B's import was based on stale local missing A's July"
+
+### Fix (Multi-layer)
+1. **Force-pull cloud BEFORE filter/save**
+ ```js
+ const pullResult = await DB.cloudPullAllSafe();
+ if (!pullResult.ok) {
+   if (!confirm('Cloud pull failed — continuing may overwrite other teams. Proceed?')) return;
+ }
+ ```
+ ทำ pull ใหม่ทุก import → localStorage มี cloud's latest state ก่อน filter
+
+2. **Diagnostic counters** ใน confirm dialog:
+ ```
+ *แทนที่: เฉพาะกะของขอบเขตนี้ในเดือน 2026-07*
+ ✓ ป้องกัน: ทีมอื่น 217 กะ ในเดือน 2026-07 จะถูกเก็บไว้
+ ```
+ ทำให้ Manager เห็นจำนวนกะของทีมอื่นที่จะถูกคงไว้ — ถ้าเห็น "0" ทั้งที่ควรมี → cancel
+
+3. **Post-save verification** — เทียบจำนวน other-team shifts ก่อน/หลัง:
+ ```js
+ if (afterMonthOtherTeams < beforeMonthOtherTeams) {
+   toast('⚠ DATA LOSS DETECTED', 'error');
+ }
+ ```
+
+4. **Console diagnostic logs:**
+ - `[Import] Before: month=X shifts (myTeam=Y, others=Z)`
+ - `[Import] After: month=X shifts. Other teams preserved: Z`
+ - `[Import] ⚠ DATA LOSS DETECTED: N other-team shifts lost`
+
+### Workaround สำหรับช่วงเปลี่ยน (Modern Trade ที่หายไปแล้ว)
+1. ขอให้ Manager 690615001 (Team Old) re-import July ใหม่
+2. v1.4.13 pull cloud ก่อน → จะเห็น "Modern Trade team 217 shifts จะถูกเก็บไว้"
+3. ยืนยัน → ผลคือทั้ง 2 ทีมจะอยู่ใน cloud พร้อมกัน
+
+---
+
 ## [1.4.12] — 2026-06-28
 
 **Critical Hotfix — Shift Import Cross-Team Wipe (P0)**

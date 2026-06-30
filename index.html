@@ -781,7 +781,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.12</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.13</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -805,7 +805,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.12';
+const APP_VERSION = '1.4.13';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -3608,7 +3608,7 @@ function importShiftScheduleXLSX(file) {
  if (!file) return;
  if (!_xlsxCheck()) return;
  const reader = new FileReader();
- reader.onload = e => {
+ reader.onload = async e => {
  try {
  const wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array' });
  const sheetName = wb.SheetNames.find(n => n === 'ตารางกะ') || wb.SheetNames[0];
@@ -3638,13 +3638,33 @@ function importShiftScheduleXLSX(file) {
  }
 
  const validShifts = new Set(['W', 'M', 'A', 'N', 'O']); // L/C = auto from leave, ignore
+
+ // v1.4.13 CRITICAL: force-pull latest cloud BEFORE filter/save
+ // Prevents stale-local race: Mgr A imports → cloud updated. Mgr B's local hasn't synced yet.
+ // Mgr B's import filter operates on stale local (no Mgr A data) → save = team B only → push wipes Mgr A from cloud
+ if (cloudSync && typeof DB.cloudPullAllSafe === 'function') {
+ toast('กำลังซิงค์ข้อมูลล่าสุดจาก cloud ก่อน import...', 'info');
+ const pullResult = await DB.cloudPullAllSafe();
+ if (!pullResult.ok) {
+ if (!confirm('⚠ ดึงข้อมูลล่าสุดจาก Cloud ไม่สำเร็จ\n\nการ Import ตอนนี้อาจเขียนทับข้อมูลของทีมอื่น\n\nยืนยันต่อหรือไม่? (แนะนำให้ "ยกเลิก" แล้วเช็คเน็ตก่อน)')) return;
+ }
+ }
+
  const emps = DB.load('employees');
  // v1.4.12 FIX: scope the wipe to importer's team only (was wiping entire month, deleting other teams' shifts)
  const role = currentUser.role;
  const importerTeamIds = role === 'admin'
  ? new Set(emps.map(e => e.id)) // Admin: all employees
  : new Set(emps.filter(e => e.managerId === currentUser.id).map(e => e.id)); // Manager: their team only
- const shifts = DB.load('shifts', []).filter(s =>
+
+ // Snapshot before-state for diagnostic
+ const allShiftsBefore = DB.load('shifts', []);
+ const beforeMonth = allShiftsBefore.filter(s => s.date.startsWith(monthStr));
+ const beforeMonthByTeam = beforeMonth.filter(s => importerTeamIds.has(s.employeeId)).length;
+ const beforeMonthOtherTeams = beforeMonth.length - beforeMonthByTeam;
+ console.log(`[Import] Before: month=${beforeMonth.length} shifts (myTeam=${beforeMonthByTeam}, others=${beforeMonthOtherTeams})`);
+
+ const shifts = allShiftsBefore.filter(s =>
  !s.date.startsWith(monthStr) || !importerTeamIds.has(s.employeeId)
  );
  let updated = 0, skipped = 0, unknownEmp = 0, notInTeam = 0;
@@ -3672,10 +3692,22 @@ function importShiftScheduleXLSX(file) {
  }
 
  const scopeLabel = role === 'admin' ? 'ทุกพนักงาน' : `ทีมของคุณ (${importerTeamIds.size} คน)`;
- if (!confirm(`พบ ${updated} กะ จาก ${aoa.length - 5} แถว\n${unknownEmp ? `· ไม่พบพนักงาน ${unknownEmp} คน\n` : ''}${notInTeam ? `· นอกขอบเขตทีม ${notInTeam} แถว (จะ skip)\n` : ''}${skipped ? `· ค่าผิดรูปแบบ ${skipped} ช่อง\n` : ''}\n*ขอบเขต: ${scopeLabel}*\n*ข้อมูลเดือน ${monthStr} ของขอบเขตนี้จะถูกแทนที่ — ทีมอื่นไม่ถูกแตะ*\n\nยืนยัน Import?`)) return;
+ const otherTeamsMsg = beforeMonthOtherTeams > 0
+ ? `\n✓ ป้องกัน: ทีมอื่น ${beforeMonthOtherTeams} กะ ในเดือน ${monthStr} จะถูกเก็บไว้\n`
+ : `\n(ยังไม่มีทีมอื่นลงกะในเดือน ${monthStr})\n`;
+ if (!confirm(`พบ ${updated} กะ จาก ${aoa.length - 5} แถว\n${unknownEmp ? `· ไม่พบพนักงาน ${unknownEmp} คน\n` : ''}${notInTeam ? `· นอกขอบเขตทีม ${notInTeam} แถว (จะ skip)\n` : ''}${skipped ? `· ค่าผิดรูปแบบ ${skipped} ช่อง\n` : ''}\n*ขอบเขต: ${scopeLabel}*\n*แทนที่: เฉพาะกะของขอบเขตนี้ในเดือน ${monthStr}*${otherTeamsMsg}\nยืนยัน Import?`)) return;
 
  DB.save('shifts', shifts);
- toast(`Import สำเร็จ — ${updated} กะ บันทึกแล้ว`);
+
+ // Post-save verification — confirm we didn't accidentally drop other teams
+ const afterMonth = shifts.filter(s => s.date.startsWith(monthStr));
+ const afterMonthOtherTeams = afterMonth.filter(s => !importerTeamIds.has(s.employeeId)).length;
+ console.log(`[Import] After: month=${afterMonth.length} shifts. Other teams preserved: ${afterMonthOtherTeams}`);
+ if (beforeMonthOtherTeams > 0 && afterMonthOtherTeams < beforeMonthOtherTeams) {
+ console.error(`[Import] ⚠ DATA LOSS DETECTED: ${beforeMonthOtherTeams - afterMonthOtherTeams} other-team shifts lost`);
+ toast(`⚠ คำเตือน: ตรวจพบทีมอื่นหาย ${beforeMonthOtherTeams - afterMonthOtherTeams} กะ — ใช้ DB.clearDirty() แล้ว reload`, 'error');
+ }
+ toast(`Import สำเร็จ — ${updated} กะ ของทีมคุณ · ทีมอื่น ${afterMonthOtherTeams} กะ ยังคงอยู่`);
  renderShiftSchedule();
  } catch (err) {
  console.error('[importShift] error:', err);

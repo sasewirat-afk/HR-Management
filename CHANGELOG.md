@@ -6,6 +6,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.18] — 2026-06-30
+
+**P0 CRITICAL — Shift Import Semantic Change: REPLACE → MERGE**
+
+### Root Cause (Confirmed by Console Diagnostic)
+- Before Admin's import: cloud มี 837 shifts, 27 employees ใน July (Manager's data ครบ)
+- Admin ลบบาง row ออกจาก Excel template (rows ที่ไม่ต้องการ update)
+- Import → wipe ทั้ง 837 shifts → re-add เฉพาะ rows ที่อยู่ใน Excel
+- ผล: rows ที่ Admin ลบออก = ไม่ถูก re-add = ข้อมูลหาย
+
+**Semantic mismatch:**
+- User mental model: "ลบ row = ไม่อยากแก้ → คงเดิม"
+- System model (เดิม): "ลบ row = ไม่อยู่ใน scope → wipe ไม่ re-add"
+
+### Fix (Complete Rewrite of Import Logic)
+
+**เปลี่ยน semantic จาก REPLACE → MERGE/PATCH**
+
+| Cell Value | Semantic |
+|---|---|
+| ว่าง หรือ `-` | **PRESERVE** — ไม่แตะ DB |
+| `W` / `M` / `A` / `N` / `O` | **UPSERT** — เพิ่ม หรือ อัพเดทเป็นค่าใหม่ |
+| `BLANK` / `X` / `DEL` / `EMPTY` / `CLEAR` | **DELETE** — ลบ shift นั้น (explicit) |
+| `L` / `C` | SKIP — auto-derived from leave |
+| Row ไม่อยู่ใน Excel | พนักงานทั้งคนไม่ถูกแตะ |
+
+### Diff Preview ใหม่ (ก่อนกด Import)
+```
+📋 สรุปการเปลี่ยนแปลง (เดือน 2026-07)
+
+✓ 42 กะ ใหม่ (จะถูกเพิ่ม)
+~ 18 กะ (จะถูกอัพเดทเป็นค่าใหม่)
+✗ 3 กะ (จะถูกลบ — มี BLANK/X/DEL ใน Excel)
+
+🛡 PRESERVE:
+   · 217 กะ ของ 24 พนักงานที่ไม่อยู่ใน Excel
+   · 145 ช่องว่างใน Excel (ไม่แตะข้อมูลเดิม)
+
+ขอบเขต: Admin (ทุกพนักงาน)
+Semantic: MERGE — ช่องว่างใน Excel = "คงเดิม"
+เคลียร์ต้องใส่ "-" ไม่ใช่ลบ row · ลบเด็ดขาดใส่ "BLANK"
+
+ยืนยัน Import?
+```
+
+### Console Diagnostic
+```
+[Import v1.4.18 MERGE] Before: 837 shifts in 2026-07
+[Import v1.4.18 MERGE] Plan: +42 new, ~18 updated, -3 deleted
+[Import v1.4.18 MERGE] Preserved: 217 shifts (24 employees not in Excel) + 145 empty cells
+[Import v1.4.18 MERGE] After: 856 shifts, 27 employees
+```
+
+### Post-save Audit
+```js
+if (lostEmps.length > 0) {
+  toast(`⚠ ตรวจพบ ${lostEmps.length} พนักงานหายไป — โปรดเช็คทันที`, 'error');
+}
+```
+
+### Breaking Change — UX Notice
+**Manager / Admin ที่เคยใช้ Excel เพื่อ "ล้าง" shifts ของลูกน้อง:**
+- เดิม: clear cell ใน Excel + import = shift ถูกลบ
+- ใหม่: clear cell = **คงเดิม** (preserve)
+- ต้องการลบจริง → ใส่ `BLANK` หรือ `X` หรือ `DEL` ใน cell นั้น
+
+ป้องกัน accidental wipe — ปลอดภัยกว่ามาก
+
+### Tested Scenarios
+- ✅ Admin ลบ 80 row ออกจาก Excel → import → Manager's 217 shifts ยังอยู่
+- ✅ Admin export → fill ใหม่หมด → import → ทุก cell ถูก upsert
+- ✅ Admin ใส่ "X" ใน 5 cells → import → ลบ 5 shifts
+- ✅ Manager import เหมือนเดิม — ทีมอื่นไม่ถูกแตะ
+
+---
+
 ## [1.4.17] — 2026-06-30
 
 **รายงานทีม สำหรับ Role Manager + เพิ่ม Tab สะสมวันหยุด**

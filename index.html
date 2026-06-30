@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.17</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.18</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.17';
+const APP_VERSION = '1.4.18';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -3711,10 +3711,16 @@ function exportShiftScheduleXLSX() {
 }
 
 // ============================================================
-// IMPORT SHIFT SCHEDULE ← XLSX (v1.4.10)
+// IMPORT SHIFT SCHEDULE ← XLSX (v1.4.18 MERGE semantic)
 // Accepts the same template that exportShiftScheduleXLSX produced.
 // Reads sheet "ตารางกะ", expects header row at row index 4 (5th row).
-// Cell values: W/M/A/N/O. L is auto-derived from leave requests — ignored on import.
+//
+// Cell value semantics:
+//   · W/M/A/N/O          → UPSERT (set or replace)
+//   · empty or '-'        → PRESERVE existing (no-op)
+//   · BLANK/X/DEL/EMPTY/CLEAR → DELETE existing
+//   · L / C              → SKIP (auto-derived from leave)
+//   · Row not in Excel    → entire employee untouched
 // ============================================================
 function importShiftScheduleXLSX(file) {
  if (!file) return;
@@ -3763,23 +3769,36 @@ function importShiftScheduleXLSX(file) {
  }
 
  const emps = DB.load('employees');
- // v1.4.12 FIX: scope the wipe to importer's team only (was wiping entire month, deleting other teams' shifts)
  const role = currentUser.role;
+ // v1.4.12: scope guard — Manager can only modify their team; Admin can modify everyone
  const importerTeamIds = role === 'admin'
- ? new Set(emps.map(e => e.id)) // Admin: all employees
- : new Set(emps.filter(e => e.managerId === currentUser.id).map(e => e.id)); // Manager: their team only
+ ? new Set(emps.map(e => e.id))
+ : new Set(emps.filter(e => e.managerId === currentUser.id).map(e => e.id));
 
- // Snapshot before-state for diagnostic
+ // ============================================================
+ // v1.4.18: MERGE / PATCH semantic (no more REPLACE wipe)
+ // Previous wipe-then-replace lost data when Excel was incomplete
+ // (Admin deleted rows from template → those rows' shifts wiped without re-add).
+ //
+ // New rules:
+ //  · Empty cell or '-'  → PRESERVE (don't touch DB)
+ //  · W/M/A/N/O          → UPSERT (update if exists, add if not)
+ //  · 'BLANK', 'X', 'DEL' → DELETE (explicit clear)
+ //  · L / C              → SKIP (auto-derived from leave)
+ //  · Row not in Excel    → entire employee untouched
+ // ============================================================
  const allShiftsBefore = DB.load('shifts', []);
  const beforeMonth = allShiftsBefore.filter(s => s.date.startsWith(monthStr));
- const beforeMonthByTeam = beforeMonth.filter(s => importerTeamIds.has(s.employeeId)).length;
- const beforeMonthOtherTeams = beforeMonth.length - beforeMonthByTeam;
- console.log(`[Import] Before: month=${beforeMonth.length} shifts (myTeam=${beforeMonthByTeam}, others=${beforeMonthOtherTeams})`);
+ const shiftIndex = new Map(); // 'empId|date' → shift object
+ beforeMonth.forEach(s => shiftIndex.set(`${s.employeeId}|${s.date}`, s));
 
- const shifts = allShiftsBefore.filter(s =>
- !s.date.startsWith(monthStr) || !importerTeamIds.has(s.employeeId)
- );
- let updated = 0, skipped = 0, unknownEmp = 0, notInTeam = 0;
+ const toUpsert = []; // {empId, date, type}
+ const toDelete = new Set(); // 'empId|date'
+ const rowsInExcel = new Set(); // empIds present in Excel
+ let preservedEmptyCells = 0;
+ let skipped = 0, unknownEmp = 0, notInTeam = 0;
+
+ const deleteMarkers = new Set(['BLANK', 'X', 'DEL', 'EMPTY', 'CLEAR']);
 
  for (let r = 5; r < aoa.length; r++) {
  const row = aoa[r];
@@ -3787,39 +3806,97 @@ function importShiftScheduleXLSX(file) {
  const empId = String(row[0]).trim();
  const emp = emps.find(e => e.id === empId);
  if (!emp) { unknownEmp++; continue; }
- // Defensive: refuse to write shifts for employees outside importer's scope
  if (!importerTeamIds.has(empId)) { notInTeam++; continue; }
+ rowsInExcel.add(empId);
  for (let d = 1; d <= daysInMonth; d++) {
  const cell = String(row[2 + d] || '').trim().toUpperCase();
- if (!cell || cell === '-') continue;
- if (cell === 'L' || cell === 'C') continue; // auto from leave/comp-off
- if (!validShifts.has(cell)) { skipped++; continue; }
  const ds = `${monthStr}-${String(d).padStart(2,'0')}`;
- shifts.push({
- id: uid('SH'), employeeId: empId, date: ds, type: cell, customLabel: '',
- updatedBy: currentUser.id, updatedAt: new Date().toISOString()
+ // Empty or '-' → preserve (no-op)
+ if (!cell || cell === '-') { preservedEmptyCells++; continue; }
+ // Auto-derived from leave/comp-off → skip
+ if (cell === 'L' || cell === 'C') continue;
+ // Explicit delete marker
+ if (deleteMarkers.has(cell)) { toDelete.add(`${empId}|${ds}`); continue; }
+ // Valid shift code → upsert
+ if (!validShifts.has(cell)) { skipped++; continue; }
+ toUpsert.push({ empId, date: ds, type: cell });
+ }
+ }
+
+ // Diff calculation
+ const upsertKeys = new Set(toUpsert.map(u => `${u.empId}|${u.date}`));
+ let added = 0, updated = 0;
+ toUpsert.forEach(u => {
+ const key = `${u.empId}|${u.date}`;
+ const existing = shiftIndex.get(key);
+ if (!existing) added++;
+ else if (existing.type !== u.type) updated++;
+ // else: same value → no-op (still counted as upsert, but no change)
  });
- updated++;
- }
- }
+ const actualDeletes = [...toDelete].filter(k => shiftIndex.has(k)).length;
+ const employeesInExcel = rowsInExcel.size;
+ const employeesNotInExcel = new Set();
+ beforeMonth.forEach(s => { if (!rowsInExcel.has(s.employeeId)) employeesNotInExcel.add(s.employeeId); });
+ const preservedOutsideRows = beforeMonth.filter(s => !rowsInExcel.has(s.employeeId)).length;
 
- const scopeLabel = role === 'admin' ? 'ทุกพนักงาน' : `ทีมของคุณ (${importerTeamIds.size} คน)`;
- const otherTeamsMsg = beforeMonthOtherTeams > 0
- ? `\n✓ ป้องกัน: ทีมอื่น ${beforeMonthOtherTeams} กะ ในเดือน ${monthStr} จะถูกเก็บไว้\n`
- : `\n(ยังไม่มีทีมอื่นลงกะในเดือน ${monthStr})\n`;
- if (!confirm(`พบ ${updated} กะ จาก ${aoa.length - 5} แถว\n${unknownEmp ? `· ไม่พบพนักงาน ${unknownEmp} คน\n` : ''}${notInTeam ? `· นอกขอบเขตทีม ${notInTeam} แถว (จะ skip)\n` : ''}${skipped ? `· ค่าผิดรูปแบบ ${skipped} ช่อง\n` : ''}\n*ขอบเขต: ${scopeLabel}*\n*แทนที่: เฉพาะกะของขอบเขตนี้ในเดือน ${monthStr}*${otherTeamsMsg}\nยืนยัน Import?`)) return;
+ console.log(`[Import v1.4.18 MERGE] Before: ${beforeMonth.length} shifts in ${monthStr}`);
+ console.log(`[Import v1.4.18 MERGE] Plan: +${added} new, ~${updated} updated, -${actualDeletes} deleted`);
+ console.log(`[Import v1.4.18 MERGE] Preserved: ${preservedOutsideRows} shifts (${employeesNotInExcel.size} employees not in Excel) + ${preservedEmptyCells} empty cells`);
 
- DB.save('shifts', shifts);
+ const scopeLabel = role === 'admin' ? 'Admin (ทุกพนักงาน)' : `Manager (ทีมของคุณ ${importerTeamIds.size} คน)`;
+ const confirmMsg = `📋 สรุปการเปลี่ยนแปลง (เดือน ${monthStr})
 
- // Post-save verification — confirm we didn't accidentally drop other teams
- const afterMonth = shifts.filter(s => s.date.startsWith(monthStr));
- const afterMonthOtherTeams = afterMonth.filter(s => !importerTeamIds.has(s.employeeId)).length;
- console.log(`[Import] After: month=${afterMonth.length} shifts. Other teams preserved: ${afterMonthOtherTeams}`);
- if (beforeMonthOtherTeams > 0 && afterMonthOtherTeams < beforeMonthOtherTeams) {
- console.error(`[Import] ⚠ DATA LOSS DETECTED: ${beforeMonthOtherTeams - afterMonthOtherTeams} other-team shifts lost`);
- toast(`⚠ คำเตือน: ตรวจพบทีมอื่นหาย ${beforeMonthOtherTeams - afterMonthOtherTeams} กะ — ใช้ DB.clearDirty() แล้ว reload`, 'error');
+✓ ${added.toLocaleString()} กะ ใหม่ (จะถูกเพิ่ม)
+~ ${updated.toLocaleString()} กะ (จะถูกอัพเดทเป็นค่าใหม่)
+${actualDeletes > 0 ? `✗ ${actualDeletes.toLocaleString()} กะ (จะถูกลบ — มี BLANK/X/DEL ใน Excel)\n` : ''}
+🛡 PRESERVE:
+   · ${preservedOutsideRows.toLocaleString()} กะ ของ ${employeesNotInExcel.size} พนักงานที่ไม่อยู่ใน Excel
+   · ${preservedEmptyCells.toLocaleString()} ช่องว่างใน Excel (ไม่แตะข้อมูลเดิม)
+${unknownEmp ? `\n⚠ ไม่พบพนักงาน ${unknownEmp} แถว — ข้าม\n` : ''}${notInTeam ? `⚠ นอกขอบเขต ${notInTeam} แถว — ข้าม (${scopeLabel})\n` : ''}${skipped ? `⚠ ค่าผิดรูปแบบ ${skipped} ช่อง — ข้าม\n` : ''}
+───────────────────────────────
+ขอบเขต: ${scopeLabel}
+Semantic: MERGE — ช่องว่างใน Excel = "คงเดิม"
+เคลียร์ต้องใส่ "-" ไม่ใช่ลบ row · ลบเด็ดขาดใส่ "BLANK"
+
+ยืนยัน Import?`;
+
+ if (!confirm(confirmMsg)) return;
+
+ // Apply: keep all shifts NOT touched by Excel (preserved); for touched ones, upsert/delete
+ const newShifts = allShiftsBefore.filter(s => {
+ const key = `${s.employeeId}|${s.date}`;
+ if (toDelete.has(key)) return false; // explicit delete
+ if (upsertKeys.has(key)) return false; // will be re-added with new value
+ return true; // preserve
+ });
+ toUpsert.forEach(u => {
+ const key = `${u.empId}|${u.date}`;
+ const existing = shiftIndex.get(key);
+ newShifts.push({
+ id: existing ? existing.id : uid('SH'),
+ employeeId: u.empId,
+ date: u.date,
+ type: u.type,
+ customLabel: existing ? (existing.customLabel || '') : '',
+ updatedBy: currentUser.id,
+ updatedAt: new Date().toISOString()
+ });
+ });
+
+ DB.save('shifts', newShifts);
+
+ // Post-save audit
+ const afterMonth = newShifts.filter(s => s.date.startsWith(monthStr));
+ const afterEmps = new Set(afterMonth.map(s => s.employeeId));
+ console.log(`[Import v1.4.18 MERGE] After: ${afterMonth.length} shifts, ${afterEmps.size} employees`);
+ const beforeEmps = new Set(beforeMonth.map(s => s.employeeId));
+ const lostEmps = [...beforeEmps].filter(eid => !afterEmps.has(eid));
+ if (lostEmps.length > 0) {
+ console.error(`[Import v1.4.18 MERGE] ⚠ ${lostEmps.length} employees lost: ${lostEmps.slice(0,5).join(', ')}${lostEmps.length>5?'...':''}`);
+ toast(`⚠ ตรวจพบ ${lostEmps.length} พนักงานหายไป — โปรดเช็คทันที`, 'error');
+ } else {
+ toast(`Import สำเร็จ — +${added} ใหม่ / ~${updated} อัพเดท / -${actualDeletes} ลบ · ${preservedOutsideRows} กะ ของทีมอื่นยังคงอยู่`);
  }
- toast(`Import สำเร็จ — ${updated} กะ ของทีมคุณ · ทีมอื่น ${afterMonthOtherTeams} กะ ยังคงอยู่`);
  renderShiftSchedule();
  } catch (err) {
  console.error('[importShift] error:', err);

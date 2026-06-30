@@ -6,6 +6,76 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.15] — 2026-06-30
+
+**Mobile Responsive — Scrollable Tables + Sticky Action Column**
+
+### Fixed (P1 — Mobile Critical)
+**Bug:** ปุ่มอนุมัติ/ปฏิเสธ (และ column ขวาสุดของทุกตาราง) บน Portrait mobile ถูก **clip มองไม่เห็น เลื่อนไม่ได้**
+
+**Root cause:**
+- `.card { overflow: hidden; }` (จำเป็นเพื่อ rounded corners)
+- ไม่มี `overflow-x: auto` ใน `.card-body`
+- ตารางมี 7+ columns → กว้างกว่า viewport portrait (~375px)
+- Cell สุดท้ายมีปุ่ม → ยื่นออกนอก card → ถูก clip
+
+### Fix (CSS-only, @media max-width:768px)
+```css
+.card { overflow: visible; }              /* allow children to overflow */
+.card-body {
+  overflow-x: auto;                       /* enable horizontal scroll */
+  -webkit-overflow-scrolling: touch;      /* smooth iOS scrolling */
+}
+.card-body table {
+  width: max-content;                     /* natural table width */
+  min-width: 100%;
+}
+.card-body th, .card-body td {
+  padding: 10px 12px;
+  white-space: nowrap;                    /* prevent collapsed cells */
+}
+/* Sticky action column — visible without scrolling */
+.card-body table td:last-child,
+.card-body table th:last-child {
+  position: sticky;
+  right: 0;
+  background: white;
+  box-shadow: -4px 0 6px rgba(30,58,138,0.05);
+  z-index: 2;
+}
+/* Tabs row also scrolls horizontally if too many */
+.tabs { overflow-x: auto; flex-wrap: nowrap; }
+```
+
+### Bonus — Small phone (≤480px)
+- Smaller table padding (8px) + 12px font
+- Smaller h1 (18px)
+- `btn-sm` 12px font
+
+### Effect
+- ✅ ปุ่มอนุมัติ/ปฏิเสธ visible ทุกครั้ง (sticky right)
+- ✅ Swipe ตารางซ้าย-ขวาดู column อื่นๆ ได้
+- ✅ Tabs scroll horizontally — ทุก tab เข้าถึงได้
+- ✅ Modal full-screen-friendly (95vh)
+- ✅ Stats grid 2 columns บน mobile
+
+### Scope
+ใช้ครอบคลุมทุกหน้าที่ใช้ pattern `.card > .card-body > table`:
+- ศูนย์อนุมัติ (ลา/OT/สะสมหยุด/งานนอก/รับรองเวลา)
+- รายงาน (สรุปสิทธิ์ลา/รายละเอียดลา/OT/มาสายสะสม ฯลฯ)
+- จัดการพนักงาน
+- ลางาน & OT
+- คลังเครื่องเขียน
+
+### Tested viewports
+- Portrait iPhone (375px) ✓
+- Portrait Galaxy (412px) ✓
+- Landscape phone (812px) ✓ (already working before)
+- Tablet (768px) ✓
+- Desktop (>768px) — no change
+
+---
+
 ## [1.4.14] — 2026-06-30
 
 **Hard Reset ลากิจ = 3 (สิทธิ์ตามกฎหมาย)**

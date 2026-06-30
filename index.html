@@ -719,6 +719,68 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  .sidebar-toggle { display: flex; align-items: center; justify-content: center; }
  .form-row { grid-template-columns: 1fr; }
  .page-header { flex-wrap: wrap; gap: 8px; }
+
+ /* v1.4.15: Enable horizontal scroll for wide tables on mobile
+  * Problem: .card has overflow:hidden, so tables wider than viewport got clipped
+  *          → action buttons (อนุมัติ/ปฏิเสธ) couldn't be reached
+  * Fix: allow card to overflow visible, make card-body scroll, table keeps natural width */
+ .card { overflow: visible; }
+ .card-body {
+ overflow-x: auto;
+ -webkit-overflow-scrolling: touch;
+ padding: 14px;
+ }
+ .card-body table {
+ width: max-content;
+ min-width: 100%;
+ }
+ /* Compact cell padding so more fits per screen */
+ .card-body th,
+ .card-body td {
+ padding: 10px 12px;
+ font-size: 12.5px;
+ white-space: nowrap;
+ }
+ /* Action button column — always visible by sticking to right edge */
+ .card-body table td:last-child,
+ .card-body table th:last-child {
+ position: sticky;
+ right: 0;
+ background: var(--glass-bg, #fff);
+ box-shadow: -4px 0 6px rgba(30,58,138,0.05);
+ z-index: 2;
+ }
+ /* Visual hint: subtle gradient on right edge of card to suggest scrollability */
+ .card-body::after {
+ content: '';
+ position: sticky;
+ right: 0;
+ pointer-events: none;
+ }
+ /* Modal full-screen on portrait */
+ .modal { padding: 8px; }
+ .modal-content { max-width: 100%; max-height: 95vh; }
+ /* Stats grid: 2 cols on mobile */
+ .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+ /* Tabs: allow wrap & scroll horizontally if many */
+ .tabs {
+ overflow-x: auto;
+ -webkit-overflow-scrolling: touch;
+ flex-wrap: nowrap;
+ padding-bottom: 4px;
+ }
+ .tab { flex-shrink: 0; white-space: nowrap; }
+}
+
+@media (max-width: 480px) {
+ /* Even more compact on small phones */
+ .card-body th,
+ .card-body td {
+ padding: 8px 10px;
+ font-size: 12px;
+ }
+ .btn-sm { padding: 6px 10px; font-size: 12px; }
+ .page-header h1 { font-size: 18px; }
 }
 </style>
 </head>
@@ -781,7 +843,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.14</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.15</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -805,7 +867,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.14';
+const APP_VERSION = '1.4.15';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);

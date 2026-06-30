@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.16</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.17</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.16';
+const APP_VERSION = '1.4.17';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1673,6 +1673,8 @@ function renderNav() {
  html += navLink('exec-dashboard', 'แดชบอร์ดผู้บริหาร');
  html += navLink('activity-calendar', 'ลางาน & OT');
  html += navLink('shift-schedule', 'ตารางลงกะงาน');
+ // v1.4.17: Manager team reports — เห็นเฉพาะลูกน้องในทีม (Admin เห็นทั้งระบบที่เมนู Admin ด้านล่าง)
+ if (role === 'manager') html += navLink('reports', 'รายงานทีม');
  html += navLink('team-evaluations', 'ประเมินทีม');
  }
 
@@ -7118,14 +7120,22 @@ let _timeCertReportFilter = 'all';
 let _lateReportMonth = null; // YYYY-MM, null = current month
 
 function renderReports() {
+ const isManager = currentUser.role === 'manager';
+ const title = isManager ? 'รายงานทีม' : 'รายงาน';
+ const scopeBanner = isManager ? (() => {
+ const myTeam = DB.load('employees').filter(e => e.active && e.managerId === currentUser.id);
+ return `<div class="alert alert-info mb-3" style="font-size:13px;"><strong>ขอบเขต:</strong> ลูกน้องในทีมของคุณ <strong>${myTeam.length}</strong> คน (สำหรับใช้สนทนา/อบรมรายบุคคล)</div>`;
+ })() : '';
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> รายงาน</h1>
+ <h1> ${title}</h1>
  </div>
+ ${scopeBanner}
  <div class="tabs">
  <div class="tab ${reportTab==='leave-summary'?'active':''}" onclick="setReportTab('leave-summary')">สรุปสิทธิ์การลา</div>
  <div class="tab ${reportTab==='leave-detail'?'active':''}" onclick="setReportTab('leave-detail')">รายละเอียดการลา</div>
  <div class="tab ${reportTab==='ot-report'?'active':''}" onclick="setReportTab('ot-report')">รายงาน OT</div>
+ <div class="tab ${reportTab==='comp-off'?'active':''}" onclick="setReportTab('comp-off')">สะสมวันหยุด</div>
  <div class="tab ${reportTab==='field-work'?'active':''}" onclick="setReportTab('field-work')">งานนอกสถานที่</div>
  <div class="tab ${reportTab==='time-cert'?'active':''}" onclick="setReportTab('time-cert')">รับรองเวลา</div>
  <div class="tab ${reportTab==='late-summary'?'active':''}" onclick="setReportTab('late-summary')">มาสายสะสม</div>
@@ -7135,14 +7145,24 @@ function renderReports() {
  drawReport();
 }
 
+// v1.4.17: helper — returns Set of employeeIds visible to current user
+// Admin → all employees; Manager → their direct reports
+function _reportScopeEmpIds() {
+ const emps = DB.load('employees');
+ if (currentUser.role === 'admin') return new Set(emps.map(e => e.id));
+ return new Set(emps.filter(e => e.managerId === currentUser.id).map(e => e.id));
+}
+
 function setReportTab(t) { reportTab = t; renderReports(); }
 
 function drawReport() {
  const year = new Date().getFullYear();
+ // v1.4.17: team scope — Admin sees all, Manager sees only direct reports
+ const scopeIds = _reportScopeEmpIds();
  let html = '';
 
  if (reportTab === 'leave-summary') {
- const emps = DB.load('employees').filter(e => e.active);
+ const emps = DB.load('employees').filter(e => e.active && scopeIds.has(e.id));
  html = `
  <div class="card">
  <div class="card-header">
@@ -7174,7 +7194,7 @@ function drawReport() {
  }
 
  else if (reportTab === 'leave-detail') {
- const reqs = DB.load('leaveRequests').sort((a,b) => new Date(b.requestDate) - new Date(a.requestDate));
+ const reqs = DB.load('leaveRequests').filter(r => scopeIds.has(r.employeeId)).sort((a,b) => new Date(b.requestDate) - new Date(a.requestDate));
  html = `
  <div class="card">
  <div class="card-header">
@@ -7213,7 +7233,7 @@ function drawReport() {
  }
 
  else if (reportTab === 'ot-report') {
- const allReqs = DB.load('otRequests').sort((a,b) => new Date(b.date) - new Date(a.date));
+ const allReqs = DB.load('otRequests').filter(r => scopeIds.has(r.employeeId)).sort((a,b) => new Date(b.date) - new Date(a.date));
  const approvedReqs = allReqs.filter(r => r.status === 'approved');
  // Group by employee (approved only)
  const byEmp = {};
@@ -7262,8 +7282,73 @@ function drawReport() {
  `;
  }
 
+ else if (reportTab === 'comp-off') {
+ // v1.4.17: comp-off tab — รวมทั้ง requests + accumulated balances
+ const allReqs = DB.load('compOffRequests').filter(r => scopeIds.has(r.employeeId)).sort((a,b) => new Date(b.requestDate) - new Date(a.requestDate));
+ const stocks = DB.load('accumulatedHolidays').filter(a => scopeIds.has(a.employeeId));
+ const today = new Date();
+ // Summary per employee: earned, used, available, expired
+ const byEmp = {};
+ stocks.forEach(s => {
+ const key = s.employeeId;
+ if (!byEmp[key]) byEmp[key] = { earned: 0, used: 0, available: 0, expired: 0 };
+ byEmp[key].earned++;
+ if (s.used) byEmp[key].used++;
+ else if (new Date(s.expireDate) < today) byEmp[key].expired++;
+ else byEmp[key].available++;
+ });
+ const summary = Object.entries(byEmp).sort((a,b) => b[1].earned - a[1].earned);
+
+ html = `
+ <div class="card">
+ <div class="card-header"><h3>สรุปสะสมวันหยุดรายคน</h3></div>
+ <div class="card-body" style="padding:0;">
+ ${summary.length ? `<table><thead><tr>
+ <th>รหัส</th><th>ชื่อ</th><th>แผนก</th>
+ <th>ได้รับ</th><th>ใช้แล้ว</th><th>คงเหลือ</th><th>หมดอายุ</th>
+ </tr></thead><tbody>
+ ${summary.map(([eid, s]) => {
+ const e = getEmployee(eid);
+ return `<tr>
+ <td>${eid}</td>
+ <td>${e ? e.firstName + ' ' + e.lastName : '-'}</td>
+ <td>${e ? e.department : '-'}</td>
+ <td>${s.earned}</td>
+ <td>${s.used}</td>
+ <td><strong style="color:var(--success);">${s.available}</strong></td>
+ <td style="color:${s.expired > 0 ? 'var(--danger)' : 'var(--gray-500)'};">${s.expired}</td>
+ </tr>`;
+ }).join('')}
+ </tbody></table>` : '<div class="empty-state" style="padding:40px;text-align:center;">ยังไม่มีการสะสมวันหยุดในขอบเขตนี้</div>'}
+ </div>
+ </div>
+ <div class="card">
+ <div class="card-header">
+ <h3>รายละเอียดคำขอสะสมวันหยุด <small style="font-size:13px;color:var(--gray-500);">(${allReqs.length} รายการ)</small></h3>
+ <button class="btn btn-success btn-sm" onclick="exportCSV('comp-off')">⬇ Export CSV</button>
+ </div>
+ <div class="card-body" style="padding:0;">
+ ${allReqs.length ? `<table id="reportTable"><thead><tr>
+ <th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ทำงาน</th><th>เหตุผล</th><th>สถานะ</th>
+ </tr></thead><tbody>
+ ${allReqs.map(r => {
+ const e = getEmployee(r.employeeId);
+ return `<tr>
+ <td>${formatDate(r.requestDate)}</td>
+ <td>${e ? e.firstName + ' ' + e.lastName : '-'}</td>
+ <td>${formatDate(r.workDate)}</td>
+ <td>${r.reason || '-'}</td>
+ <td>${getStatusBadge(r.status)}</td>
+ </tr>`;
+ }).join('')}
+ </tbody></table>` : '<div class="empty-state" style="padding:40px;text-align:center;">ไม่มีคำขอสะสมวันหยุด</div>'}
+ </div>
+ </div>
+ `;
+ }
+
  else if (reportTab === 'field-work') {
- const reqs = DB.load('fieldWorkRequests').filter(r => r.status === 'approved').sort((a,b) => new Date(b.date) - new Date(a.date));
+ const reqs = DB.load('fieldWorkRequests').filter(r => r.status === 'approved' && scopeIds.has(r.employeeId)).sort((a,b) => new Date(b.date) - new Date(a.date));
  html = `
  <div class="card">
  <div class="card-header">
@@ -7284,7 +7369,7 @@ function drawReport() {
  }
 
  else if (reportTab === 'time-cert') {
- const all = DB.load('timeCertRequests', []).slice().sort((a,b) => new Date(b.requestDate || b.date) - new Date(a.requestDate || a.date));
+ const all = DB.load('timeCertRequests', []).filter(r => scopeIds.has(r.employeeId)).slice().sort((a,b) => new Date(b.requestDate || b.date) - new Date(a.requestDate || a.date));
  const filter = _timeCertReportFilter || 'all';
  const reqs = filter === 'all' ? all : all.filter(r => r.status === filter);
  const counts = {
@@ -7377,8 +7462,10 @@ function drawReport() {
  const [lthH, lthM] = lateThreshold.split(':').map(Number);
  const thresholdMinutes = lthH * 60 + lthM;
  const monthStr = _lateReportMonth || new Date().toISOString().slice(0, 7);
+ // v1.4.17: team scope — filter attendance by either employeeId OR employeeCode (Tigersoft uses code)
  const records = DB.load('attendanceRecords').filter(r =>
- r.checkIn && r.checkIn >= lateThreshold && r.date.startsWith(monthStr)
+ r.checkIn && r.checkIn >= lateThreshold && r.date.startsWith(monthStr) &&
+ (scopeIds.has(r.employeeId) || scopeIds.has(r.employeeCode))
  );
 
  // Group by employeeCode → sum late minutes + collect days

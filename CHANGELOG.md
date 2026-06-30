@@ -6,6 +6,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.17] — 2026-06-30
+
+**รายงานทีม สำหรับ Role Manager + เพิ่ม Tab สะสมวันหยุด**
+
+### Added — Manager Reports
+- **เมนูใหม่:** "รายงานทีม" สำหรับ Role Manager (อยู่ใต้ "ตารางลงกะงาน")
+- ใช้ tab structure เดียวกับ Admin's รายงาน แต่ **filter ข้อมูลเฉพาะลูกน้องในทีม**
+- หัวรายงานแสดง **alert banner** บอกขอบเขต: "ขอบเขต: ลูกน้องในทีมของคุณ N คน"
+
+### Added — Tab "สะสมวันหยุด" ใหม่
+- **สรุปรายคน**: ได้รับ / ใช้แล้ว / **คงเหลือ** (เขียว) / หมดอายุ (แดง)
+- **รายละเอียดคำขอ**: วันที่ขอ, พนักงาน, วันที่ทำงาน, เหตุผล, สถานะ
+- Export CSV ได้
+- Admin ก็เห็น tab นี้ด้วย — มีในทุก role ที่เข้าถึงรายงาน
+
+### Scoped Filters (Manager → team only)
+| Tab | Filter Logic |
+|---|---|
+| สรุปสิทธิ์การลา | employees ที่ managerId === me.id |
+| รายละเอียดการลา | leaveRequests ที่ employeeId อยู่ในทีม |
+| OT | otRequests ที่ employeeId อยู่ในทีม |
+| สะสมวันหยุด | compOffRequests + accumulatedHolidays ในทีม |
+| งานนอกสถานที่ | fieldWorkRequests อนุมัติแล้วในทีม |
+| รับรองเวลา | timeCertRequests ในทีม |
+| มาสายสะสม | attendance ของพนักงานในทีม (matched ทั้ง employeeId / employeeCode) |
+
+### Implementation
+```js
+function _reportScopeEmpIds() {
+  const emps = DB.load('employees');
+  if (currentUser.role === 'admin') return new Set(emps.map(e => e.id));
+  return new Set(emps.filter(e => e.managerId === currentUser.id).map(e => e.id));
+}
+// Used in each tab: r => scopeIds.has(r.employeeId)
+```
+
+### Use Case
+Manager ใช้เพื่อ:
+- เตรียมข้อมูลก่อนคุย one-on-one
+- อบรม / coach ลูกน้องในเรื่องการลา/มาสาย/OT
+- ติดตามคนที่มี outlier (มาสายเยอะ / OT เยอะผิดปกติ)
+
+---
+
 ## [1.4.16] — 2026-06-30
 
 **Mobile Responsive Follow-up — Tabs & Two-card Grids**

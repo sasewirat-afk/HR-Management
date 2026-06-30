@@ -6,6 +6,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.16] — 2026-06-30
+
+**Mobile Responsive Follow-up — Tabs & Two-card Grids**
+
+### Fixed (P1 — Mobile, 2 ตัว)
+
+**Bug A: Tabs pill ยื่นเกิน viewport บน portrait**
+- Root: `.tabs { width: fit-content }` ทำให้ pill กว้างตามเนื้อหา
+- ผล: tab สุดท้ายถูกตัด (เช่น "รับรองเวลา") เลื่อนไม่ได้
+- Fix: force `width: 100% !important` + `overflow-x: auto` ใน @media
+
+**Bug B: 2-card grid (ลางาน & OT page) ตัวที่ 2 ถูกตัด**
+- Root: inline `style="grid-template-columns:1fr 1fr"` — CSS file override ไม่ได้
+- Fix: attribute selector `[style*="grid-template-columns:1fr 1fr"]` + `!important` → collapse to 1 column on mobile
+
+```css
+@media (max-width: 768px) {
+  .tabs {
+    width: 100% !important;
+    overflow-x: auto;
+  }
+  [style*="grid-template-columns:1fr 1fr"],
+  [style*="grid-template-columns: 1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+}
+```
+
+### Effect
+- ✅ ทุก tab เข้าถึงได้ในทุกหน้า (Approval Center, Reports, Settings ฯลฯ)
+- ✅ หน้า "ลางาน & OT" — 2 card stack เป็น 1 column บน mobile
+- ✅ ทุกหน้าที่ใช้ 2-col inline grid → collapse อัตโนมัติ
+- ✅ Scrollbar ของ tabs บางลง (4px) สวยงาม
+
+---
+
 ## [1.4.15] — 2026-06-30
 
 **Mobile Responsive — Scrollable Tables + Sticky Action Column**

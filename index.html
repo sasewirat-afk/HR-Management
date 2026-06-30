@@ -762,14 +762,27 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  .modal-content { max-width: 100%; max-height: 95vh; }
  /* Stats grid: 2 cols on mobile */
  .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
- /* Tabs: allow wrap & scroll horizontally if many */
+ /* Tabs: allow wrap & scroll horizontally if many
+  * v1.4.16: override .tabs { width: fit-content } — was forcing pill bigger than viewport */
  .tabs {
+ width: 100% !important;
+ max-width: 100%;
  overflow-x: auto;
  -webkit-overflow-scrolling: touch;
  flex-wrap: nowrap;
  padding-bottom: 4px;
+ /* Hide scrollbar but keep functional */
+ scrollbar-width: thin;
  }
+ .tabs::-webkit-scrollbar { height: 4px; }
  .tab { flex-shrink: 0; white-space: nowrap; }
+
+ /* v1.4.16: collapse 2-column inline grids to 1-column on mobile.
+  * Attribute selector handles places using inline style="grid-template-columns:1fr 1fr" */
+ [style*="grid-template-columns:1fr 1fr"],
+ [style*="grid-template-columns: 1fr 1fr"] {
+ grid-template-columns: 1fr !important;
+ }
 }
 
 @media (max-width: 480px) {
@@ -843,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.15</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.16</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -867,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.15';
+const APP_VERSION = '1.4.16';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);

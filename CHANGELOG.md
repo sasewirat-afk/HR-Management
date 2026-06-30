@@ -6,6 +6,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.14] — 2026-06-30
+
+**Hard Reset ลากิจ = 3 (สิทธิ์ตามกฎหมาย)**
+
+### Changed
+- **ลากิจ = 3 วัน เสมอ ทุกคน — ไม่มีข้อยกเว้น**
+- ไม่ pro-rate ตามเดือนที่เข้างาน
+- ไม่รับ per-employee override
+- ไม่ดู status ทดลองงาน (ทั้งทดลอง + ผ่านทดลอง = 3 เท่ากัน)
+- เป็นสิทธิ์ขั้นต่ำตาม **กฎหมายแรงงาน พ.ร.บ.คุ้มครองแรงงาน**
+
+### Fixed (Migration)
+- **`migrateLeaveQuota_v1_4_14()`** — รันอัตโนมัติตอน startup
+- Force `settings.leaveQuotas.personal = 3`
+- Force `settings.probationPersonalCap = 3`
+- **Strip** `leaveQuotaOverride.personal` ของพนักงานทุกคน (ที่เคยมี override เช่น 1.8, 2.0)
+- Idempotent — ใช้ `_settingsVersion === '1.4.14'` กันรันซ้ำ
+
+### UI Updated
+- หน้า "ปรับสิทธิ์ลา (Admin)" → ช่องลากิจ:
+ - 🔒 ล็อค ใส่ค่าไม่ได้
+ - แสดง: "ล็อค — สิทธิ์ตามกฎหมาย ทุกคนเท่ากัน"
+- ลาประเภทอื่น (พักร้อน/ป่วย/คลอด/บวช) — Admin ยัง override ได้ตามปกติ
+
+### Impact
+หลัง deploy v1.4.14:
+- เดชา สมจิตต์ (Modern Trade): 1.8 → **3** ✓
+- สุพิชชา วีระเกียรติ (Project): 2 → **3** ✓
+- พนักงานใหม่อื่นๆ ที่ pro-rate ไว้ — auto-reset to 3
+
+---
+
 ## [1.4.13] — 2026-06-30
 
 **P0 Hotfix — Shift Import Stale-Local Race**

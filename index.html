@@ -781,7 +781,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.13</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.14</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -805,7 +805,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.13';
+const APP_VERSION = '1.4.14';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1074,6 +1074,42 @@ function migrateSettings_v1_4_10() {
  changed = true;
  }
  if (changed) DB.save('settings', s);
+}
+
+// v1.4.14: hard-reset ลากิจ = 3 ตามกฎหมาย — strip per-employee personal overrides
+function migrateLeaveQuota_v1_4_14() {
+ const s = DB.load('settings', null);
+ if (s && s._settingsVersion === '1.4.14') return; // already migrated
+ const emps = DB.load('employees', []);
+ if (!emps.length) return;
+ // Force settings.leaveQuotas.personal = 3
+ if (s && s.leaveQuotas) {
+ if (s.leaveQuotas.personal !== 3) {
+ console.log(`[migrate v1.4.14] settings.leaveQuotas.personal: ${s.leaveQuotas.personal} → 3`);
+ s.leaveQuotas.personal = 3;
+ }
+ // Probation cap also = 3 (no difference)
+ if (s.probationPersonalCap !== 3) {
+ console.log(`[migrate v1.4.14] probationPersonalCap: ${s.probationPersonalCap} → 3`);
+ s.probationPersonalCap = 3;
+ }
+ s._settingsVersion = '1.4.14';
+ DB.save('settings', s);
+ }
+ // Strip per-employee personal override
+ let stripped = 0;
+ emps.forEach(e => {
+ if (e.leaveQuotaOverride && e.leaveQuotaOverride.personal !== undefined) {
+ delete e.leaveQuotaOverride.personal;
+ stripped++;
+ // If override object now empty, remove it
+ if (Object.keys(e.leaveQuotaOverride).length === 0) delete e.leaveQuotaOverride;
+ }
+ });
+ if (stripped > 0) {
+ console.log(`[migrate v1.4.14] stripped personal override on ${stripped} employees`);
+ DB.save('employees', emps);
+ }
 }
 
 function seedData() {
@@ -1391,20 +1427,19 @@ function getLeaveBalance(employeeId) {
 
  // Per-employee override (Admin can set quotas per type per person)
  const ov = emp.leaveQuotaOverride || {};
- let personalQuota = ov.personal ?? settings.leaveQuotas.personal;
+ // v1.4.14: ลากิจ = สิทธิ์ตามกฎหมาย (3 วัน) — ทุกคนเท่ากัน ไม่ pro-rate ไม่รับ override
+ // ไม่ว่าจะเข้าใหม่กลางปี / ผ่านทดลอง / ไม่ผ่าน — ทุกคน = settings.leaveQuotas.personal (default 3)
+ let personalQuota = settings.leaveQuotas.personal;
  let vacationQuota = ov.vacation ?? emp.vacationQuota ?? vacationFromAccrual ?? settings.leaveQuotas.vacation;
 
- // Pro-rate for new hires (started this year, after probation passed) — skip if Admin set explicit override
+ // Pro-rate for new hires — VACATION only (personal ไม่ pro-rate ตามกฎหมาย)
  if (startYear === year && !prob) {
  const monthsRemaining = 12 - probEnd.getMonth();
- if (ov.personal === undefined) personalQuota = Math.round((personalQuota * monthsRemaining / 12) * 10) / 10;
  if (ov.vacation === undefined) vacationQuota = Math.round((vacationQuota * monthsRemaining / 12) * 10) / 10;
  }
 
- // During probation: ลากิจได้จำกัด (default 3 วัน), ลาพักร้อนยังไม่มี (unless Admin override)
+ // During probation: ลาพักร้อนยังไม่มี (unless Admin override) — ลากิจ already = settings (3)
  if (prob) {
- const probPersonalCap = settings.probationPersonalCap ?? 3;
- if (ov.personal === undefined) personalQuota = probPersonalCap;
  if (ov.vacation === undefined) vacationQuota = 0;
  }
 
@@ -4694,8 +4729,9 @@ function adjustLeaveQuotas(id) {
  ordination: ov.ordination ?? (emp.gender === 'male' ? (defaults.ordination ?? 15) : 0)
  };
  const isOverridden = (k) => ov[k] !== undefined;
+ // v1.4.14: ลากิจ = สิทธิ์ตามกฎหมาย ไม่อนุญาตให้ override ได้ — แสดงแค่ค่า default
  const types = [
- { k: 'personal', label: 'ลากิจ', unit: 'วัน/ปี', def: defaults.personal },
+ { k: 'personal', label: 'ลากิจ (กฎหมาย)', unit: 'วัน/ปี', def: defaults.personal, disabled: true, locked: true },
  { k: 'vacation', label: 'ลาพักร้อน', unit: 'วัน/ปี', def: defaults.vacation },
  { k: 'sick', label: 'ลาป่วย', unit: 'วัน/ปี', def: defaults.sick },
  { k: 'maternity', label: 'ลาคลอด', unit: 'วัน/รอบ', def: defaults.maternity },
@@ -4722,16 +4758,17 @@ function adjustLeaveQuotas(id) {
  <tr style="border-bottom:1px solid var(--gray-100);">
  <td style="padding:10px 8px;">
  <strong>${t.label}</strong>
- ${isOverridden(t.k) ? '<br><small style="color:var(--primary);">● ปรับเฉพาะคนนี้</small>' : ''}
- ${t.disabled ? '<br><small style="color:var(--gray-500);">(เฉพาะพนักงานชาย)</small>' : ''}
+ ${isOverridden(t.k) && !t.locked ? '<br><small style="color:var(--primary);">● ปรับเฉพาะคนนี้</small>' : ''}
+ ${t.locked ? '<br><small style="color:var(--danger);">🔒 ล็อค — สิทธิ์ตามกฎหมาย ทุกคนเท่ากัน</small>' : ''}
+ ${t.disabled && !t.locked ? '<br><small style="color:var(--gray-500);">(เฉพาะพนักงานชาย)</small>' : ''}
  </td>
  <td style="padding:10px 8px;text-align:center;color:var(--gray-500);">${t.def ?? '-'}</td>
  <td style="padding:8px;text-align:center;">
  <input type="number" id="lq_${t.k}" step="0.5" min="0"
- value="${isOverridden(t.k) ? ov[t.k] : ''}"
- placeholder="default: ${t.def ?? '-'}"
+ value="${!t.locked && isOverridden(t.k) ? ov[t.k] : ''}"
+ placeholder="${t.locked ? 'ห้ามแก้' : `default: ${t.def ?? '-'}`}"
  ${t.disabled ? 'disabled' : ''}
- style="width:100%;padding:6px 8px;border:1px solid var(--gray-300);border-radius:6px;text-align:center;">
+ style="width:100%;padding:6px 8px;border:1px solid var(--gray-300);border-radius:6px;text-align:center;${t.locked ? 'background:#f3f4f6;' : ''}">
  </td>
  <td style="padding:10px 8px;text-align:center;color:var(--gray-500);font-size:12px;">${t.unit}</td>
  </tr>
@@ -4758,7 +4795,8 @@ function submitAdjustLeaveQuotas(e, id) {
  const idx = emps.findIndex(x => x.id === id);
  if (idx < 0) return;
  const emp = emps[idx];
- const types = ['personal','vacation','sick','maternity','ordination'];
+ // v1.4.14: 'personal' ถูกล็อค ห้าม override (สิทธิ์ตามกฎหมาย)
+ const types = ['vacation','sick','maternity','ordination'];
  const newOv = {};
  types.forEach(k => {
  const v = document.getElementById(`lq_${k}`)?.value.trim();
@@ -9324,6 +9362,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
  // v1.4.10 settings migration: update old defaults to new defaults (idempotent)
  migrateSettings_v1_4_10();
+ // v1.4.14: hard-reset personal leave = 3 for everyone (legal standard)
+ migrateLeaveQuota_v1_4_14();
 
  if (restoreSession()) {
  showApp();

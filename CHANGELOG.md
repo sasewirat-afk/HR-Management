@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.22] — 2026-07-01
+
+**ลากิจ Editable Per Employee — Revert v1.4.14 hard-lock**
+
+### Changed
+- **ลากิจปรับ override ได้รายบุคคลอีกครั้ง**
+- Default ยังคง 3 วัน (ตามกฎหมาย)
+- Admin เข้าหน้า "ปรับสิทธิ์ลา" → ช่องลากิจไม่ถูกล็อคอีกต่อไป → กรอกค่าใหม่ได้เลย
+- ถ้าปล่อยว่าง = ใช้ค่า default จาก settings (3 วัน)
+
+### Code Changes
+```js
+// getLeaveBalance — accept override again
+let personalQuota = ov.personal ?? settings.leaveQuotas.personal;
+
+// UI types — remove disabled/locked flags for personal
+{ k: 'personal', label: 'ลากิจ', unit: 'วัน/ปี', def: defaults.personal },
+
+// Save handler — include personal in override keys
+const types = ['personal','vacation','sick','maternity','ordination'];
+```
+
+### Use Case
+- พนักงานที่มีสัญญาพิเศษ (เช่น 5 วันลากิจ ตามข้อตกลง)
+- Admin ปรับเฉพาะรายคนที่ตกลงกันไว้เกิน default
+- อื่นๆ ยังคง 3 วัน ตามกฎหมาย
+
+### Backward Compat
+- พนักงานเก่าที่ v1.4.14 strip override → ยังคง 3 วัน (default) ✓
+- ถ้า Admin ต้องการปรับ → เข้าหน้า "ปรับสิทธิ์ลา" กรอกค่าใหม่
+- Migration ก่อนหน้าไม่ต้องเปลี่ยน
+
+---
+
 ## [1.4.21] — 2026-07-01
 
 **P0 Fix — Cross-Device Password Sync Race**

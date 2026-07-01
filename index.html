@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.21</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.22</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.21';
+const APP_VERSION = '1.4.22';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1537,9 +1537,9 @@ function getLeaveBalance(employeeId) {
 
  // Per-employee override (Admin can set quotas per type per person)
  const ov = emp.leaveQuotaOverride || {};
- // v1.4.14: ลากิจ = สิทธิ์ตามกฎหมาย (3 วัน) — ทุกคนเท่ากัน ไม่ pro-rate ไม่รับ override
- // ไม่ว่าจะเข้าใหม่กลางปี / ผ่านทดลอง / ไม่ผ่าน — ทุกคน = settings.leaveQuotas.personal (default 3)
- let personalQuota = settings.leaveQuotas.personal;
+ // v1.4.22: ลากิจ = default 3 วัน (กฎหมาย) แต่ Admin override ได้รายบุคคล
+ // ถ้ามี override → ใช้ override, ไม่งั้นใช้ settings default
+ let personalQuota = ov.personal ?? settings.leaveQuotas.personal;
  let vacationQuota = ov.vacation ?? emp.vacationQuota ?? vacationFromAccrual ?? settings.leaveQuotas.vacation;
 
  // Pro-rate for new hires — VACATION only (personal ไม่ pro-rate ตามกฎหมาย)
@@ -4941,9 +4941,9 @@ function adjustLeaveQuotas(id) {
  ordination: ov.ordination ?? (emp.gender === 'male' ? (defaults.ordination ?? 15) : 0)
  };
  const isOverridden = (k) => ov[k] !== undefined;
- // v1.4.14: ลากิจ = สิทธิ์ตามกฎหมาย ไม่อนุญาตให้ override ได้ — แสดงแค่ค่า default
+ // v1.4.22: ลากิจ ปรับ override ได้รายบุคคล (default 3 วัน ตามกฎหมาย แต่ Admin ปรับได้)
  const types = [
- { k: 'personal', label: 'ลากิจ (กฎหมาย)', unit: 'วัน/ปี', def: defaults.personal, disabled: true, locked: true },
+ { k: 'personal', label: 'ลากิจ', unit: 'วัน/ปี', def: defaults.personal },
  { k: 'vacation', label: 'ลาพักร้อน', unit: 'วัน/ปี', def: defaults.vacation },
  { k: 'sick', label: 'ลาป่วย', unit: 'วัน/ปี', def: defaults.sick },
  { k: 'maternity', label: 'ลาคลอด', unit: 'วัน/รอบ', def: defaults.maternity },
@@ -5007,8 +5007,8 @@ function submitAdjustLeaveQuotas(e, id) {
  const idx = emps.findIndex(x => x.id === id);
  if (idx < 0) return;
  const emp = emps[idx];
- // v1.4.14: 'personal' ถูกล็อค ห้าม override (สิทธิ์ตามกฎหมาย)
- const types = ['vacation','sick','maternity','ordination'];
+ // v1.4.22: 'personal' override ได้อีกครั้ง (default 3 วัน)
+ const types = ['personal','vacation','sick','maternity','ordination'];
  const newOv = {};
  types.forEach(k => {
  const v = document.getElementById(`lq_${k}`)?.value.trim();

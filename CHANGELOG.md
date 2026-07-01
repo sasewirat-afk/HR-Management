@@ -6,6 +6,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.21] — 2026-07-01
+
+**P0 Fix — Cross-Device Password Sync Race**
+
+### Root Cause (Debug Mantra Verified — H1 Confirmed)
+Password change บน Desktop A → หายไปหลังจาก Desktop B (fresh browser) เปิดครั้งแรก
+เกิดจาก **migration race** — Desktop B's first-run migration writes stale employees array back to cloud, overwriting Desktop A's password change
+
+**Timeline (bug trigger):**
+```
+t=0.0  Desktop B opens → pullCloud (has old pw=1234)
+t=0.2  Desktop A changes pw → local save → cloud upsert async
+t=0.4  Desktop B migration runs → save employees WITH pw=1234
+t=0.5  Desktop A upsert done → cloud=102542
+t=0.6  Desktop B upsert done → cloud=1234 (OVERWRITE)  ✗
+t=0.7  Realtime → Desktop A local reverted to 1234
+```
+
+### Fix — 2 Defense Layers
+
+**Layer 1: Migration Idempotency Guard**
+- ใช้ `settings._migrationsRun` array เป็น cloud-synced flag
+- Migration รันครั้งแรกเท่านั้น → mark done → ครั้งต่อไป skip
+```js
+if (s._migrationsRun?.includes('v1.4.20-exempt')) return;
+// ... do migration ...
+s._migrationsRun = [...(s._migrationsRun || []), 'v1.4.20-exempt'];
+```
+
+**Layer 2: Fresh Pull Before Password Change**
+- Password change handler = `async` → force cloud pull ก่อนอ่าน employees
+- Ensures write on top of latest cloud state, preserves concurrent updates
+```js
+document.getElementById('changePassForm').addEventListener('submit', async e => {
+  await DB.cloudPullAllSafe();     // ← fresh sync
+  const emps = DB.load('employees'); // now has latest
+  emp.password = p1;
+  DB.save('employees', emps);
+});
+```
+
+### UX Changes
+- Change password ช้าลง 1-2 วิ (แสดง "กำลังซิงค์ข้อมูลล่าสุดจาก cloud...")
+- ถ้า pull ล้มเหลว → บล็อกการเปลี่ยนรหัส + แจ้งเตือน
+- Guard: ถ้าไม่พบ user ใน employees array → toast error (edge case)
+
+### Testing Approach
+```
+Reproduce (before fix):
+1. Clear localStorage on Desktop B
+2. Desktop A logged in with old pw
+3. Change password on A + immediately load Desktop B → race triggered
+   → Desktop B pushes stale data → password change lost
+
+After fix:
+- Migration idempotent → won't push if already done
+- Password change waits for fresh cloud → no race even with pending updates
+```
+
+### Impact
+- ✅ Cross-device password change ไม่หายอีก
+- ✅ Migration ไม่ race กับ concurrent updates
+- ✅ Backward compat: existing users get flag on next visit
+- ⚠ Change password ช้าลง ~1-2 วิ (acceptable trade-off)
+
+### Future Improvements (Not in v1.4.21)
+- Layer 3 (P2): Field-level Postgres RPC updates instead of full-array REPLACE
+- General sync engine refactor for all critical writes (leaves, shifts, etc.)
+
+---
+
 ## [1.4.20] — 2026-06-30
 
 **Per-user Toggles — Attendance Delegation + Exempt Tracking**

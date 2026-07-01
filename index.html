@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.20</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.21</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.20';
+const APP_VERSION = '1.4.21';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1191,6 +1191,13 @@ function migrateLeaveQuota_v1_4_14() {
 // v1.4.20: mark specific employees as exempt from attendance tracking
 // (CEO / คนสวน / แม่บ้าน — ไม่ต้องสแกน ไม่ขึ้นรายงาน)
 function migrateAttendanceExempt_v1_4_20() {
+ // v1.4.21: idempotency guard — settings._migrationsRun tracks which migrations already ran
+ // Prevents race where fresh browser opens, runs migration, and OVERWRITES concurrent password change
+ // Cloud-synced flag: any device that already migrated → skip
+ const s = DB.load('settings', {});
+ if (s._migrationsRun && s._migrationsRun.includes('v1.4.20-exempt')) {
+ return; // Already migrated — skip to avoid race with concurrent writes
+ }
  const emps = DB.load('employees', []);
  if (!emps.length) return;
  const exemptIds = new Set([
@@ -1205,9 +1212,14 @@ function migrateAttendanceExempt_v1_4_20() {
  changed++;
  }
  });
+ // Mark migration as done BEFORE saving employees (prevents double-run even if crash between)
+ s._migrationsRun = [...(s._migrationsRun || []), 'v1.4.20-exempt'];
+ DB.save('settings', s);
  if (changed > 0) {
  console.log(`[migrate v1.4.20] set exemptFromAttendance on ${changed} employees (CEO/gardener/housekeeper)`);
  DB.save('employees', emps);
+ } else {
+ console.log('[migrate v1.4.20] no changes needed — marked as complete');
  }
 }
 function seedData() {
@@ -9728,7 +9740,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  }
  });
 
- document.getElementById('changePassForm').addEventListener('submit', e => {
+ document.getElementById('changePassForm').addEventListener('submit', async e => {
  e.preventDefault();
  const p1 = document.getElementById('newPass1').value;
  const p2 = document.getElementById('newPass2').value;
@@ -9743,9 +9755,31 @@ document.addEventListener('DOMContentLoaded', async () => {
  return;
  }
 
- // Save new password
+ // v1.4.21 CRITICAL: fresh pull cloud BEFORE modifying employees array
+ // Prevents "REPLACE-then-overwrite" race — ensures we save on top of latest cloud state,
+ // preserving any concurrent updates from other devices (e.g. migration that just ran there)
+ alertDiv.innerHTML = '<div class="alert alert-info">กำลังซิงค์ข้อมูลล่าสุดจาก cloud...</div>';
+ if (cloudSync && typeof DB.cloudPullAllSafe === 'function') {
+ try {
+ const pullResult = await DB.cloudPullAllSafe();
+ if (!pullResult.ok) {
+ alertDiv.innerHTML = '<div class="alert alert-error">⚠ ไม่สามารถซิงค์ cloud ได้ — ลองใหม่</div>';
+ return;
+ }
+ } catch (err) {
+ console.error('[changePassword] cloud pull failed:', err);
+ alertDiv.innerHTML = '<div class="alert alert-error">⚠ ซิงค์ cloud ล้มเหลว — ลองใหม่</div>';
+ return;
+ }
+ }
+
+ // Now save new password on top of freshest data
  const emps = DB.load('employees');
  const emp = emps.find(x => x.id === currentUser.id);
+ if (!emp) {
+ alertDiv.innerHTML = '<div class="alert alert-error">⚠ ไม่พบข้อมูลพนักงาน — logout แล้ว login ใหม่</div>';
+ return;
+ }
  emp.password = p1;
  emp.forceChangePassword = false;
  DB.save('employees', emps);
@@ -9759,7 +9793,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  setTimeout(() => {
  document.getElementById('changePasswordPage').classList.add('hidden');
  showApp();
- }, 1200);
+ }, 1500);
  });
 });
 

@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.22</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.23</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.22';
+const APP_VERSION = '1.4.23';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -967,6 +967,30 @@ const DB = {
  if (size > 900_000) {
  console.warn(`[CloudUpsert] '${key}' is ${(size/1024/1024).toFixed(2)} MB — may exceed Supabase row limit`);
  }
+ // v1.4.23: ANTI-RESURRECTION for employees — merge back stale-missing employees
+ // Prevents Device B (stale local without new employees added by Device A) from wiping them
+ // Uses tombstone list `deletedEmployeeIds` to distinguish intentional deletes from stale-missing
+ if (key === 'employees' && Array.isArray(val)) {
+ try {
+ const { data: existing } = await supa.from('hr_data').select('value').eq('key', key).maybeSingle();
+ const cloudEmps = existing?.value || [];
+ if (Array.isArray(cloudEmps) && cloudEmps.length > val.length) {
+ const localIds = new Set(val.map(e => e.id));
+ const missing = cloudEmps.filter(e => !localIds.has(e.id));
+ const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
+ const tombstoneIds = new Set(tombstones.map(t => t.id));
+ const accidentalMissing = missing.filter(e => !tombstoneIds.has(e.id));
+ if (accidentalMissing.length > 0) {
+ console.warn(`[EMP-SAFETY v1.4.23] Cloud has ${cloudEmps.length}, local ${val.length}. Merging ${accidentalMissing.length} accidental-missing back:`, accidentalMissing.map(e => e.id));
+ val = [...val, ...accidentalMissing];
+ // Also update local so caller's state matches
+ localStorage.setItem('hr_' + key, JSON.stringify(val));
+ if (typeof toast === 'function') toast(`ป้องกันการลบพนักงานผิดพลาด: กู้ ${accidentalMissing.length} คนจาก cloud`, 'success');
+ }
+ }
+ } catch (e) { console.warn('[EMP-SAFETY] guard check failed:', e); }
+ }
+
  // ANTI-DATA-LOSS GUARD (v1.4.9): refuse to push empty array if cloud has data.
  const isCriticalKey = /Requests$/.test(key) || key === 'employees' || key === 'shifts';
  if (isCriticalKey && Array.isArray(val) && val.length === 0) {
@@ -1017,6 +1041,19 @@ const DB = {
  pulled++;
  });
  }
+ // v1.4.23: Apply tombstones — remove employees that were deleted (prevents resurrection)
+ try {
+ const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
+ if (tombstones.length > 0) {
+ const tombIds = new Set(tombstones.map(t => t.id));
+ const emps = JSON.parse(localStorage.getItem('hr_employees') || '[]');
+ const filtered = emps.filter(e => !tombIds.has(e.id));
+ if (filtered.length !== emps.length) {
+ console.log(`[cloudPullAllSafe] Applied ${emps.length - filtered.length} tombstone(s), removing deleted employees`);
+ localStorage.setItem('hr_employees', JSON.stringify(filtered));
+ }
+ }
+ } catch (e) { console.warn('[cloudPullAllSafe] tombstone apply failed:', e); }
  console.log(`[cloudPullAllSafe] OK, pulled ${pulled} keys`);
  return { ok: true, count: pulled };
  } catch (e) {
@@ -4715,6 +4752,11 @@ function deleteEmployee(id) {
  if (!emp) return;
  if (!confirm(` ยืนยันการลบพนักงาน "${emp.firstName} ${emp.lastName}" (${emp.id})?\n\nข้อมูลที่จะถูกลบ:\n• ข้อมูลพนักงาน\n• คำขอลา/OT/สะสมวันหยุด/งานนอกสถานที่ของพนักงาน\n• ข้อมูลการเข้างาน\n• ประวัติสลิปเงินเดือน\n\nการลบไม่สามารถย้อนกลับได้!`)) return;
 
+ // v1.4.23: add tombstone BEFORE removing — prevents resurrection by stale devices
+ const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
+ tombstones.push({ id, deletedAt: new Date().toISOString(), deletedBy: currentUser?.id });
+ localStorage.setItem('hr_deletedEmployeeIds', JSON.stringify(tombstones));
+ if (cloudSync) DB._cloudUpsert('deletedEmployeeIds', tombstones);
  // Cascade delete
  DB.save('employees', DB.load('employees').filter(e => e.id !== id));
  DB.save('leaveRequests', DB.load('leaveRequests').filter(r => r.employeeId !== id));

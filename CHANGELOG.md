@@ -6,6 +6,93 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.23] — 2026-07-01
+
+**P0 CRITICAL — Employees Anti-Resurrection + Tombstone System**
+
+### Root Cause (H1 Confirmed via Debug Mantra)
+พนักงานที่เพิ่มใหม่หายไปหลัง 30 นาที + พนักงานที่ลบแล้วกลับมา
+
+**Mechanism — REPLACE Semantic (same class as v1.4.18 shift import):**
+```
+9 places save employees array with REPLACE:
+  Line 1186, 1220, 1267, 4719, 4898, 4915, 5020, 5036, 9785
+All use DB.save('employees', wholeArray) → last-writer-wins
+```
+
+**Trigger examples:**
+```
+Case 1 (new employee lost):
+  Desktop A: add employee X → cloud has X
+  Device B (stale local without X): any employee action
+  → DB.save pushes local without X → cloud loses X ❌
+
+Case 2 (deleted resurrected):
+  Admin A: delete employee Y → cloud without Y
+  Device B (stale local with Y): any employee action
+  → DB.save pushes local with Y → cloud gets Y back ❌
+```
+
+### Fix — 2 Defense Layers
+
+**Layer 1: Anti-Resurrection Guard ใน `_cloudUpsert`**
+```js
+if (key === 'employees' && Array.isArray(val)) {
+  const cloudEmps = await getCloud('employees');
+  if (cloudEmps.length > val.length) {
+    // Check tombstones — distinguish intentional delete from stale-missing
+    const tombs = getTombstones();
+    const accidentalMissing = cloud - local - tombs;
+    if (accidentalMissing.length > 0) {
+      val = [...val, ...accidentalMissing];  // MERGE BACK
+      toast('ป้องกันการลบพนักงานผิดพลาด: กู้ N คนจาก cloud');
+    }
+  }
+}
+```
+
+**Layer 2: Tombstone System (`hr_deletedEmployeeIds`)**
+- เมื่อ Admin ลบพนักงาน → เพิ่ม `{id, deletedAt, deletedBy}` เข้า tombstone list
+- Tombstones sync ผ่าน cloud (เห็นทุก device)
+- Cloud pull → apply tombstones → remove deleted employees จาก local
+- ป้องกัน stale device push resurrect
+
+```js
+// New deletion flow
+tombstones.push({ id, deletedAt: '2026-07-01T...', deletedBy: 'ADMIN001' });
+DB.save('deletedEmployeeIds', tombstones);
+DB.save('employees', filtered);
+
+// On pull
+pullResult = pullCloud();
+applyTombstones();  // remove deleted from local, prevent resurrection
+```
+
+### Effect
+
+**Case 1 (add):** Anti-resurrection merges back missing IDs → new employees ปลอดภัย ✓  
+**Case 2 (delete):** Tombstones ensure deletes persist across all devices ✓
+
+### Backward Compat
+- Devices ที่มี v1.4.23 → auto-create tombstone list เมื่อ delete
+- Devices เก่า (pre-1.4.23) ที่ยังไม่ update → protection ยังทำงาน (guard อยู่ที่ upsert level)
+- Existing employees ไม่กระทบ
+
+### Console Diagnostic
+```
+[EMP-SAFETY v1.4.23] Cloud has N, local M. Merging X accidental-missing back: [id1, id2]
+[cloudPullAllSafe] Applied N tombstone(s), removing deleted employees
+```
+
+### Toast Notification
+```
+✓ ป้องกันการลบพนักงานผิดพลาด: กู้ 2 คนจาก cloud
+```
+
+Users จะเห็น auto-recovery ตอน stale device sync
+
+---
+
 ## [1.4.22] — 2026-07-01
 
 **ลากิจ Editable Per Employee — Revert v1.4.14 hard-lock**

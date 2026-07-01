@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.20</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.19</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.20';
+const APP_VERSION = '1.4.19';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1183,29 +1183,6 @@ function migrateLeaveQuota_v1_4_14() {
  });
  if (stripped > 0) {
  console.log(`[migrate v1.4.14] stripped personal override on ${stripped} employees`);
- DB.save('employees', emps);
- }
-}
-
-// v1.4.20: mark specific employees as exempt from attendance tracking
-// (CEO / คนสวน / แม่บ้าน — ไม่ต้องสแกน ไม่ขึ้นรายงาน)
-function migrateAttendanceExempt_v1_4_20() {
- const emps = DB.load('employees', []);
- if (!emps.length) return;
- const exemptIds = new Set([
- '390101001', // CEO
- '670101003', // คนสวน
- '680111001' // แม่บ้าน
- ]);
- let changed = 0;
- emps.forEach(e => {
- if (exemptIds.has(e.id) && !e.exemptFromAttendance) {
- e.exemptFromAttendance = true;
- changed++;
- }
- });
- if (changed > 0) {
- console.log(`[migrate v1.4.20] set exemptFromAttendance on ${changed} employees (CEO/gardener/housekeeper)`);
  DB.save('employees', emps);
  }
 }
@@ -1714,15 +1691,6 @@ function renderNav() {
  if (canSeePayroll) {
   html += navLink('payroll-export', 'ส่งออก Payroll');
  }
- }
-
- // v1.4.20: Attendance module — Admin หรือคนที่ได้ toggle canUploadAttendance/canViewAttendanceReport
- const canUploadAtt = role === 'admin' || currentUser.canUploadAttendance;
- const canViewAttReport = role === 'admin' || currentUser.canViewAttendanceReport;
- if (role !== 'admin' && (canUploadAtt || canViewAttReport)) {
- html += '<div class="nav-section">Attendance (สิทธิ์พิเศษ)</div>';
- if (canUploadAtt) html += navLink('upload-attendance', 'อัปโหลดเวลาเข้างาน');
- if (canViewAttReport) html += navLink('attendance-report', 'รายงานเข้างาน');
  }
 
  if (role === 'admin') {
@@ -4785,17 +4753,6 @@ function showEmployeeForm(id) {
  <div style="margin-top:8px;">
  <label class="ios-toggle"><input type="checkbox" id="empExemptLate" ${emp?.exemptFromLateDeduction ? 'checked' : ''}><span>ยกเว้นกฎหักเงินมาสาย (ไม่หักเงินคนนี้แม้มาสาย)</span></label>
  </div>
- <div style="margin-top:8px;">
- <label class="ios-toggle"><input type="checkbox" id="empExemptAttendance" ${emp?.exemptFromAttendance ? 'checked' : ''}><span>ละเว้นการพิจารณาเวลาเข้า-ออก (ไม่ต้องสแกน · ไม่ขึ้นในรายงานเข้างาน) <small style="color:var(--gray-500);">— สำหรับ CEO/คนสวน/แม่บ้าน ฯลฯ</small></span></label>
- </div>
- <hr style="margin:12px 0;border:none;border-top:1px dashed var(--gray-300);">
- <div style="font-size:12px;color:var(--gray-500);margin-bottom:6px;">🔐 สิทธิ์พิเศษ (Attendance Module)</div>
- <div style="margin-top:6px;">
- <label class="ios-toggle"><input type="checkbox" id="empCanUploadAttendance" ${emp?.canUploadAttendance ? 'checked' : ''}><span>อัปโหลดเวลาเข้างานได้ (สิทธิ์เหมือน Admin)</span></label>
- </div>
- <div style="margin-top:8px;">
- <label class="ios-toggle"><input type="checkbox" id="empCanViewAttendanceReport" ${emp?.canViewAttendanceReport ? 'checked' : ''}><span>ดูรายงานเข้างานได้ (เห็นทั้งระบบ ไม่ใช่แค่ทีม)</span></label>
- </div>
  </div>
  </div>
  <div class="form-row">
@@ -4858,9 +4815,6 @@ function submitEmployee(e, editId) {
  isMaintenance: document.getElementById('empMaintenance')?.checked || false,
  isStationeryAdmin: document.getElementById('empStationeryAdmin')?.checked || false,
  exemptFromLateDeduction: document.getElementById('empExemptLate')?.checked || false,
- exemptFromAttendance: document.getElementById('empExemptAttendance')?.checked || false,
- canUploadAttendance: document.getElementById('empCanUploadAttendance')?.checked || false,
- canViewAttendanceReport: document.getElementById('empCanViewAttendanceReport')?.checked || false,
  vacationQuota: 6
  };
 
@@ -5032,13 +4986,6 @@ function resetLeaveQuotaOverride(id) {
 // UPLOAD ATTENDANCE FILE (Admin)
 // ============================================================
 function renderUploadAttendance() {
- // v1.4.20 permission guard: Admin หรือคนที่ได้ toggle canUploadAttendance
- if (currentUser.role !== 'admin' && !currentUser.canUploadAttendance) {
- document.getElementById('mainContent').innerHTML = `
- <div class="page-header"><h1>อัปโหลดเวลาเข้างาน</h1></div>
- <div class="alert alert-error">🔒 คุณไม่มีสิทธิ์เข้าถึงเมนูนี้<br><small>ให้ Admin เปิด "อัปโหลดเวลาเข้างานได้" ในหน้าแก้ไขพนักงาน</small></div>`;
- return;
- }
  try {
  let records;
  try {
@@ -5693,20 +5640,12 @@ function mergeApprovedTimeCertForMonth(records, monthStr) {
 
 function confirmUploadAttendance() {
  if (!_attendanceBuffer) return;
- // v1.4.20 permission guard (defense-in-depth)
- if (currentUser.role !== 'admin' && !currentUser.canUploadAttendance) {
- toast('🔒 ไม่มีสิทธิ์อัปโหลด — Admin ต้องเปิดสิทธิ์ให้ก่อน', 'error');
- return;
- }
  const existing = DB.load('attendanceRecords');
+ // Remove existing records for the same dates+employees (to avoid duplicates)
  const newRecords = _attendanceBuffer;
  const keys = new Set(newRecords.map(r => `${r.employeeCode}|${r.date}`));
  const filtered = existing.filter(r => !keys.has(`${r.employeeCode}|${r.date}`));
  DB.save('attendanceRecords', [...filtered, ...newRecords]);
- // v1.4.20 audit log — ติดตามการ upload โดย non-admin
- const uniqueDates = [...new Set(newRecords.map(r => r.date))].sort();
- auditLog('attendance-upload', 'attendance', uniqueDates.join(','),
- `${currentUser.role === 'admin' ? 'Admin' : 'Delegate'} upload · ${newRecords.length} records · ${uniqueDates.length} วัน`);
  _attendanceBuffer = null;
  toast(`บันทึก ${newRecords.length} records สำเร็จ`);
  renderPage();
@@ -5738,13 +5677,6 @@ function clearAttendanceByDate(d) {
 let _attReportDate = today();
 
 function renderAttendanceReport() {
- // v1.4.20 permission guard: Admin หรือคนที่ได้ toggle canViewAttendanceReport
- if (currentUser.role !== 'admin' && !currentUser.canViewAttendanceReport) {
- document.getElementById('mainContent').innerHTML = `
- <div class="page-header"><h1>รายงานเข้างาน</h1></div>
- <div class="alert alert-error">🔒 คุณไม่มีสิทธิ์เข้าถึงเมนูนี้<br><small>ให้ Admin เปิด "ดูรายงานเข้างานได้" ในหน้าแก้ไขพนักงาน</small></div>`;
- return;
- }
  try {
  let records;
  try {
@@ -5801,8 +5733,7 @@ function renderAttendanceReport() {
  // Tigersoft export contains only rows for employees who scanned — absent people are NOT in file.
  // Before: `absent = uniqueDayRecords.filter(r => !r.checkIn)` → always 0 (Tigersoft never exports no-scan rows)
  // After: `absent = active employees - present - autoAbsent - onLeave`
- // v1.4.20: also exclude employees with exemptFromAttendance flag (CEO, คนสวน, แม่บ้าน — ไม่ต้องสแกน)
- const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin' && !e.exemptFromAttendance);
+ const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin');
  const presentIds = new Set(present.map(r => r.employeeCode || r.employeeId));
  const autoAbsentIds = new Set(autoAbsent.map(r => r.employeeCode || r.employeeId));
  const leaveIds = new Set(leaveOnDate.map(r => r.employeeId));
@@ -9636,4 +9567,150 @@ function submitStationeryTx(e, type) {
 }
 
 function showTxHistory() {
- const tx = DB.load('stationeryTx', []).slice().sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt
+ const tx = DB.load('stationeryTx', []).slice().sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
+ const body = `<div style="max-height:500px;overflow-y:auto;">
+  ${tx.length ? `<table><thead><tr><th>เวลา</th><th>รายการ</th><th>ประเภท</th><th>จำนวน</th><th>โดย</th></tr></thead>
+  <tbody>${tx.slice(0, 100).map(t => {
+   const u = getEmployee(t.userId);
+   return `<tr><td>${formatDateTime(t.createdAt)}</td><td>${t.itemName}</td><td><span class="status-badge ${t.type==='in'?'status-approved':'status-rejected'}">${t.type==='in'?'รับเข้า':'เบิก'}</span></td><td>${t.qty}</td><td>${u ? u.firstName : '-'}</td></tr>`;
+  }).join('')}</tbody></table>` : '<div class="empty-state">ยังไม่มีรายการ</div>'}
+ </div>`;
+ showModal('ประวัติเบิก-รับเข้า', body, '<button class="btn btn-secondary" onclick="closeModal()">ปิด</button>');
+}
+
+// ============================================================
+// INIT
+// ============================================================
+document.addEventListener('DOMContentLoaded', async () => {
+ // ============================================================
+ // STARTUP SEQUENCE (CRITICAL — race conditions previously caused data loss)
+ // Rules:
+ // 1. Pull cloud first — cloud is authoritative
+ // 2. Seed locally ONLY if cloud is truly empty AND we haven't initialized
+ // 3. DO NOT cloudPushAll on every load — it overwrites cloud with stale local
+ // 4. Setup realtime AFTER initial pull so we don't miss events
+ // ============================================================
+ let pullResult = { ok: false, count: 0 };
+ if (cloudSync) {
+ const loadingDiv = document.createElement('div');
+ loadingDiv.id = 'cloudLoading';
+ loadingDiv.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#1F4E79;color:white;padding:8px;text-align:center;z-index:9999;font-size:13px;';
+ loadingDiv.innerHTML = ' กำลังโหลดข้อมูลจาก Cloud...';
+ document.body.appendChild(loadingDiv);
+
+ pullResult = await DB.cloudPullAllSafe();
+ setupCloudRealtime();
+
+ if (pullResult.ok) {
+ loadingDiv.innerHTML = pullResult.count > 0 ? ` ซิงค์จาก Cloud สำเร็จ (${pullResult.count} รายการ)` : ' Cloud พร้อม (ว่าง)';
+ loadingDiv.style.background = '#16a34a';
+ } else {
+ loadingDiv.innerHTML = ` ⚠ ดึงข้อมูลจาก Cloud ไม่สำเร็จ - ใช้ข้อมูลในเครื่อง (offline mode)`;
+ loadingDiv.style.background = '#f59e0b';
+ console.error('[Startup] Cloud pull failed:', pullResult.reason);
+ }
+ setTimeout(() => loadingDiv.remove(), 3000);
+ }
+
+ const alreadyInitialized = DB.load('initialized', false);
+ if (!alreadyInitialized) {
+ if (cloudSync && !pullResult.ok) {
+ // Cloud pull failed AND localStorage is empty → DANGEROUS to seed
+ // because we might overwrite real data when cloud comes back online.
+ // Show warning and stop.
+ alert('⚠ Cloud sync ไม่สำเร็จ และเครื่องไม่มีข้อมูลเดิม\n\nกรุณาเช็คอินเทอร์เน็ต แล้ว refresh หน้าใหม่');
+ return;
+ }
+ // Safe to seed: cloud is truly empty OR cloud sync disabled
+ seedData();
+ // Push initial seed up to cloud — ONLY this one time, when truly fresh install
+ if (cloudSync) {
+ console.log('[Startup] Fresh install detected — pushing initial seed to cloud');
+ await DB.cloudPushAll();
+ }
+ }
+ // IMPORTANT: NO unconditional cloudPushAll() here.
+ // Every save goes through DB.save → _cloudUpsert. That's sufficient.
+
+ // v1.4.10 settings migration: update old defaults to new defaults (idempotent)
+ migrateSettings_v1_4_10();
+ // v1.4.14: hard-reset personal leave = 3 for everyone (legal standard)
+ migrateLeaveQuota_v1_4_14();
+
+ if (restoreSession()) {
+ showApp();
+ }
+
+ document.getElementById('loginForm').addEventListener('submit', e => {
+ e.preventDefault();
+ const id = document.getElementById('loginEmpId').value.trim().toUpperCase();
+ const pass = document.getElementById('loginPassword').value;
+ if (login(id, pass)) {
+ // Check if force password change is required
+ if (currentUser.forceChangePassword) {
+ showChangePasswordPage();
+ } else {
+ showApp();
+ }
+ } else {
+ document.getElementById('loginAlert').innerHTML = '<div class="alert alert-error">รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง</div>';
+ }
+ });
+
+ document.getElementById('changePassForm').addEventListener('submit', e => {
+ e.preventDefault();
+ const p1 = document.getElementById('newPass1').value;
+ const p2 = document.getElementById('newPass2').value;
+ const alertDiv = document.getElementById('changePassAlert');
+
+ if (p1.length < 4) {
+ alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านต้องอย่างน้อย 4 ตัวอักษร</div>';
+ return;
+ }
+ if (p1 !== p2) {
+ alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านไม่ตรงกัน</div>';
+ return;
+ }
+
+ // Save new password
+ const emps = DB.load('employees');
+ const emp = emps.find(x => x.id === currentUser.id);
+ emp.password = p1;
+ emp.forceChangePassword = false;
+ DB.save('employees', emps);
+
+ // Update current user
+ currentUser.password = p1;
+ currentUser.forceChangePassword = false;
+ sessionStorage.setItem('hr_currentUser', JSON.stringify(currentUser));
+
+ alertDiv.innerHTML = '<div class="alert alert-success"> เปลี่ยนรหัสผ่านสำเร็จ</div>';
+ setTimeout(() => {
+ document.getElementById('changePasswordPage').classList.add('hidden');
+ showApp();
+ }, 1200);
+ });
+});
+
+function showChangePasswordPage() {
+ document.getElementById('loginPage').classList.add('hidden');
+ document.getElementById('changePasswordPage').classList.remove('hidden');
+ document.getElementById('changePassAlert').innerHTML = '';
+ document.getElementById('newPass1').value = '';
+ document.getElementById('newPass2').value = '';
+}
+
+function showApp() {
+ document.getElementById('loginPage').classList.add('hidden');
+ document.getElementById('app').classList.remove('hidden');
+ document.getElementById('userName').textContent = currentUser.firstName + ' ' + currentUser.lastName;
+ document.getElementById('userEmpId').textContent = currentUser.id + ' • ' + currentUser.department;
+ const roleNames = {employee: 'พนักงาน', manager: 'หัวหน้างาน', accountant: 'บัญชี', admin: 'แอดมิน HR'};
+ document.getElementById('userRole').textContent = roleNames[currentUser.role];
+ // Default landing
+ const defaultPage = currentUser.role === 'admin' ? 'dashboard' : 'dashboard-overview';
+ navigate(defaultPage);
+}
+</script>
+</body>
+</html>

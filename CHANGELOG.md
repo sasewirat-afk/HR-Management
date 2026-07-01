@@ -6,86 +6,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
-## [1.4.20] — 2026-06-30
-
-**Per-user Toggles — Attendance Delegation + Exempt Tracking**
-
-### Added — Toggle "ละเว้นการพิจารณาเวลาเข้า-ออก"
-- Field ใหม่: `employee.exemptFromAttendance` (default: false)
-- พนักงานที่ toggle ON:
- - **ไม่ต้องสแกน** ในระบบ Tigersoft
- - **ไม่ขึ้นในรายงานเข้างาน** (tab "ไม่มา" จะไม่แสดง)
- - **ไม่นับใน stat "จากพนักงาน X คน"**
-- Use case: CEO, คนสวน, แม่บ้าน, พนักงานพิเศษ ที่ไม่ต้องผูกกับ time clock
-
-### Migration `migrateAttendanceExempt_v1_4_20()`
-Auto-set 3 IDs = true (idempotent):
-- `390101001` — CEO
-- `670101003` — คนสวน
-- `680111001` — แม่บ้าน
-
-Admin สามารถปรับเพิ่ม/ลด ผ่านหน้าแก้ไขพนักงานได้ทีหลัง
-
-### Effect on v1.4.19 fix
-```js
-// v1.4.19: derive absent from active employees master
-const activeEmps = DB.load('employees').filter(e =>
-  e.active && e.role !== 'admin' && !e.exemptFromAttendance   // ← + v1.4.20
-);
-```
-Chain: `active` + `not admin` + `not exempt` → ที่เหลือคือคนต้องสแกน
-
----
-
-**Per-user Toggle — Attendance Upload/Report Delegation**
-
-### Added
-- **Toggle "อัปโหลดเวลาเข้างานได้"** (per employee) — Admin เปิดให้ non-admin user ใช้เมนู "อัปโหลดเวลาเข้างาน" ได้
-- **Toggle "ดูรายงานเข้างานได้"** (per employee) — Admin เปิดให้ non-admin user ใช้เมนู "รายงานเข้างาน" ได้
-- อยู่ในหน้า "แก้ไขพนักงาน" ใต้ section "🔐 สิทธิ์พิเศษ (Attendance Module)"
-
-### Data Model
-```js
-employee.canUploadAttendance:   boolean (default: false)
-employee.canViewAttendanceReport: boolean (default: false)
-```
-Backward compat: undefined = false = ไม่เปลี่ยนพฤติกรรมเดิม
-
-### Navigation Changes
-```js
-// Menu แสดงในกลุ่มใหม่ "Attendance (สิทธิ์พิเศษ)" สำหรับ non-admin ที่ได้ toggle
-if (role !== 'admin' && (canUploadAtt || canViewAttReport)) {
-  html += 'Attendance (สิทธิ์พิเศษ)';
-  if (canUploadAtt) html += 'อัปโหลดเวลาเข้างาน';
-  if (canViewAttReport) html += 'รายงานเข้างาน';
-}
-```
-Admin section ยังคงเมนูเดิมอยู่ — ไม่มี regression
-
-### Defense-in-depth Guards
-1. **Menu visibility** — navLink แสดงต่อเมื่อ toggle ON
-2. **Render function guard** — `renderUploadAttendance/renderAttendanceReport` เช็คสิทธิ์ก่อน render
-3. **Action guard** — `confirmUploadAttendance()` re-check สิทธิ์ก่อน save
-4. **Audit log** — ทุกการ upload บันทึกเป็น `attendance-upload` event พร้อม role ของผู้กระทำ
-
-### Permission Denied UI
-```html
-🔒 คุณไม่มีสิทธิ์เข้าถึงเมนูนี้
-ให้ Admin เปิด "..." ในหน้าแก้ไขพนักงาน
-```
-
-### Use Case
-- Admin ต้องการมอบหมายงาน "อัปโหลด attendance" ให้ HR Officer หรือ Manager
-- Admin ต้องการให้ Manager เห็นรายงาน attendance ระบบทั้งหมด (ไม่แค่ทีม)
-- ไม่ต้องยกระดับ role → ยกเป็น Admin — ปลอดภัยกว่า
-
-### Scope Note
-เมื่อได้ toggle "canViewAttendanceReport" → เห็น **all employees' attendance** (เหมือน Admin)
-- ต่างจากเมนู "รายงานทีม" (v1.4.17) ที่ scope by team
-- Admin ตัดสินใจตามความไว้ใจ
-
----
-
 ## [1.4.19] — 2026-06-30
 
 **P1 Fix — Attendance Report: Absent Detection**
@@ -1049,4 +969,132 @@ Stable baseline ของระบบ HR Management System ที่ใช้ง
 
 #### Accountant / Finance
 - ส่งออก Payroll ทั้งบริษัทในเดือนเดียว
-- คำนวณอัตโนมัติ: เงินเดือน + OT (×1.5) + Commission − หักมาสาย − ลาไม่รับ
+- คำนวณอัตโนมัติ: เงินเดือน + OT (×1.5) + Commission − หักมาสาย − ลาไม่รับ − ประกันสังคม
+- ประกันสังคมตามกฎหมายไทย (5% ฐาน 1,650–15,000 บาท)
+- คลังเครื่องเขียน (เบิก/รับเข้า/แจ้งเตือนสต๊อก)
+
+#### Common Features
+- แจ้งซ่อมอาคาร (Maintenance Tickets) — ส่งให้ผู้ที่ติด flag `isMaintenance`
+- ประกาศ & นโยบาย + ระบบ Acknowledgement
+- ระบบแจ้งเตือน In-app (Notification Bell + Badge)
+
+### Added — Roles & Permissions
+
+- **4 Roles:** Employee / Manager / Accountant / Admin
+- **Flag เสริม:**
+  - `isMaintenance` — ผู้ดูแลซ่อมบำรุง (รับ ticket แจ้งซ่อม)
+  - `isStationeryAdmin` — Manager ที่ดูแลคลังเครื่องเขียนเพิ่มได้
+  - `exemptFromLateDeduction` — ยกเว้นกฎหักเงินมาสายรายคน
+
+### Added — Multi-Tenant
+
+- รองรับ 3 บริษัทในระบบเดียว: **Masterpiece / Crochet / ConceptOne**
+- โลโก้และตราบริษัทแยกกันต่อบริษัท
+- กรองข้อมูลตามบริษัทในรายงาน
+
+### Added — Export Functions
+
+#### Excel (.xlsx) ผ่าน SheetJS
+- **จัดการพนักงาน** → 16 columns ครบฟิลด์ พร้อม respect search filter
+- **รายงานเข้างาน** → 4 sheets (มาทำงาน, ลาหยุด, ไม่มา, สรุป)
+- **ส่งออก Payroll** → 18 columns + แถวรวม
+- **Dashboard ผู้บริหาร** → 6 sheets (KPI, ตามบริษัท, ตามแผนก, การลา, พนักงานเข้าใหม่, Top Performers)
+- **ตารางลงกะงาน** → 3 sheets (Matrix, สรุปต่อคน, สรุปต่อวัน) พร้อม freeze panes
+
+#### PNG + Share (html2canvas + Web Share API)
+- สลิปเงินเดือนรายบุคคล
+- รายงานเข้างานรายวัน (รวมทุก tab ในรูปเดียว)
+- Dashboard ผู้บริหาร snapshot
+- ตารางลงกะงาน
+- Fallback: Clipboard API → Modal preview สำหรับ browser เก่า
+
+#### CSV
+- รายงานทุกประเภท Export UTF-8 BOM (เปิด Excel ภาษาไทยไม่ garbled)
+
+### Added — Design & UX
+
+- **Glassmorphism Design Language** (iOS 26 inspired) + iOS System Font Stack (SF Pro Display + Sarabun)
+- **Responsive Mobile-first** — Sidebar drawer พร้อม hamburger menu
+- **iOS-style Toggle Switches** สำหรับ checkbox ทั้งหมด
+- **Role Badges** สี navy สอดคล้องกับธีมเมนู (กลืนกับ sidebar ใน sidebar context)
+- Notification Badge แบบ real-time
+
+### Added — Cloud Sync (Optional)
+
+- รองรับ Supabase Realtime DB
+- เมื่อ user 1 คนแก้ข้อมูล → user อื่นเห็นทันที (cross-browser / cross-device)
+- เก็บใน localStorage เป็น primary + sync ไป cloud ในเบื้องหลัง
+- Real-time subscription auto-refresh
+
+### Added — Search & Filter
+
+- **Search Bar หน้าจัดการพนักงาน** — ค้นด้วย ชื่อ / นามสกุล / รหัสพนักงาน (debounce 150ms)
+- กรองวันที่ในทุกรายงาน
+
+### Security & Permissions
+
+- Audit Log บันทึก: login, create, update, delete, approve, reject
+- Role-based Access Control 4 ระดับ
+- **เพิ่ม/แก้ไข/ลบ รายการลา** — จำกัดเฉพาะ Admin (Internal Control)
+- เมื่อ Admin บันทึกการลา → อนุมัติอัตโนมัติ + แจ้งเตือนพนักงาน
+
+### Localization
+
+- ภาษาไทยเต็มรูปแบบ + Buddhist Era (พ.ศ. +543) + DD/MM/YYYY
+- รองรับชื่อพนักงานพม่า (กรณีไม่มี นามสกุล)
+
+### Tech Stack
+
+- Single HTML File (~5,900 บรรทัด)
+- HTML5 + CSS3 + Vanilla JavaScript
+- localStorage (Primary) + Supabase Realtime DB (Optional)
+- **CDN Libraries:** SheetJS 0.18.5, html2canvas 1.4.1, Supabase JS v2
+- Deploy via Vercel (auto-deploy from GitHub)
+
+### Fixed (during pre-1.0 stabilization)
+
+- **Cloud sync corruption** — `localStorage` เคยถูกเขียนเป็นสตริง `"undefined"` เมื่อ realtime payload ส่ง `value=undefined` จาก Supabase. แก้โดยเพิ่ม guard ใน 4 จุด (DB.load, DB.save, setupCloudRealtime, cloudPullAll) + เตือนเมื่อ payload > 900 KB
+- **ค่าหักมาสาย 0 ไม่ทำงาน** — เปลี่ยน `settings.lateDeduction || 50` เป็น `?? 50` เพื่อให้ค่า 0 ใช้งานได้
+- **Diagnostic guards** บน `renderUploadAttendance` + `renderAttendanceReport` — แสดง error stack บนหน้าจอ + ปุ่ม "รีเซ็ตข้อมูล Attendance"
+
+### Removed
+
+- เมนู "หน้าหลัก" (ซ้ำกับ "แดชบอร์ดของฉัน")
+- เมนู "สลิปเงินเดือน" (ซ้ำกับ "ส่งออก Payroll")
+- Stat card "ตำแหน่งเปิดรับ" บน Dashboard ผู้บริหาร (placeholder ที่ยังไม่ implement)
+- Emoji ในเมนูทั้งหมด (ปรับให้เป็น corporate look)
+
+### Known Limitations
+
+- **localStorage จำกัด ~5–10 MB** — ข้อมูล attendance ขนาดใหญ่ (>9,000 records) อาจใกล้ limit
+- **Supabase row size limit ~1 MB** — payload ใหญ่อาจ sync ไม่สำเร็จ (มี warning แจ้ง)
+- Password เก็บแบบ plain text (ไม่เหมาะ public production)
+- ไม่มี endDate ใน employee schema → คำนวณ Headcount MoM/YoY ย้อนหลังไม่แม่น
+- อนุมัติเพียง 1 ขั้น (single-level) — ไม่รองรับ multi-level approval workflow
+
+### Roadmap (post-1.0)
+
+- **v1.1** — Password hashing (bcrypt), Soft Delete employees, Delegation, Auto-Reminder
+- **v1.2** — `endDate` field + Headcount MoM/YoY widget on Exec Dashboard
+- **v1.3** — Multi-level approval workflow + Bulk approval
+- **v1.4** — Tax withholding calculation + Provident Fund + Bonus
+- **v2.0** — Refactor to modular components + Test Suite + SSO
+
+---
+
+## Versioning Convention
+
+- **MAJOR** (X.0.0) — Breaking changes (DB schema migration ที่ต้อง manual intervention)
+- **MINOR** (1.X.0) — New features (backward-compatible)
+- **PATCH** (1.0.X) — Bug fixes only
+
+## Release Process
+
+```bash
+# Update CHANGELOG.md และ APP_VERSION ใน index.html
+git add CHANGELOG.md index.html
+git commit -m "Release vX.Y.Z"
+git tag vX.Y.Z
+git push --tags
+# Vercel auto-deploy
+```

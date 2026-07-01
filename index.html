@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.19</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.20</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.19';
+const APP_VERSION = '1.4.20';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1187,6 +1187,29 @@ function migrateLeaveQuota_v1_4_14() {
  }
 }
 
+
+// v1.4.20: mark specific employees as exempt from attendance tracking
+// (CEO / คนสวน / แม่บ้าน — ไม่ต้องสแกน ไม่ขึ้นรายงาน)
+function migrateAttendanceExempt_v1_4_20() {
+ const emps = DB.load('employees', []);
+ if (!emps.length) return;
+ const exemptIds = new Set([
+ '390101001', // CEO
+ '670101003', // คนสวน
+ '680111001' // แม่บ้าน
+ ]);
+ let changed = 0;
+ emps.forEach(e => {
+ if (exemptIds.has(e.id) && !e.exemptFromAttendance) {
+ e.exemptFromAttendance = true;
+ changed++;
+ }
+ });
+ if (changed > 0) {
+ console.log(`[migrate v1.4.20] set exemptFromAttendance on ${changed} employees (CEO/gardener/housekeeper)`);
+ DB.save('employees', emps);
+ }
+}
 function seedData() {
  if (DB.load('initialized', false)) return;
 
@@ -1691,6 +1714,15 @@ function renderNav() {
  if (canSeePayroll) {
   html += navLink('payroll-export', 'ส่งออก Payroll');
  }
+ }
+
+ // v1.4.20: Attendance module — Admin หรือคนที่ได้ toggle canUploadAttendance/canViewAttendanceReport
+ const canUploadAtt = role === 'admin' || currentUser.canUploadAttendance;
+ const canViewAttReport = role === 'admin' || currentUser.canViewAttendanceReport;
+ if (role !== 'admin' && (canUploadAtt || canViewAttReport)) {
+ html += '<div class="nav-section">Attendance (สิทธิ์พิเศษ)</div>';
+ if (canUploadAtt) html += navLink('upload-attendance', 'อัปโหลดเวลาเข้างาน');
+ if (canViewAttReport) html += navLink('attendance-report', 'รายงานเข้างาน');
  }
 
  if (role === 'admin') {
@@ -4753,6 +4785,17 @@ function showEmployeeForm(id) {
  <div style="margin-top:8px;">
  <label class="ios-toggle"><input type="checkbox" id="empExemptLate" ${emp?.exemptFromLateDeduction ? 'checked' : ''}><span>ยกเว้นกฎหักเงินมาสาย (ไม่หักเงินคนนี้แม้มาสาย)</span></label>
  </div>
+ <div style="margin-top:8px;">
+ <label class="ios-toggle"><input type="checkbox" id="empExemptAttendance" ${emp?.exemptFromAttendance ? 'checked' : ''}><span>ละเว้นการพิจารณาเวลาเข้า-ออก (ไม่ต้องสแกน · ไม่ขึ้นในรายงานเข้างาน) <small style="color:var(--gray-500);">— สำหรับ CEO/คนสวน/แม่บ้าน ฯลฯ</small></span></label>
+ </div>
+ <hr style="margin:12px 0;border:none;border-top:1px dashed var(--gray-300);">
+ <div style="font-size:12px;color:var(--gray-500);margin-bottom:6px;">🔐 สิทธิ์พิเศษ (Attendance Module)</div>
+ <div style="margin-top:6px;">
+ <label class="ios-toggle"><input type="checkbox" id="empCanUploadAttendance" ${emp?.canUploadAttendance ? 'checked' : ''}><span>อัปโหลดเวลาเข้างานได้ (สิทธิ์เหมือน Admin)</span></label>
+ </div>
+ <div style="margin-top:8px;">
+ <label class="ios-toggle"><input type="checkbox" id="empCanViewAttendanceReport" ${emp?.canViewAttendanceReport ? 'checked' : ''}><span>ดูรายงานเข้างานได้ (เห็นทั้งระบบ ไม่ใช่แค่ทีม)</span></label>
+ </div>
  </div>
  </div>
  <div class="form-row">
@@ -4815,6 +4858,9 @@ function submitEmployee(e, editId) {
  isMaintenance: document.getElementById('empMaintenance')?.checked || false,
  isStationeryAdmin: document.getElementById('empStationeryAdmin')?.checked || false,
  exemptFromLateDeduction: document.getElementById('empExemptLate')?.checked || false,
+ exemptFromAttendance: document.getElementById('empExemptAttendance')?.checked || false,
+ canUploadAttendance: document.getElementById('empCanUploadAttendance')?.checked || false,
+ canViewAttendanceReport: document.getElementById('empCanViewAttendanceReport')?.checked || false,
  vacationQuota: 6
  };
 
@@ -4986,6 +5032,13 @@ function resetLeaveQuotaOverride(id) {
 // UPLOAD ATTENDANCE FILE (Admin)
 // ============================================================
 function renderUploadAttendance() {
+ // v1.4.20 permission guard: Admin หรือคนที่ได้ toggle canUploadAttendance
+ if (currentUser.role !== 'admin' && !currentUser.canUploadAttendance) {
+ document.getElementById('mainContent').innerHTML = `
+ <div class="page-header"><h1>อัปโหลดเวลาเข้างาน</h1></div>
+ <div class="alert alert-error">🔒 คุณไม่มีสิทธิ์เข้าถึงเมนูนี้<br><small>ให้ Admin เปิด "อัปโหลดเวลาเข้างานได้" ในหน้าแก้ไขพนักงาน</small></div>`;
+ return;
+ }
  try {
  let records;
  try {
@@ -5640,12 +5693,20 @@ function mergeApprovedTimeCertForMonth(records, monthStr) {
 
 function confirmUploadAttendance() {
  if (!_attendanceBuffer) return;
+ // v1.4.20 permission guard (defense-in-depth)
+ if (currentUser.role !== 'admin' && !currentUser.canUploadAttendance) {
+ toast('🔒 ไม่มีสิทธิ์อัปโหลด — Admin ต้องเปิดสิทธิ์ให้ก่อน', 'error');
+ return;
+ }
  const existing = DB.load('attendanceRecords');
- // Remove existing records for the same dates+employees (to avoid duplicates)
  const newRecords = _attendanceBuffer;
  const keys = new Set(newRecords.map(r => `${r.employeeCode}|${r.date}`));
  const filtered = existing.filter(r => !keys.has(`${r.employeeCode}|${r.date}`));
  DB.save('attendanceRecords', [...filtered, ...newRecords]);
+ // v1.4.20 audit log — ติดตามการ upload โดย non-admin
+ const uniqueDates = [...new Set(newRecords.map(r => r.date))].sort();
+ auditLog('attendance-upload', 'attendance', uniqueDates.join(','),
+ `${currentUser.role === 'admin' ? 'Admin' : 'Delegate'} upload · ${newRecords.length} records · ${uniqueDates.length} วัน`);
  _attendanceBuffer = null;
  toast(`บันทึก ${newRecords.length} records สำเร็จ`);
  renderPage();
@@ -5677,6 +5738,13 @@ function clearAttendanceByDate(d) {
 let _attReportDate = today();
 
 function renderAttendanceReport() {
+ // v1.4.20 permission guard: Admin หรือคนที่ได้ toggle canViewAttendanceReport
+ if (currentUser.role !== 'admin' && !currentUser.canViewAttendanceReport) {
+ document.getElementById('mainContent').innerHTML = `
+ <div class="page-header"><h1>รายงานเข้างาน</h1></div>
+ <div class="alert alert-error">🔒 คุณไม่มีสิทธิ์เข้าถึงเมนูนี้<br><small>ให้ Admin เปิด "ดูรายงานเข้างานได้" ในหน้าแก้ไขพนักงาน</small></div>`;
+ return;
+ }
  try {
  let records;
  try {
@@ -5733,7 +5801,8 @@ function renderAttendanceReport() {
  // Tigersoft export contains only rows for employees who scanned — absent people are NOT in file.
  // Before: `absent = uniqueDayRecords.filter(r => !r.checkIn)` → always 0 (Tigersoft never exports no-scan rows)
  // After: `absent = active employees - present - autoAbsent - onLeave`
- const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin');
+ // v1.4.20: also exclude employees with exemptFromAttendance flag (CEO, คนสวน, แม่บ้าน — ไม่ต้องสแกน)
+ const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin' && !e.exemptFromAttendance);
  const presentIds = new Set(present.map(r => r.employeeCode || r.employeeId));
  const autoAbsentIds = new Set(autoAbsent.map(r => r.employeeCode || r.employeeId));
  const leaveIds = new Set(leaveOnDate.map(r => r.employeeId));
@@ -9636,6 +9705,8 @@ document.addEventListener('DOMContentLoaded', async () => {
  migrateSettings_v1_4_10();
  // v1.4.14: hard-reset personal leave = 3 for everyone (legal standard)
  migrateLeaveQuota_v1_4_14();
+ // v1.4.20: mark CEO/คนสวน/แม่บ้าน = exempt from attendance
+ migrateAttendanceExempt_v1_4_20();
 
  if (restoreSession()) {
  showApp();

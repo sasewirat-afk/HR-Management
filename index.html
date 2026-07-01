@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.23</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.24</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.23';
+const APP_VERSION = '1.4.24';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -945,6 +945,19 @@ const DB = {
  this._localDirty = this._localDirty || {};
  this._localDirty[key] = (this._localDirty[key] || 0) + 1;
  if (cloudSync) this._cloudUpsert(key, val);
+ },
+
+ // v1.4.24: Debug helper — clear tombstones manually (for stuck cases)
+ clearTombstones(id) {
+ const tombs = DB.load('deletedEmployeeIds', []);
+ if (id) {
+ const filtered = tombs.filter(t => t.id !== id);
+ DB.save('deletedEmployeeIds', filtered);
+ console.log(`[Tombstone] Cleared for ${id}. Total remaining: ${filtered.length}`);
+ } else {
+ DB.save('deletedEmployeeIds', []);
+ console.log('[Tombstone] All cleared');
+ }
  },
 
  // Debug helper — manually clear stuck dirty flags (callable from console)
@@ -1041,12 +1054,33 @@ const DB = {
  pulled++;
  });
  }
- // v1.4.23: Apply tombstones — remove employees that were deleted (prevents resurrection)
+ // v1.4.23 + v1.4.24: Apply tombstones smartly
+ // - If employee's _addedAt > tombstone's deletedAt → tombstone is stale (employee re-added) → clear it
+ // - Only remove employees whose tombstone is still valid (deletedAt >= their _addedAt)
  try {
  const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
  if (tombstones.length > 0) {
- const tombIds = new Set(tombstones.map(t => t.id));
  const emps = JSON.parse(localStorage.getItem('hr_employees') || '[]');
+ const empMap = new Map(emps.map(e => [e.id, e]));
+ // Split tombstones: valid vs stale (employee was re-added AFTER deletion)
+ const validTombs = [];
+ const staleTombs = [];
+ tombstones.forEach(t => {
+ const emp = empMap.get(t.id);
+ if (emp && emp._addedAt && emp._addedAt > t.deletedAt) {
+ staleTombs.push(t); // re-added after delete
+ } else {
+ validTombs.push(t);
+ }
+ });
+ // Clear stale tombstones (persist)
+ if (staleTombs.length > 0) {
+ console.log(`[cloudPullAllSafe] Cleared ${staleTombs.length} stale tombstone(s) (re-added):`, staleTombs.map(t => t.id));
+ localStorage.setItem('hr_deletedEmployeeIds', JSON.stringify(validTombs));
+ if (cloudSync) DB._cloudUpsert('deletedEmployeeIds', validTombs);
+ }
+ // Apply valid tombstones — remove those employees from local
+ const tombIds = new Set(validTombs.map(t => t.id));
  const filtered = emps.filter(e => !tombIds.has(e.id));
  if (filtered.length !== emps.length) {
  console.log(`[cloudPullAllSafe] Applied ${emps.length - filtered.length} tombstone(s), removing deleted employees`);
@@ -4934,7 +4968,18 @@ function submitEmployee(e, editId) {
  }
  data.password = pass;
  data.forceChangePassword = true; // Force change for new employees
+ // v1.4.24: stamp _addedAt for tombstone stale detection
+ data._addedAt = new Date().toISOString();
  emps.push(data);
+ }
+
+ // v1.4.24 CRITICAL: clear tombstone for this ID (re-adding after previous delete)
+ // Without this, applyTombstones on next cloud pull would REMOVE the re-added employee
+ const tombstones = DB.load('deletedEmployeeIds', []);
+ const filteredTombs = tombstones.filter(t => t.id !== data.id);
+ if (filteredTombs.length !== tombstones.length) {
+ console.log(`[Tombstone v1.4.24] Cleared tombstone for ${data.id} (re-adding)`);
+ DB.save('deletedEmployeeIds', filteredTombs);
  }
 
  DB.save('employees', emps);

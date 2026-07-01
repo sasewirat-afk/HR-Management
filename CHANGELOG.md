@@ -6,6 +6,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.24] — 2026-07-01
+
+**P0 Fix — Tombstone Auto-Clear on Re-add (fixes v1.4.23 side effect)**
+
+### Root Cause (Debug Mantra Confirmed)
+v1.4.23 tombstone system มี side effect:
+- ถ้า ID เคยลบ → มี tombstone
+- ถ้า admin re-add ID เดิม (Tigersoft assigns fixed IDs) → cloud pull → tombstone remove → พนักงานหาย
+
+**Repro:**
+```
+Historical: 681008002 เคยลบ → tombstone {id: '681008002'}
+Admin: เพิ่ม 681008002 ใหม่ → save → local + cloud
+Cloud pull: applyTombstones → REMOVE 681008002 → หาย ❌
+```
+
+### Fix — 4 Layers
+
+**Layer 1: Auto-clear tombstone on ADD/UPDATE**
+```js
+// In submitEmployee, before DB.save('employees', ...):
+const tombstones = DB.load('deletedEmployeeIds', []);
+const filtered = tombstones.filter(t => t.id !== data.id);
+if (filtered.length !== tombstones.length) {
+  DB.save('deletedEmployeeIds', filtered);  // clear stale
+}
+DB.save('employees', emps);
+```
+
+**Layer 2: Smart tombstone application (respect _addedAt)**
+```js
+tombstones.forEach(t => {
+  const emp = empMap.get(t.id);
+  if (emp && emp._addedAt > t.deletedAt) {
+    // Re-added AFTER delete → tombstone stale → clear
+    staleTombs.push(t);
+  } else {
+    validTombs.push(t);
+  }
+});
+```
+
+**Layer 3: `_addedAt` timestamp on new employees**
+```js
+data._addedAt = new Date().toISOString();
+emps.push(data);
+```
+
+**Layer 4: `DB.clearTombstones(id)` debug helper**
+```js
+// F12 Console:
+DB.clearTombstones('681008002');  // clear specific ID
+DB.clearTombstones();              // clear all
+```
+
+### Effect
+- ✅ Re-add ID เดิม (หลังจากเคยลบ) ทำงานถูก
+- ✅ Anti-resurrection ยังคงใช้ได้ — protection ยัง active
+- ✅ Tombstone auto-cleanup — ไม่ค้าง data ที่ stale
+- ✅ Console diagnostic: `[Tombstone v1.4.24] Cleared tombstone for XXX (re-adding)`
+
+### Immediate Recovery (Manual)
+ถ้ามี ID ที่ยังหายอยู่ (ก่อน deploy v1.4.24):
+```javascript
+// F12 → Console
+DB.clearTombstones('681008002');  // clear stuck tombstone
+location.reload();
+// จากนั้น admin เพิ่มพนักงานใหม่ได้
+```
+
+---
+
 ## [1.4.23] — 2026-07-01
 
 **P0 CRITICAL — Employees Anti-Resurrection + Tombstone System**

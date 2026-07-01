@@ -6,6 +6,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.19] — 2026-06-30
+
+**P1 Fix — Attendance Report: Absent Detection**
+
+### Fixed
+**Symptom:**
+- ระบบมีพนักงาน 101 คน (active)
+- ไฟล์ Tigersoft มี 80 records (present)
+- Tab "ไม่มา" แสดง **0** — ผิด (ควรเป็น 20+ คน)
+
+**Root cause:**
+```js
+// เดิม
+const absent = uniqueDayRecords.filter(r => !r.checkIn); // ← จากไฟล์
+```
+Tigersoft's export = **present only** — ไม่ export row ของคนที่ไม่สแกน  
+→ `uniqueDayRecords` มี 80 rows ทั้งหมด checkIn ≠ null  
+→ `absent.length === 0` เสมอ
+
+### Fix
+**Derive absent จาก employee master แทน:**
+```js
+// v1.4.19
+const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin');
+const presentIds = new Set(present.map(r => r.employeeCode || r.employeeId));
+const autoAbsentIds = new Set(autoAbsent.map(r => r.employeeCode || r.employeeId));
+const leaveIds = new Set(leaveOnDate.map(r => r.employeeId));
+const trackedInFile = new Set(uniqueDayRecords.map(r => r.employeeCode || r.employeeId));
+
+const inferredAbsent = activeEmps
+  .filter(e => !presentIds.has(e.id) && !autoAbsentIds.has(e.id) &&
+               !leaveIds.has(e.id) && !trackedInFile.has(e.id))
+  .map(e => ({
+    date: _attReportDate,
+    employeeCode: e.id,
+    employeeName: `${e.firstName} ${e.lastName}`,
+    checkIn: null, checkOut: null,
+    _inferredAbsent: true
+  }));
+
+const absent = [
+  ...explicitAbsent,    // rows in file with checkIn = null (rare)
+  ...inferredAbsent,    // employees NOT in file at all
+  ...autoAbsent.map(...) // scanned but too late = auto-absent
+];
+```
+
+### Rules (Absent Detection Waterfall)
+```
+สำหรับพนักงาน active คนใดคนหนึ่งในวันนั้น:
+1. อยู่ในไฟล์ + มี checkIn ก่อน cutoff  → PRESENT
+2. อยู่ในไฟล์ + มี checkIn หลัง cutoff  → AUTO-ABSENT (สาย > threshold)
+3. อยู่ในไฟล์ + ไม่มี checkIn         → EXPLICIT ABSENT
+4. มี leave request อนุมัติ           → LEAVE
+5. ไม่อยู่ใน 1-4                     → INFERRED ABSENT (ใหม่!)
+```
+
+### UI Changes
+- Tab "ไม่มา (N)" — count ที่ถูกต้อง
+- Stat card "มาทำงาน" — เปลี่ยนจาก "จากทั้งหมด X คน" → "**จากพนักงาน 101 คน**"
+- Row ในตาราง "ไม่มา" มี badge แยก:
+  - "ขาดอัตโนมัติ (สแกน HH:MM)" — สายเกิน
+  - "ไม่ได้สแกน" — มี row แต่ checkIn ว่าง
+  - "ไม่มาทำงาน (ไม่พบใน Tigersoft)" — **ใหม่**
+
+### Excluded from Absent Check
+- `role === 'admin'` — Admin ไม่นับ (ไม่ต้องสแกน)
+- `active === false` — inactive employees
+
+### Console Diagnostic
+```
+[AttReport 2026-07-01] active=100, present=80, autoAbsent=0, leave=1, absent=19 (explicit=0, inferred=19)
+```
+
+---
+
 ## [1.4.18] — 2026-06-30
 
 **P0 CRITICAL — Shift Import Semantic Change: REPLACE → MERGE**

@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.18</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.19</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.18';
+const APP_VERSION = '1.4.19';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -5721,10 +5721,6 @@ function renderAttendanceReport() {
  const presentRaw = uniqueDayRecords.filter(r => r.checkIn);
  const autoAbsent = autoAbsentCutoff ? presentRaw.filter(r => r.checkIn >= autoAbsentCutoff) : [];
  const present = autoAbsentCutoff ? presentRaw.filter(r => r.checkIn < autoAbsentCutoff) : presentRaw;
- const absent = [
- ...uniqueDayRecords.filter(r => !r.checkIn),
- ...autoAbsent.map(r => ({ ...r, _autoAbsent: true }))
- ];
 
  // Leave on that date
  const leaveOnDate = DB.load('leaveRequests').filter(r =>
@@ -5732,6 +5728,39 @@ function renderAttendanceReport() {
  new Date(r.startDate) <= new Date(_attReportDate) &&
  new Date(r.endDate) >= new Date(_attReportDate)
  );
+
+ // v1.4.19 CRITICAL FIX: derive absent from EMPLOYEE MASTER, not from attendance file.
+ // Tigersoft export contains only rows for employees who scanned — absent people are NOT in file.
+ // Before: `absent = uniqueDayRecords.filter(r => !r.checkIn)` → always 0 (Tigersoft never exports no-scan rows)
+ // After: `absent = active employees - present - autoAbsent - onLeave`
+ const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin');
+ const presentIds = new Set(present.map(r => r.employeeCode || r.employeeId));
+ const autoAbsentIds = new Set(autoAbsent.map(r => r.employeeCode || r.employeeId));
+ const leaveIds = new Set(leaveOnDate.map(r => r.employeeId));
+ const trackedInFile = new Set(uniqueDayRecords.map(r => r.employeeCode || r.employeeId));
+
+ // Employees explicitly marked absent in file (checkIn missing but row exists)
+ const explicitAbsent = uniqueDayRecords.filter(r => !r.checkIn);
+ // Employees not in file at all AND not on leave AND active → didn't scan = absent
+ const inferredAbsent = activeEmps
+ .filter(e => !presentIds.has(e.id) && !autoAbsentIds.has(e.id) && !leaveIds.has(e.id) && !trackedInFile.has(e.id))
+ .map(e => ({
+ date: _attReportDate,
+ employeeCode: e.id,
+ employeeId: e.id,
+ employeeName: `${e.firstName} ${e.lastName}`,
+ checkIn: null,
+ checkOut: null,
+ _inferredAbsent: true // marker: no row in Tigersoft file
+ }));
+
+ const absent = [
+ ...explicitAbsent,
+ ...inferredAbsent,
+ ...autoAbsent.map(r => ({ ...r, _autoAbsent: true }))
+ ];
+
+ console.log(`[AttReport ${_attReportDate}] active=${activeEmps.length}, present=${present.length}, autoAbsent=${autoAbsent.length}, leave=${leaveOnDate.length}, absent=${absent.length} (explicit=${explicitAbsent.length}, inferred=${inferredAbsent.length})`);
 
  const arrivedFromStart = present.filter(r => r.checkIn >= workStart);
  const lateArrived = present.filter(r => r.checkIn >= lateThreshold);
@@ -5765,7 +5794,7 @@ function renderAttendanceReport() {
  <div class="stat-card green">
  <div class="label"> มาทำงาน</div>
  <div class="value">${present.length} <small>คน</small></div>
- <div class="sub">จากทั้งหมด ${uniqueDayRecords.length} คน</div>
+ <div class="sub">จากพนักงาน ${activeEmps.length} คน</div>
  </div>
  <div class="stat-card orange">
  <div class="label"> ลาหยุด</div>
@@ -5843,8 +5872,12 @@ function renderAttendanceReport() {
  <td>${r.employeeCode || '-'}</td>
  <td>${r.employeeName || '-'}</td>
  <td>${(() => { const d = getDeptForAttendance(r); return d === 'พนักงานใหม่' ? '<span class="status-badge status-pending">พนักงานใหม่</span>' : d; })()}</td>
- <td>${r._autoAbsent ? `<span class="status-badge status-rejected">ขาดอัตโนมัติ (สแกน ${r.checkIn})</span>` : '<span class="status-badge status-rejected">ไม่ได้สแกน</span>'}</td>
- </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;padding:20px;">ทุกคนมาทำงาน</td></tr>'}
+ <td>${
+ r._autoAbsent ? `<span class="status-badge status-rejected">ขาดอัตโนมัติ (สแกน ${r.checkIn})</span>` :
+ r._inferredAbsent ? `<span class="status-badge status-rejected">ไม่มาทำงาน (ไม่พบใน Tigersoft)</span>` :
+ '<span class="status-badge status-rejected">ไม่ได้สแกน</span>'
+ }</td>
+ </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;padding:20px;">ทุกคนมาทำงาน / ลา</td></tr>'}
  </tbody>
  </table>
  </div>

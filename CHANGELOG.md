@@ -6,6 +6,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.31] — 2026-07-02
+
+**Day 2 HOTFIX — C2: Fix double-escape in sidebar userName textContent**
+
+### Bug
+After v1.4.30 XSS deploy, sidebar displayed username as double-encoded HTML entities:
+- Real name "John" → displayed "John" (OK)
+- Test XSS payload `<img src=x onerror=...>` → displayed as `&lt;img src=x onerror=(&#39;XSS!&#39;)&gt;` (double-encoded)
+
+### Root Cause
+Line 10148 assigned `.textContent = esc(currentUser.firstName) + ...`
+
+`textContent` DOM API already treats input as literal text (safe by design — never executes HTML). Wrapping with `esc()` caused HTML entities to be encoded once by esc() then displayed as literal by textContent, showing `&lt;` as-is instead of decoding to `<`.
+
+### Rule to Remember
+| Context | Escape needed |
+|---|---|
+| `innerHTML = ...` | ✅ MUST use `esc()` |
+| Template literal → innerHTML (via `${var}`) | ✅ MUST use `esc()` |
+| `.textContent = ...` | ❌ DO NOT wrap — auto-escaped |
+| `.value = ...` (input fields) | ❌ DO NOT wrap — auto-escaped |
+| `.setAttribute('src', ...)` | ⚠️ Case-dependent |
+
+### Fix
+```js
+// Before (double-escape bug)
+document.getElementById('userName').textContent = esc(currentUser.firstName) + ' ' + esc(currentUser.lastName);
+
+// After (correct — textContent handles escape natively)
+document.getElementById('userName').textContent = (currentUser.firstName || '') + ' ' + (currentUser.lastName || '');
+```
+
+### Verification
+- ✅ Real Thai names display correctly
+- ✅ Sidebar no longer shows HTML entities
+- ✅ Security still enforced (textContent never executes)
+- ✅ Only 1 offender found — grep confirmed no other `.textContent = esc(...)` patterns
+
+### Security Impact
+None — this was cosmetic only. textContent itself provides XSS protection.
+
+---
+
 ## [1.4.30] — 2026-07-02
 
 **Day 2 — C2 (CRITICAL): XSS Protection via `esc()` helper**

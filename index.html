@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.30</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.31</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.30';
+const APP_VERSION = '1.4.31';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -10145,7 +10145,8 @@ function showChangePasswordPage() {
 function showApp() {
  document.getElementById('loginPage').classList.add('hidden');
  document.getElementById('app').classList.remove('hidden');
- document.getElementById('userName').textContent = esc(currentUser.firstName) + ' ' + esc(currentUser.lastName);
+ // v1.4.31: textContent has built-in escape — DO NOT wrap with esc() (causes double-encode)
+ document.getElementById('userName').textContent = (currentUser.firstName || '') + ' ' + (currentUser.lastName || '');
  document.getElementById('userEmpId').textContent = currentUser.id + ' • ' + currentUser.department;
  const roleNames = {employee: 'พนักงาน', manager: 'หัวหน้างาน', accountant: 'บัญชี', admin: 'แอดมิน HR'};
  document.getElementById('userRole').textContent = roleNames[currentUser.role];

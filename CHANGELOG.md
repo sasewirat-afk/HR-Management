@@ -6,6 +6,98 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.27] — 2026-07-02
+
+**P0 Optimization — Incremental Sync (Reduce Supabase Egress 80-90%)**
+
+### Problem
+Supabase Free tier Egress limit: 5 GB/เดือน. ระบบใช้ 5.086 GB (102%) ในช่วง 2 วัน
+- ทุก login → `SELECT * FROM hr_data` = ~1.5 MB ต่อ pull
+- 20 users × 10 logins/วัน × 30 วัน = **9 GB/เดือน** (เกินโควตา 80%)
+
+### Root Cause
+`cloudPullAllSafe()` = full pull ทุกครั้ง (ไม่มี incremental)
+- ดึง employees ทั้ง 104 คน แม้ไม่มีการเปลี่ยนแปลง
+- ดึง attendanceRecords ทั้ง 4552 records แม้ไม่ upload ใหม่
+- ดึง shifts ทั้ง 2380 records แม้ไม่แก้กะ
+
+### Fix — Incremental Sync
+
+**1. Track `lastPullTimestamp` (localStorage-only, ไม่ sync)**
+
+**2. Query filter:**
+```js
+// เดิม (v1.4.26)
+supa.from('hr_data').select('*')  // ← full pull ทุกครั้ง
+
+// ใหม่ (v1.4.27)
+supa.from('hr_data').select('*').gt('updated_at', lastPullTimestamp)
+// ← เฉพาะ rows ที่ update หลัง last pull
+```
+
+**3. Debounce (30 วินาที):**
+- ถ้า pull สำเร็จ < 30 วิ ที่แล้ว → skip (ใช้ localStorage)
+- ป้องกัน F5 spam / navigation ถี่
+
+**4. Force full sync on version upgrade:**
+- APP_VERSION เปลี่ยน → invalidate timestamp → next pull = full
+- ป้องกัน schema mismatch หลัง deploy
+
+**5. Debug helper `DB.forceSync()`:**
+- Manual full sync ทุกครั้งที่ต้องการ
+- F12 → `DB.forceSync()` → ใช้ egress = 1.5 MB (แต่ instant sync)
+
+### Egress Estimate After v1.4.27
+
+**Full pull (crucial cases only):**
+- First-time visit
+- After version deploy
+- Manual `DB.forceSync()`
+
+**Incremental pull (default):**
+- Query returns only changed rows since last pull
+- Typical response: 0-50 KB (จาก 1.5 MB)
+
+**Debounced (skip pull entirely):**
+- Same device pulls within 30 seconds
+- Response: 0 bytes
+
+**Projection:**
+```
+Before (v1.4.26):
+  20 users × 10 logins/วัน × 1.5 MB × 30 วัน = 9 GB/เดือน
+
+After (v1.4.27):
+  20 users × 1 full pull/วัน (first login) × 1.5 MB = 900 MB
+  + 20 users × 9 incremental × 50 KB × 30 วัน = 270 MB
+  + realtime broadcasts (ไม่เพิ่ม egress much)
+  = ~1.2 GB/เดือน  (ลดลง 87%)
+```
+
+### Console Diagnostic
+```
+[Version] Changed: 1.4.26 → 1.4.27. Forcing full sync on next pull.
+[cloudPullAllSafe] OK (FULL), pulled 17 keys        ← first pull ยัง full
+[cloudPullAllSafe] OK (INCREMENTAL), pulled 3 keys  ← subsequent pulls
+[cloudPullAllSafe] Debounced (last pull 12.4s ago)  ← rapid navigation
+```
+
+### UX Impact
+- ✅ Login speed: ไม่เปลี่ยน (incremental fast)
+- ✅ ข้อมูลยัง real-time (via Supabase Realtime subscription)
+- ✅ Auto force-sync ตอน deploy
+- ⚠ Cross-device delay: อาจเห็นข้อมูลเก่า 30 วินาที (debounce window)
+  - แก้ได้: manual refresh หรือรอ realtime broadcast
+
+### Trade-offs
+- ➕ Egress ลด 87%
+- ➕ Login เร็วขึ้น (incremental payload เล็ก)
+- ➕ Debounce ลด server load
+- ➖ +90 lines code
+- ➖ Version-change ยัง full pull ครั้งเดียว
+
+---
+
 ## [1.4.26] — 2026-07-02
 
 **P0 CRITICAL — Field-Level LWW (Last-Writer-Wins) for Employees**

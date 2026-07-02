@@ -834,12 +834,16 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <div id="changePassAlert"></div>
  <form id="changePassForm">
  <div class="form-group">
+ <label>รหัสผ่านปัจจุบัน</label>
+ <input type="password" id="currentPass" required minlength="1" placeholder="••••••" autocomplete="current-password">
+ </div>
+ <div class="form-group">
  <label>รหัสผ่านใหม่ (อย่างน้อย 4 ตัวอักษร)</label>
- <input type="password" id="newPass1" required minlength="4" placeholder="••••••">
+ <input type="password" id="newPass1" required minlength="4" placeholder="••••••" autocomplete="new-password">
  </div>
  <div class="form-group">
  <label>ยืนยันรหัสผ่านใหม่</label>
- <input type="password" id="newPass2" required minlength="4" placeholder="••••••">
+ <input type="password" id="newPass2" required minlength="4" placeholder="••••••" autocomplete="new-password">
  </div>
  <button type="submit" class="btn btn-primary btn-block">บันทึกรหัสผ่านใหม่</button>
  </form>
@@ -856,7 +860,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.31</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.32</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +884,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.31';
+const APP_VERSION = '1.4.32';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -10075,9 +10079,29 @@ document.addEventListener('DOMContentLoaded', async () => {
 
  document.getElementById('changePassForm').addEventListener('submit', async e => {
  e.preventDefault();
+ const currentP = document.getElementById('currentPass').value;
  const p1 = document.getElementById('newPass1').value;
  const p2 = document.getElementById('newPass2').value;
  const alertDiv = document.getElementById('changePassAlert');
+
+ // v1.4.32 (H3): Verify current password FIRST — prevents session-hijack takeover
+ if (!currentP) {
+ alertDiv.innerHTML = '<div class="alert alert-error">กรุณาระบุรหัสผ่านปัจจุบัน</div>';
+ return;
+ }
+ const currentPHash = await hashPassword(currentP);
+ const empsForVerify = DB.load('employees');
+ const empForVerify = empsForVerify.find(x => x.id === currentUser.id);
+ const currentValid = empForVerify && (
+ (empForVerify.passwordHash && empForVerify.passwordHash === currentPHash) ||
+ (empForVerify.password && empForVerify.password === currentP) // legacy plaintext fallback
+ );
+ if (!currentValid) {
+ alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านปัจจุบันไม่ถูกต้อง</div>';
+ document.getElementById('currentPass').value = '';
+ document.getElementById('currentPass').focus();
+ return;
+ }
 
  if (p1.length < 4) {
  alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านต้องอย่างน้อย 4 ตัวอักษร</div>';
@@ -10085,6 +10109,11 @@ document.addEventListener('DOMContentLoaded', async () => {
  }
  if (p1 !== p2) {
  alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านไม่ตรงกัน</div>';
+ return;
+ }
+ // v1.4.32 (H3): Prevent no-op change (must actually differ from current)
+ if (currentP === p1) {
+ alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านใหม่ต้องต่างจากรหัสผ่านปัจจุบัน</div>';
  return;
  }
 
@@ -10138,8 +10167,10 @@ function showChangePasswordPage() {
  document.getElementById('loginPage').classList.add('hidden');
  document.getElementById('changePasswordPage').classList.remove('hidden');
  document.getElementById('changePassAlert').innerHTML = '';
+ document.getElementById('currentPass').value = ''; // v1.4.32 (H3)
  document.getElementById('newPass1').value = '';
  document.getElementById('newPass2').value = '';
+ document.getElementById('currentPass').focus(); // v1.4.32 UX: focus on current password
 }
 
 function showApp() {

@@ -6,6 +6,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.32] — 2026-07-02
+
+**Day 3 — H3 (HIGH): Verify current password before allowing change**
+
+### Vulnerability
+Password change form only required `newPass1` + `newPass2` — no verification of the current password. Attack scenarios:
+1. Session hijack (physical access to unlocked device, or stolen sessionStorage) → attacker changes password permanently, locking out legitimate user
+2. XSS-triggered fetch to `/change-password` endpoint from stolen token
+3. Insider attack: colleague on shared workstation opens victim's still-logged-in browser tab, changes password
+4. If forceChangePassword flag was flipped externally (via cloud tampering), user could inadvertently overwrite own password without verification
+
+### Fix
+1. Added `<input id="currentPass">` field to `changePasswordPage` UI (before newPass fields)
+2. Handler now:
+ - Hashes `currentPass` with same salt+SHA-256 as login flow
+ - Compares against `emp.passwordHash` (with legacy plaintext fallback for un-migrated accounts)
+ - Rejects with "รหัสผ่านปัจจุบันไม่ถูกต้อง" if mismatch, refocuses on the current-password field, clears the wrong value
+3. Added no-op prevention: `currentP === p1` rejected with "รหัสผ่านใหม่ต้องต่างจากรหัสผ่านปัจจุบัน"
+4. `showChangePasswordPage()` clears `currentPass` value and auto-focuses on it
+
+### Backward Compatibility
+✅ Works for hashed passwords (post-v1.4.28 users)
+✅ Works for legacy plaintext (pre-migration edge case)
+✅ Works during forced first-login change (user still knows their initial password)
+✅ Zero DB migration — pure UI+logic change
+
+### Security Impact
+- Session-hijack password takeover: **BLOCKED** (attacker doesn't know current password)
+- Insider attack via unlocked browser: **BLOCKED**
+- XSS-triggered API abuse: **BLOCKED** (attacker cannot forge current password without knowing it)
+- Legitimate self-service change: **UNCHANGED UX** (just one more field)
+
+### Test Payloads
+```
+1. Correct current + new → password changes ✅
+2. Wrong current + new → rejected with error, field cleared, refocus ✅
+3. Empty current → "กรุณาระบุรหัสผ่านปัจจุบัน" ✅
+4. Same current as new → "รหัสผ่านใหม่ต้องต่างจากรหัสผ่านปัจจุบัน" ✅
+5. Legacy plaintext user (rare) → still works via fallback ✅
+```
+
+### Deployment
+- v1.4.31 → v1.4.32
+- File size: 10,159 → 10,190 lines (+31 for UI field + handler + comments)
+- No admin-side changes (admin reset flow at line 5159 already bypasses this — H4 will address later)
+
+---
+
 ## [1.4.31] — 2026-07-02
 
 **Day 2 HOTFIX — C2: Fix double-escape in sidebar userName textContent**

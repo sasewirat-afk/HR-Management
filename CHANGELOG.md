@@ -6,6 +6,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.29] — 2026-07-03
+
+**Day 1 HOTFIX — C1: Wire migration into startup (v1.4.28 had function but no call)**
+
+### Bug
+v1.4.28 had `migratePasswordsToHash_v1_4_28()` function defined but **never called at startup**.
+Result: passwords stayed as plaintext (103 users), only Legacy Fallback in login() kept things working.
+
+### Root Cause
+Python patch applied function definition successfully, but the wire-up patch matched a slightly different pattern and silently failed. Verify script only counted `migratePasswordsToHash_v1_4_28()` totals without distinguishing definition vs call.
+
+### Fix
+Added explicit `await migratePasswordsToHash_v1_4_28();` in startup after `migrateEmployeeUpdatedAt_v1_4_26();`
+
+### Effect After Deploy
+- ✅ Migration runs on first v1.4.29 load
+- ✅ 103 plaintext passwords → SHA-256 hashed
+- ✅ Migration entry `v1.4.28-passwordHash` added to `settings._migrationsRun`
+- ✅ Subsequent loads skip (idempotent)
+
+### Lesson Learned
+When bumping version + adding migration:
+1. Always grep for function CALL specifically (not just name), e.g. `await funcName()`
+2. Also grep for `_migrationsRun.includes` to verify guard exists
+3. Test locally: `DB.load('settings')._migrationsRun` should include the new entry
+
+---
+
 ## [1.4.28] — 2026-07-03
 
 **Day 1 (Code Review Sprint) — C1: Password Hashing (SHA-256 + Salt)**

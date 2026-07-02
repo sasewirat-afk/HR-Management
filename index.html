@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.27</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.28</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.27';
+const APP_VERSION = '1.4.28';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1386,6 +1386,34 @@ function migrateEmployeeUpdatedAt_v1_4_26() {
  }
 }
 
+// v1.4.28: Migration — hash all plaintext passwords to SHA-256
+// Idempotent via settings._migrationsRun flag. Legacy fallback in login() ensures no downtime.
+async function migratePasswordsToHash_v1_4_28() {
+ const s = DB.load('settings', {});
+ if (s._migrationsRun && s._migrationsRun.includes('v1.4.28-passwordHash')) {
+ return; // already migrated
+ }
+ const emps = DB.load('employees', []);
+ if (!emps.length) return;
+ let hashed = 0;
+ for (const emp of emps) {
+ if (emp.password && !emp.passwordHash) {
+ emp.passwordHash = await hashPassword(emp.password);
+ delete emp.password;
+ emp._updatedAt = new Date().toISOString();
+ hashed++;
+ }
+ }
+ s._migrationsRun = [...(s._migrationsRun || []), 'v1.4.28-passwordHash'];
+ DB.save('settings', s);
+ if (hashed > 0) {
+ console.log(`[migrate v1.4.28] Hashed ${hashed} plaintext passwords → SHA-256`);
+ DB.save('employees', emps);
+ } else {
+ console.log('[migrate v1.4.28] no passwords to hash');
+ }
+}
+
 function seedData() {
  if (DB.load('initialized', false)) return;
 
@@ -1524,9 +1552,29 @@ function seedData() {
 // ============================================================
 let currentUser = null;
 
-function login(empId, password) {
+// v1.4.28: Password hashing (SHA-256 + salt) — replaces plaintext storage
+// Uses Web Crypto API (built-in, no external dependency)
+// Legacy fallback: login accepts BOTH hash and plaintext (backward compat)
+async function hashPassword(pw) {
+ if (!pw) return null;
+ const encoded = new TextEncoder().encode(pw + '::crochet_hr_2026::');
+ const hashBuffer = await crypto.subtle.digest('SHA-256', encoded);
+ return Array.from(new Uint8Array(hashBuffer))
+ .map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// v1.4.28: login() now async — computes hash of input password, matches against stored hash OR legacy plaintext
+async function login(empId, password) {
  const emps = DB.load('employees');
- const user = emps.find(e => e.id === empId && e.password === password && e.active);
+ const hashedInput = await hashPassword(password);
+ const user = emps.find(e =>
+ e.id === empId &&
+ e.active &&
+ (
+ (e.passwordHash && e.passwordHash === hashedInput) || // hashed (new)
+ (e.password && e.password === password) // legacy plaintext (fallback during migration)
+ )
+ );
  if (user) {
  currentUser = user;
  sessionStorage.setItem('hr_currentUser', JSON.stringify(user));
@@ -5019,7 +5067,7 @@ function showEmployeeForm(id) {
  showModal(emp ? 'แก้ไขพนักงาน' : 'เพิ่มพนักงาน', body, footer);
 }
 
-function submitEmployee(e, editId) {
+async function submitEmployee(e, editId) {
  e.preventDefault();
  const emps = DB.load('employees');
  const data = {
@@ -5051,7 +5099,9 @@ function submitEmployee(e, editId) {
  const idx = emps.findIndex(x => x.id === editId);
  emps[idx] = {...emps[idx], ...data};
  if (pass) {
- emps[idx].password = pass;
+ // v1.4.28: hash password on edit
+ emps[idx].passwordHash = await hashPassword(pass);
+ delete emps[idx].password;
  emps[idx].forceChangePassword = true; // Force change on next login
  }
  emps[idx]._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
@@ -5066,6 +5116,14 @@ function submitEmployee(e, editId) {
  // v1.4.26: stamp _updatedAt for field-level LWW merge
  data._addedAt = new Date().toISOString();
  data._updatedAt = new Date().toISOString();
+ // v1.4.28: hash new employee's initial password (from pass variable or data.password)
+ if (pass) {
+ data.passwordHash = await hashPassword(pass);
+ delete data.password;
+ } else if (data.password) {
+ data.passwordHash = await hashPassword(data.password);
+ delete data.password;
+ }
  emps.push(data);
  }
 
@@ -5084,7 +5142,7 @@ function submitEmployee(e, editId) {
  renderPage();
 }
 
-function resetPassword(id) {
+async function resetPassword(id) {
  if (currentUser.role !== 'admin') {
  toast('เฉพาะ Admin เท่านั้นที่ Reset Password ได้', 'error');
  return;
@@ -5093,7 +5151,10 @@ function resetPassword(id) {
  if (!newPass) return;
  const emps = DB.load('employees');
  const emp = emps.find(x => x.id === id);
- emp.password = newPass;
+ if (!emp) { toast('ไม่พบพนักงาน', 'error'); return; }
+ // v1.4.28: hash new password, remove plaintext
+ emp.passwordHash = await hashPassword(newPass);
+ delete emp.password;
  emp.forceChangePassword = true;
  emp._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
  DB.save('employees', emps);
@@ -9980,11 +10041,11 @@ document.addEventListener('DOMContentLoaded', async () => {
  showApp();
  }
 
- document.getElementById('loginForm').addEventListener('submit', e => {
+ document.getElementById('loginForm').addEventListener('submit', async e => {
  e.preventDefault();
  const id = document.getElementById('loginEmpId').value.trim().toUpperCase();
  const pass = document.getElementById('loginPassword').value;
- if (login(id, pass)) {
+ if (await login(id, pass)) {
  // Check if force password change is required
  if (currentUser.forceChangePassword) {
  showChangePasswordPage();
@@ -10036,13 +10097,16 @@ document.addEventListener('DOMContentLoaded', async () => {
  alertDiv.innerHTML = '<div class="alert alert-error">⚠ ไม่พบข้อมูลพนักงาน — logout แล้ว login ใหม่</div>';
  return;
  }
- emp.password = p1;
+ // v1.4.28: hash new password, remove plaintext
+ emp.passwordHash = await hashPassword(p1);
+ delete emp.password;
  emp.forceChangePassword = false;
  emp._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
  DB.save('employees', emps);
 
- // Update current user
- currentUser.password = p1;
+ // Update current user (in-memory + sessionStorage)
+ currentUser.passwordHash = emp.passwordHash;
+ delete currentUser.password;
  currentUser.forceChangePassword = false;
  sessionStorage.setItem('hr_currentUser', JSON.stringify(currentUser));
 

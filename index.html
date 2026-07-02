@@ -856,7 +856,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.25</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.26</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -880,7 +880,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.25';
+const APP_VERSION = '1.4.26';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -980,28 +980,51 @@ const DB = {
  if (size > 900_000) {
  console.warn(`[CloudUpsert] '${key}' is ${(size/1024/1024).toFixed(2)} MB — may exceed Supabase row limit`);
  }
- // v1.4.23: ANTI-RESURRECTION for employees — merge back stale-missing employees
- // Prevents Device B (stale local without new employees added by Device A) from wiping them
- // Uses tombstone list `deletedEmployeeIds` to distinguish intentional deletes from stale-missing
+ // v1.4.26: FIELD-LEVEL LWW (Last-Writer-Wins) MERGE for employees
+ // Fixes v1.4.23 blind spot: guard only caught missing IDs, NOT field-level differences.
+ // Bug: Device B (stale local) → save whole array → cloud field-level revert (e.g. password → "1234")
+ // Fix: Per-employee comparison using _updatedAt timestamp. Newer wins per employee.
  if (key === 'employees' && Array.isArray(val)) {
  try {
  const { data: existing } = await supa.from('hr_data').select('value').eq('key', key).maybeSingle();
  const cloudEmps = existing?.value || [];
- if (Array.isArray(cloudEmps) && cloudEmps.length > val.length) {
- const localIds = new Set(val.map(e => e.id));
- const missing = cloudEmps.filter(e => !localIds.has(e.id));
+ if (Array.isArray(cloudEmps) && cloudEmps.length > 0) {
+ const cloudMap = new Map(cloudEmps.map(e => [e.id, e]));
+ const localMap = new Map(val.map(e => [e.id, e]));
  const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
  const tombstoneIds = new Set(tombstones.map(t => t.id));
- const accidentalMissing = missing.filter(e => !tombstoneIds.has(e.id));
- if (accidentalMissing.length > 0) {
- console.warn(`[EMP-SAFETY v1.4.23] Cloud has ${cloudEmps.length}, local ${val.length}. Merging ${accidentalMissing.length} accidental-missing back:`, accidentalMissing.map(e => e.id));
- val = [...val, ...accidentalMissing];
- // Also update local so caller's state matches
+
+ const merged = [];
+ const allIds = new Set([...cloudMap.keys(), ...localMap.keys()]);
+ let stats = { added: 0, updated: 0, resurrected: 0, honoredTombstone: 0, cloudWins: 0 };
+
+ for (const id of allIds) {
+ const c = cloudMap.get(id);
+ const l = localMap.get(id);
+ if (!c && l) { merged.push(l); stats.added++; continue; } // local-only = new add
+ if (c && !l) {
+ // cloud-only: check tombstone
+ if (tombstoneIds.has(id)) { stats.honoredTombstone++; continue; }
+ merged.push(c); stats.resurrected++; continue; // stale local, resurrect from cloud
+ }
+ // Both exist — compare _updatedAt (LWW)
+ const lTs = l._updatedAt || '';
+ const cTs = c._updatedAt || '';
+ if (lTs >= cTs) { merged.push(l); stats.updated++; } // local is newer or equal
+ else { merged.push(c); stats.cloudWins++; } // cloud is newer → PROTECT from stale local overwrite
+ }
+
+ const changed = stats.resurrected > 0 || stats.cloudWins > 0;
+ if (changed) {
+ console.warn(`[EMP-LWW v1.4.26] Merged`, stats);
+ val = merged;
  localStorage.setItem('hr_' + key, JSON.stringify(val));
- if (typeof toast === 'function') toast(`ป้องกันการลบพนักงานผิดพลาด: กู้ ${accidentalMissing.length} คนจาก cloud`, 'success');
+ if (typeof toast === 'function' && stats.cloudWins > 0) {
+ toast(`ป้องกันข้อมูลถูกทับ: ${stats.cloudWins} คนใช้ค่า cloud ที่ใหม่กว่า`, 'success');
  }
  }
- } catch (e) { console.warn('[EMP-SAFETY] guard check failed:', e); }
+ }
+ } catch (e) { console.warn('[EMP-LWW] merge failed, using original:', e); }
  }
 
  // ANTI-DATA-LOSS GUARD (v1.4.9): refuse to push empty array if cloud has data.
@@ -1293,6 +1316,30 @@ function migrateAttendanceExempt_v1_4_20() {
  console.log('[migrate v1.4.20] no changes needed — marked as complete');
  }
 }
+// v1.4.26: backfill _updatedAt on existing employees. Idempotent via settings flag.
+function migrateEmployeeUpdatedAt_v1_4_26() {
+ const s = DB.load('settings', {});
+ if (s._migrationsRun && s._migrationsRun.includes('v1.4.26-updatedAt')) return;
+ const emps = DB.load('employees', []);
+ if (!emps.length) return;
+ let changed = 0;
+ const baseline = new Date().toISOString();
+ emps.forEach(e => {
+ if (!e._updatedAt) {
+ e._updatedAt = e._addedAt || baseline;
+ changed++;
+ }
+ });
+ s._migrationsRun = [...(s._migrationsRun || []), 'v1.4.26-updatedAt'];
+ DB.save('settings', s);
+ if (changed > 0) {
+ console.log(`[migrate v1.4.26] backfilled _updatedAt on ${changed} employees`);
+ DB.save('employees', emps);
+ } else {
+ console.log('[migrate v1.4.26] no changes needed');
+ }
+}
+
 function seedData() {
  if (DB.load('initialized', false)) return;
 
@@ -4961,6 +5008,7 @@ function submitEmployee(e, editId) {
  emps[idx].password = pass;
  emps[idx].forceChangePassword = true; // Force change on next login
  }
+ emps[idx]._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
  } else {
  if (emps.find(x => x.id === data.id)) {
  toast('รหัสพนักงานซ้ำ!', 'error');
@@ -4969,7 +5017,9 @@ function submitEmployee(e, editId) {
  data.password = pass;
  data.forceChangePassword = true; // Force change for new employees
  // v1.4.24: stamp _addedAt for tombstone stale detection
+ // v1.4.26: stamp _updatedAt for field-level LWW merge
  data._addedAt = new Date().toISOString();
+ data._updatedAt = new Date().toISOString();
  emps.push(data);
  }
 
@@ -4999,6 +5049,7 @@ function resetPassword(id) {
  const emp = emps.find(x => x.id === id);
  emp.password = newPass;
  emp.forceChangePassword = true;
+ emp._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
  DB.save('employees', emps);
  toast(`รีเซ็ตรหัสผ่านของ ${emp.firstName} เป็น "${newPass}" (จะต้องเปลี่ยนตอน Login ครั้งถัดไป)`);
 }
@@ -5102,6 +5153,7 @@ function submitAdjustLeaveQuotas(e, id) {
  if (v !== '' && v !== undefined && !isNaN(v)) newOv[k] = parseFloat(v);
  });
  emp.leaveQuotaOverride = Object.keys(newOv).length ? newOv : undefined;
+ emp._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
  // Keep legacy vacationQuota in sync if user set vacation override
  if (newOv.vacation !== undefined) emp.vacationQuota = newOv.vacation;
  DB.save('employees', emps);
@@ -9866,6 +9918,8 @@ document.addEventListener('DOMContentLoaded', async () => {
  migrateLeaveQuota_v1_4_14();
  // v1.4.20: mark CEO/คนสวน/แม่บ้าน = exempt from attendance
  migrateAttendanceExempt_v1_4_20();
+ // v1.4.26: backfill _updatedAt on existing employees (baseline for LWW)
+ migrateEmployeeUpdatedAt_v1_4_26();
 
  if (restoreSession()) {
  showApp();
@@ -9929,6 +9983,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  }
  emp.password = p1;
  emp.forceChangePassword = false;
+ emp._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
  DB.save('employees', emps);
 
  // Update current user

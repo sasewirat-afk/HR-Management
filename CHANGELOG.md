@@ -6,6 +6,82 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.26] — 2026-07-02
+
+**P0 CRITICAL — Field-Level LWW (Last-Writer-Wins) for Employees**
+
+### Root Cause (v1.4.23 Guard Blind Spot)
+```js
+// v1.4.23 bug — checked only ARRAY LENGTH
+if (cloudEmps.length > val.length) {
+  // ← ตรวจจับเฉพาะ ADD/DELETE
+  // ← Field-level changes (password, toggle, etc.) ignored ❌
+}
+```
+
+**Reproduction:**
+```
+Device A: change password of 670513001 → "TEST_A"
+   Cloud: [104 employees, 670513001.password = "TEST_A"]
+
+Device B (stale local, 104 employees, 670513001.password = "1234"):
+   Admin edits emp3 profile → DB.save('employees', wholeArray)
+   → _cloudUpsert: cloudLen === localLen (104 === 104) → guard SKIP
+   → push overwrites cloud → 670513001.password reverts to "1234" ❌
+```
+
+### Fix — Per-Employee LWW Merge with _updatedAt
+
+**Every employee mutation now stamps `_updatedAt`:**
+- Create (submitEmployee)
+- Edit (submitEmployee editId path)
+- Password change (login flow)
+- Reset password (admin action)
+- Leave quota adjust
+- Delete (via tombstone timestamp)
+
+**On cloud push, per-employee merge:**
+```js
+for each employee id in (cloud ∪ local):
+  if local-only → add (new)
+  if cloud-only + not tombstone → resurrect (stale local)
+  if both exist:
+     LWW by _updatedAt:
+       local._updatedAt >= cloud._updatedAt → use local
+       cloud._updatedAt > local._updatedAt → use cloud (PROTECT)
+```
+
+### Migration `migrateEmployeeUpdatedAt_v1_4_26()`
+- Idempotent (checks `settings._migrationsRun`)
+- Backfills existing employees with `_updatedAt = _addedAt || now`
+- Runs once per device at startup
+
+### Console Diagnostic
+```
+[EMP-LWW v1.4.26] Merged {added: 0, updated: 5, resurrected: 0, cloudWins: 2}
+```
+
+### Toast Notification
+```
+✓ ป้องกันข้อมูลถูกทับ: 2 คนใช้ค่า cloud ที่ใหม่กว่า
+```
+
+### Backup Strategy (User Suggestion)
+User's Export/Import workflow ยังเป็น safety net ที่ดี — แต่ไม่ต้องทำทุกครั้ง เพราะ sync engine แก้ที่ root แล้ว
+
+**Recommended cadence:**
+- Weekly: Manual Supabase CSV export (Google Drive backup)
+- Before major deploy: additional localStorage snapshot
+- Daily: Automatic Supabase (Free tier includes weekly)
+
+### Trade-offs
+- ⚠ File size +~54 lines
+- ⚠ Push adds fresh-pull latency (~200ms)
+- ✅ Prevents all cross-device field-level data loss
+- ✅ Works with legitimate concurrent updates (LWW ensures newer wins)
+
+---
+
 ## [1.4.25] — 2026-07-01
 
 **Admin Delete on OT / Comp-off / Field-work Reports**

@@ -6,6 +6,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.35] — 2026-07-03
+
+**Feature: ชื่อเล่น (nickname) columns across all display + export surfaces**
+
+### Changes
+1. **จัดการพนักงาน table** — เพิ่ม column `ชื่อเล่น` ระหว่าง `ชื่อ-นามสกุล` และ `เพศ`
+2. **Employee Excel export** (`exportEmployeesXLSX`) — เพิ่ม column `ชื่อเล่น` ระหว่าง `นามสกุล` และ `เพศ`
+3. **รายงานเข้างาน** — เพิ่ม column `ชื่อเล่น` ในทั้ง 4 tabs:
+   - มาทำงาน (present)
+   - มาสาย (lateArrived)
+   - ไม่มา (absent)
+   - ลา (leaveOnDate)
+4. **Attendance Excel export** (`exportAttendanceXLSX`) — เพิ่ม column `ชื่อเล่น` ใน 3 sheets ที่เดิมยังไม่มี:
+   - Sheet 1: มาทำงาน — เพิ่มระหว่าง ชื่อ-นามสกุล และ แผนก
+   - Sheet 2: ลาหยุด — เพิ่มระหว่าง ชื่อ-นามสกุล และ ประเภทลา
+   - Sheet 3: ไม่มา — เพิ่มระหว่าง ชื่อ-นามสกุล และ แผนก
+   - Sheet 4: สรุป — ไม่มี column ชื่อ (summary counts only) → ไม่ต้องแก้
+   - Sheet 5/6: ลา-สาย / สรุปวันทำงาน — มีอยู่แล้วจาก v1.4.34
+
+### Backward Compatibility
+✅ Nickname displays empty string if employee has no nickname
+✅ Column widths updated in Excel exports to accommodate new column
+✅ Colspan updated in "empty state" table rows (5→6)
+
+### Notes
+- Column ชื่อเล่น อ่านจาก `employee.nickname` โดยตรง
+- ถ้าพนักงานยังไม่ได้ตั้ง nickname → แสดงว่าง (จะเห็นครบเมื่อ admin ทยอย set)
+- Excel Sheet 4 (สรุป) ไม่มีตารางรายบุคคล จึงไม่ต้องเพิ่ม column
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.34] — 2026-07-03
 
 **Feature batch — Admin productivity: nickname + report sheets + payslip adjust**

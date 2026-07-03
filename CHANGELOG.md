@@ -6,6 +6,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.37] — 2026-07-03
+
+**HOTFIX to v1.4.36 — inferred absent + Sheet 3 title alignment**
+
+### Bug 1: Sheet 1 missing employees who didn't scan
+v1.4.36 computed `absent` only from TigerSoft file rows without checkIn. But TigerSoft ONLY exports rows for employees who scanned — no-scan people are missing from file entirely, so they never appeared as "ขาดงาน".
+
+Same logic as v1.4.19 (which fixed the on-screen report) was needed in Excel export.
+
+### Fix 1
+Derive inferred absent from EMPLOYEE MASTER, not from attendance file:
+```js
+const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin' && !e.exemptFromAttendance);
+const inferredAbsent = activeEmps
+  .filter(e => !presentIds.has(e.id) && !leaveIds.has(e.id) && !trackedIds.has(e.id))
+  .map(e => ({ ...emp fields..., checkIn: null, _inferredAbsent: true }));
+const absent = [...explicitAbsent, ...inferredAbsent];
+```
+
+Now Sheet 1 (ภาพรวม) shows ALL active employees:
+- Present with checkIn
+- On leave (with type)
+- Explicit absent (in file but no scan)
+- Inferred absent (not in file at all)
+
+Sheet 2 (สรุป) count of "ไม่มา / ขาดงาน" now correct (was always 0).
+
+### Bug 2: Sheet 3 title not centered — merged D5:I5 instead of A5:I5
+Title cells positioned at column D but merge only D:I → looked off-center because rows A-C had letter head text.
+
+### Fix 2
+- Move title text to column A (row 5, 6)
+- Merge FULL row A5:I5 and A6:I6
+- Center-aligned across whole page width
+- Now presentation-ready for executive report
+
+### Files Changed
+- `index.html` — 4 patches (absent logic, Sheet 3 title placement, merge range, style column)
+- Version 1.4.36 → 1.4.37
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.36] — 2026-07-03
 
 **Redesign attendance Excel — 3 clean sheets with cell styling**

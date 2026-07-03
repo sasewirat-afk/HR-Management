@@ -861,7 +861,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.36</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.37</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -885,7 +885,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.36';
+const APP_VERSION = '1.4.37';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -6414,7 +6414,24 @@ function exportAttendanceXLSX() {
  );
 
  const present = uniqueRecs.filter(r => r.checkIn);
- const absent = uniqueRecs.filter(r => !r.checkIn);
+ const explicitAbsent = uniqueRecs.filter(r => !r.checkIn);
+
+ // v1.4.37: derive inferred absent from EMPLOYEE MASTER (not just Tigersoft file)
+ // Tigersoft only exports rows for scanned employees — no-scan people are missing from file
+ const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin' && !e.exemptFromAttendance);
+ const presentIds = new Set(present.map(r => r.employeeCode || r.employeeId));
+ const leaveIds = new Set(leaveOnDate.map(r => r.employeeId));
+ const trackedIds = new Set(uniqueRecs.map(r => r.employeeCode || r.employeeId));
+ const inferredAbsent = activeEmps
+ .filter(e => !presentIds.has(e.id) && !leaveIds.has(e.id) && !trackedIds.has(e.id))
+ .map(e => ({
+ date: _attReportDate,
+ employeeCode: e.id, employeeId: e.id,
+ employeeName: `${e.firstName} ${e.lastName}`,
+ checkIn: null, checkOut: null,
+ _inferredAbsent: true
+ }));
+ const absent = [...explicitAbsent, ...inferredAbsent];
 
  if (!present.length && !absent.length && !leaveOnDate.length) {
  toast('ไม่มีข้อมูลในวันที่เลือก', 'error'); return;
@@ -6579,8 +6596,8 @@ function exportAttendanceXLSX() {
  s3Data.push([`จาก ${settings.reportSenderName || 'ฝ่ายทรัพยากรบุคคล'}`]);
  s3Data.push([]);
  // Report title (rows 4-5, center aligned)
- s3Data.push(['', '', '', `รายงานการขาดลาของพนักงาน ${companyFullName}`]);
- s3Data.push(['', '', '', `ประจำวันที่ ${dayNum} เดือน ${monthName} พ.ศ. ${thaiYear}`]);
+ s3Data.push([`รายงานการขาดลาของพนักงาน ${companyFullName}`]);
+ s3Data.push([`ประจำวันที่ ${dayNum} เดือน ${monthName} พ.ศ. ${thaiYear}`]);
  s3Data.push([]);
  // Section 1: leave table
  const leaveHeaderRow = s3Data.length;
@@ -6628,8 +6645,8 @@ function exportAttendanceXLSX() {
  {s:{r:0,c:0},e:{r:0,c:8}},
  {s:{r:1,c:0},e:{r:1,c:8}},
  {s:{r:2,c:0},e:{r:2,c:8}},
- {s:{r:4,c:3},e:{r:4,c:8}},
- {s:{r:5,c:3},e:{r:5,c:8}},
+ {s:{r:4,c:0},e:{r:4,c:8}},
+ {s:{r:5,c:0},e:{r:5,c:8}},
  {s:{r:lateSectionRow,c:0},e:{r:lateSectionRow,c:8}}
  ];
  // Style letter head lines (rows 0-2)
@@ -6637,9 +6654,9 @@ function exportAttendanceXLSX() {
  const a = XLSX.utils.encode_cell({r, c:0});
  if (ws3[a]) ws3[a].s = S.letterLine;
  }
- // Report title (rows 4-5)
+ // Report title (rows 4-5) — full-row merge + centered
  for (let r = 4; r <= 5; r++) {
- const a = XLSX.utils.encode_cell({r, c:3});
+ const a = XLSX.utils.encode_cell({r, c:0});
  if (ws3[a]) ws3[a].s = S.titleMd;
  }
  // Leave header

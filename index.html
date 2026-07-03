@@ -9,7 +9,8 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Sarabun:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<!-- v1.4.36: swap SheetJS → xlsx-js-style (drop-in, adds cell border/bold/alignment support) -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
@@ -860,7 +861,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.35</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.36</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -884,7 +885,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.35';
+const APP_VERSION = '1.4.36';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -6390,7 +6391,6 @@ function exportAttendanceXLSX() {
  if (!_xlsxCheck()) return;
  const records = DB.load('attendanceRecords');
  const dayRecordsRaw = records.filter(r => r.date === _attReportDate);
- if (!dayRecordsRaw.length) { toast('ไม่มีข้อมูลในวันที่เลือก', 'error'); return; }
 
  const settings = DB.load('settings');
  const workStart = settings.workStartTime || '08:45';
@@ -6415,189 +6415,278 @@ function exportAttendanceXLSX() {
 
  const present = uniqueRecs.filter(r => r.checkIn);
  const absent = uniqueRecs.filter(r => !r.checkIn);
- const wb = XLSX.utils.book_new();
 
- // Sheet 1: มาทำงาน
- const sheet1 = [
- [`รายงานการเข้างาน วันที่ ${formatDate(_attReportDate)}`],
- [],
- ['วันที่','รหัส','ชื่อ-นามสกุล','ชื่อเล่น','แผนก','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่สาย']
- ];
- const [lthH, lthM] = lateThreshold.split(':').map(Number);
- const thresholdMin = lthH * 60 + lthM;
- present.sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||'')).forEach(r => {
- const [h, m] = r.checkIn.split(':').map(Number);
- const lateMin = Math.max(0, (h*60+m) - thresholdMin);
- const status = r.checkIn >= lateThreshold ? 'สาย' : r.checkIn >= workStart ? 'หลังเวลา' : 'ตรงเวลา';
- const empObj = getEmployee(r.employeeCode || r.employeeId);
- const nick = empObj ? (empObj.nickname || '') : '';
- sheet1.push([r.date, r.employeeCode, r.employeeName, nick, getDeptForAttendance(r), r.checkIn, r.checkOut || '-', status, lateMin]);
- });
- const ws1 = XLSX.utils.aoa_to_sheet(sheet1);
- ws1['!cols'] = [{wch:12},{wch:12},{wch:24},{wch:10},{wch:18},{wch:12},{wch:12},{wch:12},{wch:12}];
- XLSX.utils.book_append_sheet(wb, ws1, 'มาทำงาน');
-
- // Sheet 2: ลาหยุด
- const sheet2 = [
- ['รายชื่อพนักงานที่ลา วันที่ ' + formatDate(_attReportDate)],
- [],
- ['รหัส','ชื่อ-นามสกุล','ชื่อเล่น','ประเภทลา','วันที่เริ่ม','วันที่สิ้นสุด','เหตุผล']
- ];
- leaveOnDate.forEach(r => {
- const e = getEmployee(r.employeeId);
- sheet2.push([
- r.employeeId,
- e ? `${e.firstName} ${e.lastName}` : '-',
- e ? (e.nickname || '') : '',
- getLeaveTypeName(r.type),
- r.startDate,
- r.endDate,
- r.reason || ''
- ]);
- });
- const ws2 = XLSX.utils.aoa_to_sheet(sheet2);
- ws2['!cols'] = [{wch:12},{wch:24},{wch:10},{wch:20},{wch:12},{wch:12},{wch:30}];
- XLSX.utils.book_append_sheet(wb, ws2, 'ลาหยุด');
-
- // Sheet 3: ไม่มา
- if (absent.length) {
- const sheet3 = [
- ['ไม่มาทำงาน วันที่ ' + formatDate(_attReportDate)], [],
- ['วันที่','รหัส','ชื่อ-นามสกุล','ชื่อเล่น','แผนก']
- ];
- absent.forEach(r => {
- const empObj = getEmployee(r.employeeCode || r.employeeId);
- const nick = empObj ? (empObj.nickname || '') : '';
- sheet3.push([r.date || _attReportDate, r.employeeCode, r.employeeName, nick, getDeptForAttendance(r)]);
- });
- const ws3 = XLSX.utils.aoa_to_sheet(sheet3);
- ws3['!cols'] = [{wch:12},{wch:12},{wch:24},{wch:10},{wch:18}];
- XLSX.utils.book_append_sheet(wb, ws3, 'ไม่มา');
+ if (!present.length && !absent.length && !leaveOnDate.length) {
+ toast('ไม่มีข้อมูลในวันที่เลือก', 'error'); return;
  }
 
- // Sheet 4: สรุป
- const sheet4 = [
- ['สรุปรายงานการเข้างาน'], [],
- ['วันที่', formatDate(_attReportDate)],
- ['จำนวนพนักงานทั้งหมด (Unique)', uniqueRecs.length],
- ['มาทำงาน', present.length],
- ['ลาหยุด', leaveOnDate.length],
- ['ไม่มา', absent.length],
- ['มาสาย (หลัง ' + lateThreshold + ')', present.filter(r => r.checkIn >= lateThreshold).length],
- ['ตรงเวลา', present.filter(r => r.checkIn < workStart).length]
- ];
- const ws4 = XLSX.utils.aoa_to_sheet(sheet4);
- ws4['!cols'] = [{wch:30},{wch:18}];
- XLSX.utils.book_append_sheet(wb, ws4, 'สรุป');
+ const [lthH, lthM] = lateThreshold.split(':').map(Number);
+ const thresholdMin = lthH * 60 + lthM;
+ const wb = XLSX.utils.book_new();
 
  // ============================================================
- // v1.4.34 Feature 2.1: Sheet 5 "ลา-สาย" (letter format)
+ // v1.4.36 Reusable cell styles (requires xlsx-js-style CDN)
  // ============================================================
+ const S = {
+ border: { top:{style:'thin',color:{rgb:'000000'}}, bottom:{style:'thin',color:{rgb:'000000'}}, left:{style:'thin',color:{rgb:'000000'}}, right:{style:'thin',color:{rgb:'000000'}} },
+ titleBig: { font:{sz:16,bold:true,name:'TH Sarabun New'}, alignment:{horizontal:'center',vertical:'center'} },
+ titleMd: { font:{sz:14,bold:true,name:'TH Sarabun New'}, alignment:{horizontal:'center',vertical:'center'} },
+ headerCell: { font:{sz:12,bold:true,name:'TH Sarabun New',color:{rgb:'FFFFFF'}}, fill:{fgColor:{rgb:'1F4E79'}}, alignment:{horizontal:'center',vertical:'center',wrapText:true}, border:{top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}} },
+ dataCell: { font:{sz:12,name:'TH Sarabun New'}, alignment:{horizontal:'left',vertical:'center'}, border:{top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}} },
+ dataCellCenter: { font:{sz:12,name:'TH Sarabun New'}, alignment:{horizontal:'center',vertical:'center'}, border:{top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}} },
+ dataCellRed: { font:{sz:12,bold:true,name:'TH Sarabun New',color:{rgb:'C00000'}}, alignment:{horizontal:'center',vertical:'center'}, border:{top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}} },
+ letterLine: { font:{sz:14,name:'TH Sarabun New'}, alignment:{horizontal:'left',vertical:'center'} },
+ sectionLabel: { font:{sz:14,bold:true,name:'TH Sarabun New',color:{rgb:'C00000'}}, alignment:{horizontal:'left',vertical:'center'} },
+ summaryLabel: { font:{sz:13,bold:true,name:'TH Sarabun New'}, alignment:{horizontal:'left',vertical:'center'}, border:{top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}} },
+ summaryVal: { font:{sz:13,bold:true,name:'TH Sarabun New'}, alignment:{horizontal:'center',vertical:'center'}, border:{top:{style:'thin'},bottom:{style:'thin'},left:{style:'thin'},right:{style:'thin'}} }
+ };
+ const applyStyleToRange = (ws, r1, c1, r2, c2, style) => {
+ for (let r = r1; r <= r2; r++) {
+ for (let c = c1; c <= c2; c++) {
+ const addr = XLSX.utils.encode_cell({r, c});
+ if (!ws[addr]) ws[addr] = { v: '', t: 's' };
+ ws[addr].s = style;
+ }
+ }
+ };
+
+ // Thai date helpers
  const dateObj = new Date(_attReportDate);
  const thaiMonths = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
  const dayNum = dateObj.getDate();
  const monthName = thaiMonths[dateObj.getMonth()];
  const thaiYear = dateObj.getFullYear() + 543;
- const allEmpsForReport = DB.load('employees').filter(e => e.active !== false);
+
+ // ============================================================
+ // Sheet 1: ภาพรวม (all statuses in one table)
+ // ============================================================
+ const s1Data = [
+ [`รายงานการเข้างาน วันที่ ${formatDate(_attReportDate)}`],
+ [],
+ ['วันที่','รหัสพนักงาน','ชื่อ-สกุล','ชื่อเล่น','แผนก','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่มาสาย']
+ ];
+ // Present (sorted by checkIn time)
+ [...present].sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||'')).forEach(r => {
+ const [h, m] = r.checkIn.split(':').map(Number);
+ const lateMin = Math.max(0, (h*60+m) - thresholdMin);
+ let status;
+ if (r.checkIn >= lateThreshold) status = 'มาสาย';
+ else if (r.checkIn >= workStart) status = 'มาหลังเวลา';
+ else status = 'มาตรงเวลา';
+ const empObj = getEmployee(r.employeeCode || r.employeeId);
+ s1Data.push([
+ r.date, r.employeeCode, r.employeeName,
+ empObj ? (empObj.nickname || '') : '',
+ getDeptForAttendance(r), r.checkIn, r.checkOut || '-', status, lateMin
+ ]);
+ });
+ // Leave
+ leaveOnDate.forEach(r => {
+ const e = getEmployee(r.employeeId);
+ if (!e) return;
+ s1Data.push([
+ _attReportDate, e.id, `${e.firstName} ${e.lastName}`,
+ e.nickname || '', e.department || '',
+ '', '', `ลา (${getLeaveTypeName(r.type)})`, ''
+ ]);
+ });
+ // Absent
+ absent.forEach(r => {
+ const empObj = getEmployee(r.employeeCode || r.employeeId);
+ s1Data.push([
+ r.date || _attReportDate, r.employeeCode || '-', r.employeeName || '-',
+ empObj ? (empObj.nickname || '') : '',
+ getDeptForAttendance(r), '', '', 'ขาดงาน', ''
+ ]);
+ });
+
+ const ws1 = XLSX.utils.aoa_to_sheet(s1Data);
+ ws1['!cols'] = [{wch:12},{wch:14},{wch:26},{wch:12},{wch:22},{wch:12},{wch:12},{wch:14},{wch:12}];
+ ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:8}}];
+ // Style: title, header, data + red on last col if late > 0
+ if (ws1['A1']) ws1['A1'].s = S.titleBig;
+ for (let c = 0; c <= 8; c++) {
+ const addr = XLSX.utils.encode_cell({r:2, c});
+ if (ws1[addr]) ws1[addr].s = S.headerCell;
+ }
+ for (let r = 3; r < s1Data.length; r++) {
+ for (let c = 0; c <= 8; c++) {
+ const addr = XLSX.utils.encode_cell({r, c});
+ if (!ws1[addr]) ws1[addr] = { v: '', t: 's' };
+ if (c === 7) {
+ // สถานะ column — red for สาย/ขาดงาน
+ const v = ws1[addr].v;
+ ws1[addr].s = (v === 'มาสาย' || v === 'ขาดงาน' || (typeof v === 'string' && v.startsWith('ลา ')))
+ ? S.dataCellRed : S.dataCellCenter;
+ } else if (c === 8) {
+ const v = ws1[addr].v;
+ ws1[addr].s = (typeof v === 'number' && v > 0) ? S.dataCellRed : S.dataCellCenter;
+ } else if (c === 0 || c === 1 || c === 5 || c === 6) {
+ ws1[addr].s = S.dataCellCenter;
+ } else {
+ ws1[addr].s = S.dataCell;
+ }
+ }
+ }
+ ws1['!rows'] = [{ hpt: 24 }, undefined, { hpt: 22 }];
+ XLSX.utils.book_append_sheet(wb, ws1, 'ภาพรวม');
+
+ // ============================================================
+ // Sheet 2: สรุป
+ // ============================================================
+ const onTime = present.filter(r => r.checkIn < workStart).length;
+ const afterStart = present.filter(r => r.checkIn >= workStart && r.checkIn < lateThreshold).length;
+ const lateAfterTh = present.filter(r => r.checkIn >= lateThreshold).length;
+
+ const s2Data = [
+ ['สรุปรายงานการเข้างาน'],
+ [],
+ ['วันที่', formatDate(_attReportDate)],
+ ['จำนวนพนักงานทั้งหมด (Unique)', uniqueRecs.length],
+ ['มาทำงาน', present.length],
+ [' - มาตรงเวลา (ก่อน ' + workStart + ')', onTime],
+ [' - มาหลังเวลา (' + workStart + ' - ' + lateThreshold + ')', afterStart],
+ [' - มาสาย (หลัง ' + lateThreshold + ')', lateAfterTh],
+ ['ลาหยุด', leaveOnDate.length],
+ ['ไม่มา / ขาดงาน', absent.length]
+ ];
+ const ws2 = XLSX.utils.aoa_to_sheet(s2Data);
+ ws2['!cols'] = [{wch:40},{wch:16}];
+ ws2['!merges'] = [{s:{r:0,c:0},e:{r:0,c:1}}];
+ if (ws2['A1']) ws2['A1'].s = S.titleBig;
+ for (let r = 2; r < s2Data.length; r++) {
+ const a = XLSX.utils.encode_cell({r, c:0});
+ const b = XLSX.utils.encode_cell({r, c:1});
+ if (!ws2[a]) ws2[a] = { v: '', t: 's' };
+ if (!ws2[b]) ws2[b] = { v: '', t: 's' };
+ ws2[a].s = S.summaryLabel;
+ ws2[b].s = S.summaryVal;
+ }
+ ws2['!rows'] = [{ hpt: 24 }, undefined];
+ XLSX.utils.book_append_sheet(wb, ws2, 'สรุป');
+
+ // ============================================================
+ // Sheet 3: สรุปชื่อพนักงาน ลา / มาสาย (letter format with borders)
+ // ============================================================
+ const allEmpsRep = DB.load('employees').filter(e => e.active !== false);
  const primaryCompany = (settings.companies || []).find(c => c.id === 'masterpiece') || (settings.companies || [])[0] || {};
  const companyFullName = primaryCompany.name || 'บริษัท มาสเตอร์พีช แอนด์ โครเชท์ จำกัด';
 
- const sheet5 = [];
- sheet5.push([`เรียน คุณ${settings.reportRecipientName || 'รัชตะ สาริบุตร'}`]);
- sheet5.push([settings.reportRecipientTitle || 'กรรมการผู้จัดการ']);
- sheet5.push([`จาก ${settings.reportSenderName || 'ฝ่ายทรัพยากรบุคคล'}`]);
- sheet5.push([]);
- sheet5.push(['', '', '', `รายงานการขาดลาของพนักงาน ${companyFullName}`]);
- sheet5.push(['', '', '', `ประจำวันที่ ${dayNum} เดือน ${monthName} พ.ศ. ${thaiYear}`]);
- sheet5.push([]);
- sheet5.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','ประเภทลา','หมายเหตุ']);
- let leaveIdx = 1;
+ const s3Data = [];
+ // Letter head (rows 0-2)
+ s3Data.push([`เรียน คุณ${settings.reportRecipientName || 'รัชตะ สาริบุตร'}`]);
+ s3Data.push([settings.reportRecipientTitle || 'กรรมการผู้จัดการ']);
+ s3Data.push([`จาก ${settings.reportSenderName || 'ฝ่ายทรัพยากรบุคคล'}`]);
+ s3Data.push([]);
+ // Report title (rows 4-5, center aligned)
+ s3Data.push(['', '', '', `รายงานการขาดลาของพนักงาน ${companyFullName}`]);
+ s3Data.push(['', '', '', `ประจำวันที่ ${dayNum} เดือน ${monthName} พ.ศ. ${thaiYear}`]);
+ s3Data.push([]);
+ // Section 1: leave table
+ const leaveHeaderRow = s3Data.length;
+ s3Data.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','ประเภทลา','หมายเหตุ']);
+ let idx = 1;
  leaveOnDate.forEach(r => {
  const e = getEmployee(r.employeeId);
  if (!e) return;
- sheet5.push([
- leaveIdx++,
- `${e.firstName} ${e.lastName}`,
- e.nickname || '',
- e.department || '',
+ s3Data.push([
+ idx++, `${e.firstName} ${e.lastName}`, e.nickname || '', e.department || '',
  e.company === 'crochet' ? '/' : '',
  e.company === 'masterpiece' ? '/' : '',
  e.company === 'habita' ? '/' : '',
- getLeaveTypeName(r.type),
- r.reason || ''
+ getLeaveTypeName(r.type), r.reason || ''
  ]);
  });
- sheet5.push([]);
- sheet5.push(['พนักงานที่มาทำงานสาย']);
- sheet5.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','เวลาเข้า','หมายเหตุ']);
+ const leaveEndRow = s3Data.length - 1;
+ s3Data.push([]);
+ // Section 2: late table
+ const lateSectionRow = s3Data.length;
+ s3Data.push(['พนักงานที่มาทำงานสาย']);
+ const lateHeaderRow = s3Data.length;
+ s3Data.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','เวลาเข้า','หมายเหตุ']);
  let lateIdx = 1;
- present.filter(r => r.checkIn >= lateThreshold).sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||'')).forEach(r => {
- const e = getEmployee(r.employeeCode || r.employeeId);
- const empName = e ? `${e.firstName} ${e.lastName}` : (r.employeeName || '');
- const nick = e ? (e.nickname || '') : '';
- const dept = e ? (e.department || '') : getDeptForAttendance(r);
- sheet5.push([
- lateIdx++,
- empName,
- nick,
- dept,
- e?.company === 'crochet' ? '/' : '',
- e?.company === 'masterpiece' ? '/' : '',
- e?.company === 'habita' ? '/' : '',
- r.checkIn,
- ''
+ present.filter(r => r.checkIn >= lateThreshold)
+ .sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||''))
+ .forEach(r => {
+ const empObj = getEmployee(r.employeeCode || r.employeeId);
+ const empName = empObj ? `${empObj.firstName} ${empObj.lastName}` : (r.employeeName || '');
+ const nick = empObj ? (empObj.nickname || '') : '';
+ const dept = empObj ? (empObj.department || '') : getDeptForAttendance(r);
+ s3Data.push([
+ lateIdx++, empName, nick, dept,
+ empObj?.company === 'crochet' ? '/' : '',
+ empObj?.company === 'masterpiece' ? '/' : '',
+ empObj?.company === 'habita' ? '/' : '',
+ r.checkIn, ''
  ]);
  });
- const ws5 = XLSX.utils.aoa_to_sheet(sheet5);
- ws5['!cols'] = [{wch:6},{wch:22},{wch:10},{wch:20},{wch:10},{wch:12},{wch:10},{wch:12},{wch:20}];
- XLSX.utils.book_append_sheet(wb, ws5, 'ลา-สาย');
+ const lateEndRow = s3Data.length - 1;
 
- // ============================================================
- // v1.4.34 Feature 2.2: Sheet 6 "สรุปวันทำงาน"
- // ============================================================
- const sheet6 = [];
- sheet6.push([`วันที่ ${dayNum} เดือน ${monthName} ${thaiYear}`]);
- sheet6.push([]);
- // Group missing (on leave) employees by department
- const missingByDept = new Map();
- leaveOnDate.forEach(r => {
- const e = getEmployee(r.employeeId);
- if (!e) return;
- const dept = e.department || '-';
- if (!missingByDept.has(dept)) missingByDept.set(dept, []);
- missingByDept.get(dept).push({name: `${e.firstName} ${e.lastName}`, nickname: e.nickname || ''});
- });
- const sortedDepts = [...missingByDept.keys()].sort();
- sortedDepts.forEach(dept => {
- sheet6.push([`แผนก ${dept}`]);
- missingByDept.get(dept).forEach(p => sheet6.push([p.name, p.nickname]));
- sheet6.push([]);
- });
-
- // Summary block 1: overall headcount vs leave/sick counts
- const totalActive = allEmpsForReport.length;
- const holidayCount = leaveOnDate.filter(r => r.type === 'personal' || r.type === 'vacation').length;
- const sickCount = leaveOnDate.filter(r => r.type === 'sick').length;
- sheet6.push(['พนักงานทั้งหมด', `${totalActive} คน`]);
- sheet6.push(['วันหยุด', `${holidayCount} คน`]);
- sheet6.push(['ป่วย', `${sickCount} คน`]);
- sheet6.push([]);
-
- // Summary block 2: Thai vs Myanmar working today
- const onLeaveIds = new Set(leaveOnDate.map(r => r.employeeId));
- const workingToday = allEmpsForReport.filter(e => !onLeaveIds.has(e.id));
- const thaiWorking = workingToday.filter(e => (e.nationality || 'thai') === 'thai').length;
- const myanmarWorking = workingToday.filter(e => e.nationality === 'myanmar').length;
- sheet6.push(['พนักงานทั้งหมด', `${thaiWorking} คน`]);
- sheet6.push(['พนักงานพม่า', `${myanmarWorking} คน`]);
- sheet6.push(['ทำงานที่บริษัทวันนี้', `${thaiWorking + myanmarWorking} คน`]);
-
- const ws6 = XLSX.utils.aoa_to_sheet(sheet6);
- ws6['!cols'] = [{wch:30},{wch:15}];
- XLSX.utils.book_append_sheet(wb, ws6, 'สรุปวันทำงาน');
+ const ws3 = XLSX.utils.aoa_to_sheet(s3Data);
+ ws3['!cols'] = [{wch:8},{wch:26},{wch:12},{wch:22},{wch:12},{wch:14},{wch:10},{wch:14},{wch:20}];
+ ws3['!merges'] = [
+ {s:{r:0,c:0},e:{r:0,c:8}},
+ {s:{r:1,c:0},e:{r:1,c:8}},
+ {s:{r:2,c:0},e:{r:2,c:8}},
+ {s:{r:4,c:3},e:{r:4,c:8}},
+ {s:{r:5,c:3},e:{r:5,c:8}},
+ {s:{r:lateSectionRow,c:0},e:{r:lateSectionRow,c:8}}
+ ];
+ // Style letter head lines (rows 0-2)
+ for (let r = 0; r <= 2; r++) {
+ const a = XLSX.utils.encode_cell({r, c:0});
+ if (ws3[a]) ws3[a].s = S.letterLine;
+ }
+ // Report title (rows 4-5)
+ for (let r = 4; r <= 5; r++) {
+ const a = XLSX.utils.encode_cell({r, c:3});
+ if (ws3[a]) ws3[a].s = S.titleMd;
+ }
+ // Leave header
+ for (let c = 0; c <= 8; c++) {
+ const a = XLSX.utils.encode_cell({r: leaveHeaderRow, c});
+ if (ws3[a]) ws3[a].s = S.headerCell;
+ }
+ // Leave rows with borders
+ for (let r = leaveHeaderRow + 1; r <= leaveEndRow; r++) {
+ for (let c = 0; c <= 8; c++) {
+ const addr = XLSX.utils.encode_cell({r, c});
+ if (!ws3[addr]) ws3[addr] = { v: '', t: 's' };
+ if (c === 0 || (c >= 4 && c <= 6)) ws3[addr].s = S.dataCellCenter;
+ else if (c === 7) ws3[addr].s = S.dataCellRed;
+ else ws3[addr].s = S.dataCell;
+ }
+ }
+ // Late section label
+ const lateSectionAddr = XLSX.utils.encode_cell({r: lateSectionRow, c:0});
+ if (ws3[lateSectionAddr]) ws3[lateSectionAddr].s = S.sectionLabel;
+ // Late header
+ for (let c = 0; c <= 8; c++) {
+ const a = XLSX.utils.encode_cell({r: lateHeaderRow, c});
+ if (ws3[a]) ws3[a].s = S.headerCell;
+ }
+ // Late rows with borders
+ for (let r = lateHeaderRow + 1; r <= lateEndRow; r++) {
+ for (let c = 0; c <= 8; c++) {
+ const addr = XLSX.utils.encode_cell({r, c});
+ if (!ws3[addr]) ws3[addr] = { v: '', t: 's' };
+ if (c === 0 || (c >= 4 && c <= 6)) ws3[addr].s = S.dataCellCenter;
+ else if (c === 7) ws3[addr].s = S.dataCellRed;
+ else ws3[addr].s = S.dataCell;
+ }
+ }
+ // Row heights (letter head bigger)
+ const rows3 = [];
+ rows3[0] = { hpt: 22 };
+ rows3[1] = { hpt: 20 };
+ rows3[2] = { hpt: 22 };
+ rows3[4] = { hpt: 26 };
+ rows3[5] = { hpt: 22 };
+ ws3['!rows'] = rows3;
+ XLSX.utils.book_append_sheet(wb, ws3, 'สรุปลา-สาย');
 
  XLSX.writeFile(wb, `รายงานเข้างาน-${_attReportDate}.xlsx`);
- toast(`Export ${present.length + absent.length + leaveOnDate.length} รายการ สำเร็จ`);
+ toast(`Export 3 sheets (${present.length} มา / ${leaveOnDate.length} ลา / ${absent.length} ขาด) สำเร็จ`);
 }
 
 function exportPayrollXLSX() {

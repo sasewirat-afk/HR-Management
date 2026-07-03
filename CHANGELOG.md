@@ -6,6 +6,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.36] — 2026-07-03
+
+**Redesign attendance Excel — 3 clean sheets with cell styling**
+
+### Change
+Replace previous 5-sheet export (มาทำงาน, ลาหยุด, ไม่มา, สรุป, ลา-สาย, สรุปวันทำงาน) with 3 consolidated sheets.
+
+### New Sheet Structure
+
+**Sheet 1: "ภาพรวม"** — single consolidated overview
+- Columns: วันที่ · รหัสพนักงาน · ชื่อ-สกุล · ชื่อเล่น · แผนก · เวลาเข้างาน · เวลาออกงาน · สถานะ · นาทีที่มาสาย
+- All employees in one table:
+ - Present: sorted by checkIn, status = มาตรงเวลา / มาหลังเวลา / มาสาย
+ - Leave: status = "ลา (type)"
+ - Absent: status = "ขาดงาน"
+- Header row styled with dark blue fill + white bold text
+- Status column: red bold for สาย/ลา/ขาดงาน
+- Merged title cell
+
+**Sheet 2: "สรุป"** — count summary
+- วันที่, จำนวนพนักงานทั้งหมด (Unique)
+- มาทำงาน (with sub-breakdown: มาตรงเวลา / มาหลังเวลา / มาสาย)
+- ลาหยุด, ไม่มา/ขาดงาน
+- All cells bordered, label column bold
+
+**Sheet 3: "สรุปลา-สาย"** — letter format for executive
+- Header lines: เรียน คุณ__ / ตำแหน่ง / จาก __ (left-aligned)
+- Title row: รายงานการขาดลาของพนักงาน + Thai date (center-aligned, larger font, merged)
+- Table 1: ลา — with borders, colored status text
+- Section label "พนักงานที่มาทำงานสาย" (red bold)
+- Table 2: มาสาย — with borders
+
+### Technical Changes
+1. **Swapped CDN**: `xlsx@0.18.5` → `xlsx-js-style@1.2.0` (drop-in fork of SheetJS that adds `.s` style support)
+   - Full backward compatibility with existing exports (exportEmployeesXLSX, exportPayrollXLSX, importShiftScheduleXLSX)
+2. **Reusable style objects**: titleBig, titleMd, headerCell, dataCell, dataCellCenter, dataCellRed, letterLine, sectionLabel, summaryLabel, summaryVal
+3. **Font**: TH Sarabun New (Thai default) at 12-16pt
+4. **Cell borders**: thin black on all data cells + header
+5. **Header fill**: `#1F4E79` (dark blue) with white text
+6. **Red highlight**: `#C00000` on late/absent/leave status + late minutes > 0
+
+### Removed Sheets
+- ~~"มาทำงาน"~~ merged into ภาพรวม
+- ~~"ลาหยุด"~~ merged into ภาพรวม + kept in Sheet 3 letter table
+- ~~"ไม่มา"~~ merged into ภาพรวม
+- ~~"สรุปวันทำงาน"~~ dropped (feature 2.2 from v1.4.34, not in user's new spec)
+
+### Filename
+Same: `รายงานเข้างาน-{date}.xlsx`
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.35] — 2026-07-03
 
 **Feature: ชื่อเล่น (nickname) columns across all display + export surfaces**

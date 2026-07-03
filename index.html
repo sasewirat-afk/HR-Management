@@ -861,7 +861,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.38</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.39</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -885,7 +885,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.38';
+const APP_VERSION = '1.4.39';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -6124,7 +6124,8 @@ function renderAttendanceReport() {
  // Before: `absent = uniqueDayRecords.filter(r => !r.checkIn)` → always 0 (Tigersoft never exports no-scan rows)
  // After: `absent = active employees - present - autoAbsent - onLeave`
  // v1.4.20: also exclude employees with exemptFromAttendance flag (CEO, คนสวน, แม่บ้าน — ไม่ต้องสแกน)
- const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin' && !e.exemptFromAttendance);
+ // v1.4.39: removed role='admin' filter — use only exemptFromAttendance
+ const activeEmps = DB.load('employees').filter(e => e.active && !e.exemptFromAttendance);
  const presentIds = new Set(present.map(r => r.employeeCode || r.employeeId));
  const autoAbsentIds = new Set(autoAbsent.map(r => r.employeeCode || r.employeeId));
  const leaveIds = new Set(leaveOnDate.map(r => r.employeeId));
@@ -6132,18 +6133,27 @@ function renderAttendanceReport() {
 
  // Employees explicitly marked absent in file (checkIn missing but row exists)
  const explicitAbsent = uniqueDayRecords.filter(r => !r.checkIn);
- // Employees not in file at all AND not on leave AND active → didn't scan = absent
- const inferredAbsent = activeEmps
- .filter(e => !presentIds.has(e.id) && !autoAbsentIds.has(e.id) && !leaveIds.has(e.id) && !trackedInFile.has(e.id))
- .map(e => ({
+
+ // v1.4.39: split candidates by shift type — 'O' = วันหยุด, else = ขาดงาน
+ const absentCandidates = activeEmps
+ .filter(e => !presentIds.has(e.id) && !autoAbsentIds.has(e.id) && !leaveIds.has(e.id) && !trackedInFile.has(e.id));
+ const dayOff = [];
+ const inferredAbsent = [];
+ absentCandidates.forEach(e => {
+ const shift = getShift(e.id, _attReportDate);
+ const row = {
  date: _attReportDate,
  employeeCode: e.id,
  employeeId: e.id,
  employeeName: `${esc(e.firstName)} ${esc(e.lastName)}`,
- checkIn: null,
- checkOut: null,
- _inferredAbsent: true // marker: no row in Tigersoft file
- }));
+ checkIn: null, checkOut: null
+ };
+ if (shift && shift.type === 'O') {
+ dayOff.push({ ...row, _dayOff: true });
+ } else {
+ inferredAbsent.push({ ...row, _inferredAbsent: true });
+ }
+ });
 
  const absent = [
  ...explicitAbsent,
@@ -6151,7 +6161,7 @@ function renderAttendanceReport() {
  ...autoAbsent.map(r => ({ ...r, _autoAbsent: true }))
  ];
 
- console.log(`[AttReport ${_attReportDate}] active=${activeEmps.length}, present=${present.length}, autoAbsent=${autoAbsent.length}, leave=${leaveOnDate.length}, absent=${absent.length} (explicit=${explicitAbsent.length}, inferred=${inferredAbsent.length})`);
+ console.log(`[AttReport ${_attReportDate}] active=${activeEmps.length}, present=${present.length}, autoAbsent=${autoAbsent.length}, leave=${leaveOnDate.length}, dayOff=${dayOff.length}, absent=${absent.length} (explicit=${explicitAbsent.length}, inferred=${inferredAbsent.length})`);
 
  const arrivedFromStart = present.filter(r => r.checkIn >= workStart);
  const lateArrived = present.filter(r => r.checkIn >= lateThreshold);
@@ -6215,6 +6225,7 @@ function renderAttendanceReport() {
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-late').style.display='block';">มาสาย (${lateArrived.length})</div>
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-absent').style.display='block';">ไม่มา (${absent.length})</div>
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-leave').style.display='block';">ลา (${leaveOnDate.length})</div>
+ <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-dayoff').style.display='block';">วันหยุด (${dayOff.length})</div>
  </div>
 
  <div id="sec-present" class="att-section card">
@@ -6305,6 +6316,29 @@ function renderAttendanceReport() {
  <td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? ' - ' + formatDate(r.endDate) : ''}</td>
  </tr>`;
  }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;">ไม่มีคนลา</td></tr>'}
+ </tbody>
+ </table>
+ </div>
+ </div>
+
+ <div id="sec-dayoff" class="att-section card" style="display:none;">
+ <div class="card-body" style="padding:0;">
+ <table>
+ <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>แผนก</th><th>หมายเหตุ</th></tr></thead>
+ <tbody>
+ ${dayOff.map(r => {
+ const empObj = getEmployee(r.employeeCode || r.employeeId);
+ const nick = empObj ? (empObj.nickname || '') : '';
+ const dept = empObj ? (empObj.department || '') : '-';
+ return `<tr>
+ <td>${formatDate(_attReportDate)}</td>
+ <td>${r.employeeCode || r.employeeId}</td>
+ <td>${esc(r.employeeName)}</td>
+ <td>${esc(nick)}</td>
+ <td>${dept}</td>
+ <td><span class="status-badge status-approved">วันหยุด (ตามตารางกะ)</span></td>
+ </tr>`;
+ }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;">ไม่มีคนวันหยุดตามตารางกะ</td></tr>'}
  </tbody>
  </table>
  </div>
@@ -6416,21 +6450,26 @@ function exportAttendanceXLSX() {
  const present = uniqueRecs.filter(r => r.checkIn);
  const explicitAbsent = uniqueRecs.filter(r => !r.checkIn);
 
- // v1.4.37: derive inferred absent from EMPLOYEE MASTER (not just Tigersoft file)
- // Tigersoft only exports rows for scanned employees — no-scan people are missing from file
- const activeEmps = DB.load('employees').filter(e => e.active && e.role !== 'admin' && !e.exemptFromAttendance);
+ // v1.4.39: use only exemptFromAttendance (role='admin' still gets tracked if not exempt)
+ const activeEmps = DB.load('employees').filter(e => e.active && !e.exemptFromAttendance);
  const presentIds = new Set(present.map(r => r.employeeCode || r.employeeId));
  const leaveIds = new Set(leaveOnDate.map(r => r.employeeId));
  const trackedIds = new Set(uniqueRecs.map(r => r.employeeCode || r.employeeId));
- const inferredAbsent = activeEmps
- .filter(e => !presentIds.has(e.id) && !leaveIds.has(e.id) && !trackedIds.has(e.id))
- .map(e => ({
+ // v1.4.39: split by shift — type 'O' = วันหยุด, else = ขาดงาน
+ const absentCandidates = activeEmps.filter(e => !presentIds.has(e.id) && !leaveIds.has(e.id) && !trackedIds.has(e.id));
+ const dayOff = [];
+ const inferredAbsent = [];
+ absentCandidates.forEach(e => {
+ const shift = getShift(e.id, _attReportDate);
+ const row = {
  date: _attReportDate,
  employeeCode: e.id, employeeId: e.id,
  employeeName: `${e.firstName} ${e.lastName}`,
- checkIn: null, checkOut: null,
- _inferredAbsent: true
- }));
+ checkIn: null, checkOut: null
+ };
+ if (shift && shift.type === 'O') dayOff.push({ ...row, _dayOff: true });
+ else inferredAbsent.push({ ...row, _inferredAbsent: true });
+ });
  const absent = [...explicitAbsent, ...inferredAbsent];
 
  if (!present.length && !absent.length && !leaveOnDate.length) {
@@ -6516,6 +6555,16 @@ function exportAttendanceXLSX() {
  getDeptForAttendance(r), '', '', 'ขาดงาน', ''
  ]);
  });
+ // v1.4.39: Day off (from shift schedule)
+ dayOff.forEach(r => {
+ const empObj = getEmployee(r.employeeCode || r.employeeId);
+ s1Data.push([
+ _attReportDate, r.employeeCode, r.employeeName,
+ empObj ? (empObj.nickname || '') : '',
+ empObj ? (empObj.department || '') : getDeptForAttendance(r),
+ '', '', 'วันหยุด', ''
+ ]);
+ });
 
  const ws1 = XLSX.utils.aoa_to_sheet(s1Data);
  ws1['!cols'] = [{wch:12},{wch:14},{wch:26},{wch:12},{wch:22},{wch:12},{wch:12},{wch:14},{wch:12}];
@@ -6565,9 +6614,10 @@ function exportAttendanceXLSX() {
  [' - มาหลังเวลา (' + workStart + ' - ' + lateThreshold + ')', afterStart],
  [' - มาสาย (หลัง ' + lateThreshold + ')', lateAfterTh],
  ['ลาหยุด', leaveOnDate.length],
+ ['วันหยุด (ตามตารางกะ)', dayOff.length],
  ['ไม่มา / ขาดงาน', absent.length],
  [],
- ['ตรวจสอบยอด (มา + ลา + ขาด)', present.length + leaveOnDate.length + absent.length]
+ ['ตรวจสอบยอด (มา + ลา + วันหยุด + ขาด)', present.length + leaveOnDate.length + dayOff.length + absent.length]
  ];
  const ws2 = XLSX.utils.aoa_to_sheet(s2Data);
  ws2['!cols'] = [{wch:40},{wch:16}];

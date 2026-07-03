@@ -6,6 +6,63 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.39] — 2026-07-03
+
+**Feature: วันหยุด status via shift schedule + include admins with attendance**
+
+### Bug 1: Admin role forced-excluded from attendance
+`activeEmps` filter excluded ALL role='admin' employees. But 430806001 is admin AND must clock attendance.
+
+**Fix**: Remove `e.role !== 'admin'` from filter. Use ONLY `exemptFromAttendance` flag.
+- ADMIN001 (system account) already has `exemptFromAttendance=true` (from v1.4.20 migration)
+- 430806001 (working admin) will now appear in reports
+- Any admin who shouldn't be tracked → check "ละเว้นการพิจารณาเวลาเข้า-ออก" in edit form
+
+### Bug 2: "ขาดงาน" wrongly assigned to employees on scheduled day off
+Employees not in TigerSoft file + not on leave were ALL marked "ขาดงาน". But some had shift schedule = OFF that day (weekly rotation, planned rest).
+
+**Fix**: Check shift schedule for each candidate absentee:
+```js
+const shift = getShift(emp.id, _attReportDate);
+if (shift && shift.type === 'O') {
+  dayOff.push(...);   // → status 'วันหยุด'
+} else {
+  inferredAbsent.push(...);  // → status 'ขาดงาน' (default, safe)
+}
+```
+
+If no shift record → default to `ขาดงาน` (conservative — admin should investigate).
+
+### Changes
+
+**A) Screen — Attendance Report page**
+- Added 5th tab: `วันหยุด (n)` after `ลา (n)`
+- Table: date · id · name · nickname · dept · badge
+
+**B) Excel — Sheet 1 (ภาพรวม)**
+- Added rows for dayOff employees with status = `วันหยุด`
+- Status column: `วันหยุด` shown as neutral (NOT red) — different from ขาดงาน (red)
+
+**C) Excel — Sheet 2 (สรุป)**
+```
+มาทำงาน                    | 74
+ - มาตรงเวลา (ก่อน 08:45)   | 47
+ - มาหลังเวลา (08:45-09:01) | 27
+ - มาสาย (หลัง 09:01)       | 0
+ลาหยุด                     | 1
+วันหยุด (ตามตารางกะ)         | X  (NEW)
+ไม่มา / ขาดงาน               | Y  (reduced by X)
+
+ตรวจสอบยอด (มา + ลา + วันหยุด + ขาด) | 93
+```
+
+### Data Dependency
+Requires `DB.load('shifts')` to be populated for the date. If shift array is empty for a specific employee×date pair → they will show as `ขาดงาน` (safer default).
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.38] — 2026-07-03
 
 **HOTFIX to v1.4.37 — Summary sheet total count**

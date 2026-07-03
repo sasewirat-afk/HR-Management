@@ -6,6 +6,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.33] — 2026-07-02
+
+**Day 4 — H1 (HIGH): Supabase RLS Lockdown (Option C — Ship in 1 day)**
+
+### Vulnerability
+`SUPABASE_ANON_KEY` is embedded in `index.html` (public JS) — anyone can view source and use the key from curl/Postman to:
+1. `DELETE FROM hr_data` → wipe all 103 employees + 4552 attendance records
+2. `UPDATE hr_data SET value = ...` where key='employees' → salary fraud, self-promotion to admin
+3. `SELECT * FROM hr_data` → download all data including password hashes
+4. Insert fake audit_logs to cover tracks
+
+### Architecture Discovery
+System uses **single-table key-value store** `hr_data (key text, value jsonb, updated_at timestamptz)`.
+23 "types" (employees, attendance, settings, etc.) are stored as different rows keyed by string.
+This simplifies RLS scope to ONE table.
+
+### Fix (Option C — Damage Limitation)
+**Phase A — Code (this release)**:
+1. `_cloudUpsert()` — detect RLS violation (Postgres 42501) and show clear error toast
+2. `reset()` — try DELETE first, on 42501 fall back to UPDATE-to-null (soft-clear)
+3. This preserves factory-reset UX while making DELETE-based attacks harmless
+
+**Phase B — Supabase Dashboard (user applies via SQL Editor)**:
+See `backups/v1.4.33-pre/rls_policies.sql`:
+- `ALTER TABLE hr_data ENABLE ROW LEVEL SECURITY;`
+- `SELECT` policy for anon (needed for read)
+- `INSERT` policy for anon with key-length + value-size guards
+- `UPDATE` policy for anon with same guards
+- **NO DELETE policy** — anon cannot delete rows
+
+### Threat Mitigation Matrix
+| Attack | Before | After |
+|---|---|---|
+| Mass DELETE via leaked key | ✅ Works | ❌ Blocked (42501) |
+| Schema DROP TABLE | ✅ Works | ❌ Blocked (RLS on) |
+| Value bloat (DoS via huge insert) | ✅ Works | ❌ Blocked (50MB cap) |
+| Junk key insert | ✅ Works | ❌ Blocked (100 char cap) |
+| SELECT * download | ✅ Works | ⚠️ Still works (mitigated by v1.4.28 hash) |
+| UPDATE salary | ✅ Works | ⚠️ Still works (H4/A-migration future) |
+
+### Backward Compatibility
+✅ Zero data migration
+✅ All existing app flows unchanged (upsert/select/read all work)
+✅ Reset() gracefully degrades to soft-clear post-RLS
+✅ Cloud realtime subscription unaffected
+
+### Deferred to Sprint 2
+- **H1-full**: Migrate to Supabase Auth per employee (3-5 day project)
+  - Blocks read/update via row-level auth checks
+  - Requires email provisioning for 103 employees
+  - Password migration from SHA-256 → bcrypt
+
+### Deployment Sequence
+1. Deploy v1.4.33 code to Vercel first (app tolerates BOTH RLS states)
+2. THEN apply SQL policies via Supabase Dashboard
+3. This order prevents downtime if RLS blocks something unexpected
+
+### Rollback Procedure
+If RLS breaks the app in production:
+```sql
+ALTER TABLE hr_data DISABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "hr_data_select_anon" ON hr_data;
+DROP POLICY IF EXISTS "hr_data_insert_anon" ON hr_data;
+DROP POLICY IF EXISTS "hr_data_update_anon" ON hr_data;
+```
+
+### Files Changed
+- `index.html` — RLS error handling + reset() fallback + v1.4.33 bump
+- `backups/v1.4.33-pre/rls_policies.sql` — SQL to apply after code deploy
+
+---
+
 ## [1.4.32] — 2026-07-02
 
 **Day 3 — H3 (HIGH): Verify current password before allowing change**

@@ -860,7 +860,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.32</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.33</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -884,7 +884,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.32';
+const APP_VERSION = '1.4.33';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1063,7 +1063,12 @@ const DB = {
  }, { onConflict: 'key' });
  if (error) {
  console.error(`[CloudUpsert] failed for '${key}':`, error.message);
+ // v1.4.33 (H1): detect RLS violation (Postgres error code 42501)
+ if (error.code === '42501' || (error.message && error.message.toLowerCase().includes('row-level security'))) {
+ toast(` RLS ปิดกั้นการเขียน '${key}' — โปรดตรวจ Supabase policies`, 'error');
+ } else {
  toast(`Cloud sync failed (${key}): ${esc(error.message)}`, 'error');
+ }
  }
  } catch (e) {
  console.warn(' Cloud sync failed for', key, e);
@@ -1211,8 +1216,29 @@ const DB = {
  Object.keys(localStorage).filter(k => k.startsWith('hr_')).forEach(k => localStorage.removeItem(k));
  if (cloudSync) {
  try {
- await supa.from('hr_data').delete().neq('key', '__never__');
+ // v1.4.33 (H1): Try DELETE first; if RLS blocks (42501), fall back to UPDATE-to-null
+ // Post-RLS lockdown, anon has no DELETE permission — this is by design.
+ // Reset is now a soft-reset: value=null, keys remain (audit trail preserved).
+ const { error } = await supa.from('hr_data').delete().neq('key', '__never__');
+ if (error) {
+ if (error.code === '42501' || (error.message && error.message.toLowerCase().includes('row-level security'))) {
+ console.warn('[reset] DELETE blocked by RLS — falling back to UPDATE soft-clear');
+ // Get all keys, UPDATE each to null value
+ const { data: allRows } = await supa.from('hr_data').select('key');
+ if (allRows) {
+ for (const row of allRows) {
+ await supa.from('hr_data').upsert({
+ key: row.key, value: null, updated_at: new Date().toISOString()
+ }, { onConflict: 'key' });
+ }
+ }
+ console.log(' Cloud data soft-cleared (RLS-safe)');
+ } else {
+ throw error;
+ }
+ } else {
  console.log(' Cloud data cleared');
+ }
  } catch (e) { console.warn('Cloud reset failed:', e); }
  }
  }
@@ -10165,6 +10191,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 function showChangePasswordPage() {
  document.getElementById('loginPage').classList.add('hidden');
+ document.getElementById('changePasswordPage').classList.remove('hidden');
  document.getElementById('changePasswordPage').classList.remove('hidden');
  document.getElementById('changePassAlert').innerHTML = '';
  document.getElementById('currentPass').value = ''; // v1.4.32 (H3)

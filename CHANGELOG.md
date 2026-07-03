@@ -6,6 +6,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.38] — 2026-07-03
+
+**HOTFIX to v1.4.37 — Summary sheet total count**
+
+### Bug
+Sheet 2 (สรุป) แสดง `จำนวนพนักงานทั้งหมด (Unique) = 74` ซึ่งเป็นจำนวนคนที่ **สแกน**เข้างานเท่านั้น ไม่รวมคนที่ลา + ขาด
+
+**Expected**: 93 (= active - admin - exemptFromAttendance)
+**Actual before fix**: 74 (uniqueRecs.length)
+
+ผลคือ present + leave + absent = 74 + 1 + 18 = 93 ไม่เท่ากับ "จำนวนพนักงานทั้งหมด" ที่แสดงว่า 74 → confusing.
+
+### Fix
+1. เปลี่ยน label เป็น `จำนวนพนักงานที่คิดเวลาทำงาน (ไม่รวม Admin + ผู้ไม่ต้องสแกน)` เพื่อความชัดเจน
+2. เปลี่ยน value จาก `uniqueRecs.length` → `activeEmps.length` (คน master ที่ต้อง track เวลา)
+3. เพิ่มบรรทัด **"ตรวจสอบยอด (มา + ลา + ขาด)"** ท้าย sheet — verify sum matches total
+
+### Result
+```
+วันที่                                              | 3 ก.ค. 2569
+จำนวนพนักงานที่คิดเวลาทำงาน (ไม่รวม Admin + ผู้ไม่ต้องสแกน) | 93
+มาทำงาน                                            | 74
+ - มาตรงเวลา (ก่อน 08:45)                          | 47
+ - มาหลังเวลา (08:45 - 09:01)                      | 27
+ - มาสาย (หลัง 09:01)                              | 0
+ลาหยุด                                             | 1
+ไม่มา / ขาดงาน                                     | 18
+
+ตรวจสอบยอด (มา + ลา + ขาด)                          | 93
+```
+
+93 = 93 ✓ balanced
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.37] — 2026-07-03
 
 **HOTFIX to v1.4.36 — inferred absent + Sheet 3 title alignment**

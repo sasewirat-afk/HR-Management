@@ -6,6 +6,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.34] — 2026-07-03
+
+**Feature batch — Admin productivity: nickname + report sheets + payslip adjust**
+
+### Feature 1: Nickname field in employee edit
+- New optional input `ชื่อเล่น` (nickname) between full name and department in employee form
+- Persisted in `employee.nickname`
+- Used by Feature 2 Excel sheets for HR letter-style reports
+
+### Feature 2: Attendance Excel — 2 new sheets
+Existing sheets (มาทำงาน, ลาหยุด, ไม่มา, สรุป) preserved. Added:
+
+**Sheet 5: "ลา-สาย" (letter format)**
+- Top: recipient (`เรียน คุณ__`), title (`กรรมการผู้จัดการ`), sender (`จาก __`) — configurable via settings
+- Report title with Thai Buddhist year date
+- Table: absent/leave employees with columns [ลำดับ, ชื่อ-สกุล, ชื่อเล่น, แผนก, โครเชท์ (/), มาสเตอร์พีช (/), ฮาบิตา (/), ประเภทลา, หมายเหตุ]
+- Second table: late employees with checkIn time
+
+**Sheet 6: "สรุปวันทำงาน"**
+- Date header
+- Missing employees grouped by department (name + nickname)
+- Summary block 1: พนักงานทั้งหมด / วันหยุด / ป่วย
+- Summary block 2: พนักงานทั้งหมด (Thai) / พนักงานพม่า / ทำงานที่บริษัทวันนี้
+
+**Supporting changes**:
+- New employee field `nationality` (ไทย/พม่า/อื่นๆ, default ไทย) — dropdown in employee form
+- New settings defaults: `reportRecipientName`, `reportRecipientTitle`, `reportSenderName` (editable via DB.save console)
+
+### Feature 3: Individual payslip adjustment (Admin-only)
+- New "Adjust" button per payslip row in Admin panel
+- Modal to add/remove custom deductions per employee per month
+- Examples: กยศ, ประกันชีวิต, กองทุนสำรอง, เงินยืม
+- Each item: label + amount + optional note
+- Stored in `DB.load('customDeductions')` with fields: `id, employeeId, monthStr, label, amount, note, createdAt, createdBy`
+- `calculatePaySlip()` subtracts total from netPay
+- Payslip render shows each item + subtotal in DEDUCTIONS section
+- All actions logged to auditLog
+
+### Data Schema Additions
+- `employee.nickname` (string, optional)
+- `employee.nationality` ('thai' | 'myanmar' | 'other', default 'thai')
+- `settings.reportRecipientName` (default 'รัชตะ สาริบุตร')
+- `settings.reportRecipientTitle` (default 'กรรมการผู้จัดการ')
+- `settings.reportSenderName` (default 'ฝ่ายทรัพยากรบุคคล')
+- New collection `customDeductions` (per-employee-per-month deduction records)
+
+### Backward Compatibility
+- All new fields default to empty/undefined → existing employees unaffected
+- Excel export adds sheets, doesn't replace existing ones
+- Existing payslips render fine (customDeductions defaults to empty array)
+
+### Notes / Known Limitations
+- Nickname/nationality only editable via Admin panel (not self-service)
+- Report recipient/sender must be edited via console for now (Settings UI in future release)
+- Feature 3 modifies netPay for CURRENT month only — historical saved slips (paySlips collection) keep their old totals until re-generated
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.33] — 2026-07-02
 
 **Day 4 — H1 (HIGH): Supabase RLS Lockdown (Option C — Ship in 1 day)**

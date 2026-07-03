@@ -860,7 +860,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.33</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.34</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -884,7 +884,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.33';
+const APP_VERSION = '1.4.34';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1528,6 +1528,10 @@ function seedData() {
  backDatedLeaveMaxDays: 7, // ห้ามยื่นลาย้อนหลังเกิน (วัน)
  autoAbsentLateMinutes: 240, // มาสายเกิน X นาที จาก lateThreshold → นับเป็นขาดงานอัตโนมัติ
  timeCertEnabled: true, // เปิดใช้งานฟังก์ชั่นรับรองเวลา (Time Certification)
+ // v1.4.34: Report letter defaults (แก้ผ่าน Settings > Console: DB.save('settings', {...s, reportRecipientName:'...',...}))
+ reportRecipientName: 'รัชตะ สาริบุตร',
+ reportRecipientTitle: 'กรรมการผู้จัดการ',
+ reportSenderName: 'ฝ่ายทรัพยากรบุคคล',
  companies: [
  { id: 'masterpiece', label: 'Masterpiece', name: 'บริษัท มาสเตอร์พีช แอนด์ โครเชท์ จำกัด (สำนักงานใหญ่)', address: '160/23-26 ถนนแสงศรี ต.หาดใหญ่ อ.หาดใหญ่ จ.สงขลา 90110', taxId: '0905547000274', phone: '(074)221122', logo: 'logo-black.png' },
  { id: 'crochet', label: 'Crochet', name: 'บริษัท มาสเตอร์พีช แอนด์ โครเชท์ จำกัด (สำนักงานใหญ่)', address: '160/23-26 ถนนแสงศรี ต.หาดใหญ่ อ.หาดใหญ่ จ.สงขลา 90110', taxId: '0905547000274', phone: '(074)221122', logo: 'logo-black.png' },
@@ -5019,6 +5023,10 @@ function showEmployeeForm(id) {
  <input type="text" id="empLast" required value="${emp?.lastName || ''}">
  </div>
  </div>
+ <div class="form-group">
+ <label>ชื่อเล่น</label>
+ <input type="text" id="empNickname" value="${emp?.nickname || ''}" placeholder="เช่น เก่ง, ตุ้ม, แก้ว">
+ </div>
  <div class="form-row">
  <div class="form-group">
  <label>แผนก *</label>
@@ -5085,6 +5093,14 @@ function showEmployeeForm(id) {
  <option value="female" ${emp?.gender === 'female' ? 'selected' : ''}>หญิง</option>
  </select>
  </div>
+ <div class="form-group">
+ <label>สัญชาติ <small style="color:var(--gray-500);">(สำหรับสรุปรายวัน)</small></label>
+ <select id="empNationality">
+ <option value="thai" ${(emp?.nationality || 'thai') === 'thai' ? 'selected' : ''}>ไทย</option>
+ <option value="myanmar" ${emp?.nationality === 'myanmar' ? 'selected' : ''}>พม่า</option>
+ <option value="other" ${emp?.nationality === 'other' ? 'selected' : ''}>อื่นๆ</option>
+ </select>
+ </div>
  </div>
  <div class="form-row">
  <div class="form-group">
@@ -5118,6 +5134,8 @@ async function submitEmployee(e, editId) {
  id: document.getElementById('empId').value,
  firstName: document.getElementById('empFirst').value,
  lastName: document.getElementById('empLast').value,
+ nickname: document.getElementById('empNickname')?.value?.trim() || '',
+ nationality: document.getElementById('empNationality')?.value || 'thai',
  department: document.getElementById('empDept').value,
  position: document.getElementById('empPos').value,
  managerId: document.getElementById('empMgr').value || null,
@@ -6447,6 +6465,112 @@ function exportAttendanceXLSX() {
  ws4['!cols'] = [{wch:30},{wch:18}];
  XLSX.utils.book_append_sheet(wb, ws4, 'สรุป');
 
+ // ============================================================
+ // v1.4.34 Feature 2.1: Sheet 5 "ลา-สาย" (letter format)
+ // ============================================================
+ const dateObj = new Date(_attReportDate);
+ const thaiMonths = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+ const dayNum = dateObj.getDate();
+ const monthName = thaiMonths[dateObj.getMonth()];
+ const thaiYear = dateObj.getFullYear() + 543;
+ const allEmpsForReport = DB.load('employees').filter(e => e.active !== false);
+ const primaryCompany = (settings.companies || []).find(c => c.id === 'masterpiece') || (settings.companies || [])[0] || {};
+ const companyFullName = primaryCompany.name || 'บริษัท มาสเตอร์พีช แอนด์ โครเชท์ จำกัด';
+
+ const sheet5 = [];
+ sheet5.push([`เรียน คุณ${settings.reportRecipientName || 'รัชตะ สาริบุตร'}`]);
+ sheet5.push([settings.reportRecipientTitle || 'กรรมการผู้จัดการ']);
+ sheet5.push([`จาก ${settings.reportSenderName || 'ฝ่ายทรัพยากรบุคคล'}`]);
+ sheet5.push([]);
+ sheet5.push(['', '', '', `รายงานการขาดลาของพนักงาน ${companyFullName}`]);
+ sheet5.push(['', '', '', `ประจำวันที่ ${dayNum} เดือน ${monthName} พ.ศ. ${thaiYear}`]);
+ sheet5.push([]);
+ sheet5.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','ประเภทลา','หมายเหตุ']);
+ let leaveIdx = 1;
+ leaveOnDate.forEach(r => {
+ const e = getEmployee(r.employeeId);
+ if (!e) return;
+ sheet5.push([
+ leaveIdx++,
+ `${e.firstName} ${e.lastName}`,
+ e.nickname || '',
+ e.department || '',
+ e.company === 'crochet' ? '/' : '',
+ e.company === 'masterpiece' ? '/' : '',
+ e.company === 'habita' ? '/' : '',
+ getLeaveTypeName(r.type),
+ r.reason || ''
+ ]);
+ });
+ sheet5.push([]);
+ sheet5.push(['พนักงานที่มาทำงานสาย']);
+ sheet5.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','เวลาเข้า','หมายเหตุ']);
+ let lateIdx = 1;
+ present.filter(r => r.checkIn >= lateThreshold).sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||'')).forEach(r => {
+ const e = getEmployee(r.employeeCode || r.employeeId);
+ const empName = e ? `${e.firstName} ${e.lastName}` : (r.employeeName || '');
+ const nick = e ? (e.nickname || '') : '';
+ const dept = e ? (e.department || '') : getDeptForAttendance(r);
+ sheet5.push([
+ lateIdx++,
+ empName,
+ nick,
+ dept,
+ e?.company === 'crochet' ? '/' : '',
+ e?.company === 'masterpiece' ? '/' : '',
+ e?.company === 'habita' ? '/' : '',
+ r.checkIn,
+ ''
+ ]);
+ });
+ const ws5 = XLSX.utils.aoa_to_sheet(sheet5);
+ ws5['!cols'] = [{wch:6},{wch:22},{wch:10},{wch:20},{wch:10},{wch:12},{wch:10},{wch:12},{wch:20}];
+ XLSX.utils.book_append_sheet(wb, ws5, 'ลา-สาย');
+
+ // ============================================================
+ // v1.4.34 Feature 2.2: Sheet 6 "สรุปวันทำงาน"
+ // ============================================================
+ const sheet6 = [];
+ sheet6.push([`วันที่ ${dayNum} เดือน ${monthName} ${thaiYear}`]);
+ sheet6.push([]);
+ // Group missing (on leave) employees by department
+ const missingByDept = new Map();
+ leaveOnDate.forEach(r => {
+ const e = getEmployee(r.employeeId);
+ if (!e) return;
+ const dept = e.department || '-';
+ if (!missingByDept.has(dept)) missingByDept.set(dept, []);
+ missingByDept.get(dept).push({name: `${e.firstName} ${e.lastName}`, nickname: e.nickname || ''});
+ });
+ const sortedDepts = [...missingByDept.keys()].sort();
+ sortedDepts.forEach(dept => {
+ sheet6.push([`แผนก ${dept}`]);
+ missingByDept.get(dept).forEach(p => sheet6.push([p.name, p.nickname]));
+ sheet6.push([]);
+ });
+
+ // Summary block 1: overall headcount vs leave/sick counts
+ const totalActive = allEmpsForReport.length;
+ const holidayCount = leaveOnDate.filter(r => r.type === 'personal' || r.type === 'vacation').length;
+ const sickCount = leaveOnDate.filter(r => r.type === 'sick').length;
+ sheet6.push(['พนักงานทั้งหมด', `${totalActive} คน`]);
+ sheet6.push(['วันหยุด', `${holidayCount} คน`]);
+ sheet6.push(['ป่วย', `${sickCount} คน`]);
+ sheet6.push([]);
+
+ // Summary block 2: Thai vs Myanmar working today
+ const onLeaveIds = new Set(leaveOnDate.map(r => r.employeeId));
+ const workingToday = allEmpsForReport.filter(e => !onLeaveIds.has(e.id));
+ const thaiWorking = workingToday.filter(e => (e.nationality || 'thai') === 'thai').length;
+ const myanmarWorking = workingToday.filter(e => e.nationality === 'myanmar').length;
+ sheet6.push(['พนักงานทั้งหมด', `${thaiWorking} คน`]);
+ sheet6.push(['พนักงานพม่า', `${myanmarWorking} คน`]);
+ sheet6.push(['ทำงานที่บริษัทวันนี้', `${thaiWorking + myanmarWorking} คน`]);
+
+ const ws6 = XLSX.utils.aoa_to_sheet(sheet6);
+ ws6['!cols'] = [{wch:30},{wch:15}];
+ XLSX.utils.book_append_sheet(wb, ws6, 'สรุปวันทำงาน');
+
  XLSX.writeFile(wb, `รายงานเข้างาน-${_attReportDate}.xlsx`);
  toast(`Export ${present.length + absent.length + leaveOnDate.length} รายการ สำเร็จ`);
 }
@@ -6728,8 +6852,15 @@ function calculatePaySlip(employeeId, year, month) {
  // Social Security (ประกันสังคม)
  const sso = calculateSSO(emp, settings);
 
+ // v1.4.34 Feature 3: Custom deductions per employee per month (Admin adjust)
+ // Examples: กยศ, ประกันชีวิต, กองทุนสำรอง, เงินยืม, อื่นๆ
+ const customDeductions = (DB.load('customDeductions') || []).filter(d =>
+ d.employeeId === employeeId && d.monthStr === monthStr
+ );
+ const customDeductionsTotal = customDeductions.reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
+
  const netPay = baseSalary + otPay + diligenceAmount + commissionTotal
- - lateDeducTotal - unpaidDeduction - sso.amount;
+ - lateDeducTotal - unpaidDeduction - sso.amount - customDeductionsTotal;
 
  return {
  employeeId, year, month, monthStr,
@@ -6741,6 +6872,7 @@ function calculatePaySlip(employeeId, year, month) {
  diligenceAmount, diligenceBonus, eligibleForDiligence, diligenceReasons,
  commissions, commissionTotal,
  sso,
+ customDeductions, customDeductionsTotal,
  netPay,
  generatedAt: new Date().toISOString()
  };
@@ -7280,6 +7412,7 @@ function renderPaySlipAdmin() {
  <td style="color:${slip.sso.amount > 0 ? 'var(--danger)' : 'inherit'};">${slip.sso.amount > 0 ? '-' + Math.round(slip.sso.amount).toLocaleString() : '0'}</td>
  <td><strong>${slip.netPay.toLocaleString(undefined, {maximumFractionDigits:2})}</strong></td>
  <td style="white-space:nowrap;">
+ <button class="btn btn-sm btn-warning" onclick="openCustomDeductionModal('${e.id}', ${y}, ${m})" title="เพิ่ม/แก้ไข รายการหักพิเศษ (กยศ, ประกันชีวิต ฯลฯ)"> Adjust${slip.customDeductionsTotal > 0 ? ` (${slip.customDeductions.length})` : ''}</button>
  <button class="btn btn-sm btn-primary" onclick="downloadPaySlipImage('${e.id}', ${y}, ${m})"> PNG</button>
  <button class="btn btn-sm btn-success" onclick="sharePaySlip('${e.id}', ${y}, ${m})"> แชร์</button>
  ${saved ? '<button class="btn btn-sm btn-success" disabled style="opacity:0.85;cursor:default;">บันทึกแล้ว</button>' : `<button class="btn btn-sm btn-secondary" onclick="savePaySlip('${e.id}', ${y}, ${m})">บันทึก</button>`}
@@ -7303,6 +7436,109 @@ function savePaySlip(empId, year, month) {
  DB.save('paySlips', slips);
  toast('บันทึกสลิปสำเร็จ');
  renderPage();
+}
+
+// ============================================================
+// v1.4.34 Feature 3: Custom Deductions Modal (Admin adjust)
+// ============================================================
+function openCustomDeductionModal(empId, year, month) {
+ if (currentUser.role !== 'admin') { toast('เฉพาะ Admin เท่านั้น', 'error'); return; }
+ const emp = getEmployee(empId);
+ if (!emp) { toast('ไม่พบข้อมูลพนักงาน', 'error'); return; }
+ const monthStr = `${year}-${String(month).padStart(2,'0')}`;
+ const monthLabel = new Date(year, month-1, 1).toLocaleDateString('th-TH', {year:'numeric', month:'long'});
+ const items = (DB.load('customDeductions') || []).filter(d =>
+ d.employeeId === empId && d.monthStr === monthStr
+ );
+ const html = `
+ <div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+ <div class="modal" style="max-width:640px;">
+ <div class="modal-header">
+ <h3>รายการหักพิเศษ — ${esc(emp.firstName)} ${esc(emp.lastName)}</h3>
+ <div class="text-sm" style="color:var(--gray-500);">งวด ${monthLabel} · เงินเดือน ${(emp.monthlySalary||0).toLocaleString()} บาท</div>
+ </div>
+ <div class="modal-body">
+ <div class="alert alert-info" style="margin-bottom:12px;">
+ ใช้สำหรับหักรายการที่แตกต่างกันไปในแต่ละพนักงาน เช่น กยศ, ประกันชีวิต, เงินยืม, กองทุนสำรอง ฯลฯ
+ </div>
+ <table style="width:100%;border-collapse:collapse;font-size:14px;">
+ <thead><tr style="background:var(--gray-100);">
+ <th style="padding:8px;text-align:left;">รายการ</th>
+ <th style="padding:8px;text-align:right;">จำนวน (บาท)</th>
+ <th style="padding:8px;text-align:left;">หมายเหตุ</th>
+ <th style="padding:8px;"></th>
+ </tr></thead>
+ <tbody id="deductionTableBody">
+ ${items.length ? items.map(d => `
+ <tr data-id="${d.id}">
+ <td style="padding:6px;">${esc(d.label)}</td>
+ <td style="padding:6px;text-align:right;">${(Number(d.amount)||0).toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+ <td style="padding:6px;">${esc(d.note || '')}</td>
+ <td style="padding:6px;"><button class="btn btn-sm btn-danger" onclick="removeCustomDeduction('${d.id}','${empId}',${year},${month})">ลบ</button></td>
+ </tr>
+ `).join('') : '<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--gray-500);">ยังไม่มีรายการหักพิเศษ</td></tr>'}
+ </tbody>
+ </table>
+ <hr style="margin:16px 0;">
+ <h4 style="margin-bottom:8px;">เพิ่มรายการใหม่</h4>
+ <div class="form-row">
+ <div class="form-group">
+ <label>รายการ *</label>
+ <input type="text" id="newDeductLabel" placeholder="เช่น กยศ, ประกันชีวิต">
+ </div>
+ <div class="form-group">
+ <label>จำนวน (บาท) *</label>
+ <input type="number" id="newDeductAmount" min="0" step="0.01" placeholder="เช่น 500">
+ </div>
+ </div>
+ <div class="form-group">
+ <label>หมายเหตุ (ไม่บังคับ)</label>
+ <input type="text" id="newDeductNote" placeholder="เช่น งวดที่ 3/24, เลขบัญชี ฯลฯ">
+ </div>
+ <button class="btn btn-primary btn-block" onclick="addCustomDeduction('${empId}',${year},${month})"> เพิ่มรายการ</button>
+ </div>
+ <div class="modal-footer">
+ <button class="btn btn-secondary" onclick="closeModal()">ปิด</button>
+ </div>
+ </div>
+ </div>
+ `;
+ document.getElementById('modalContainer').innerHTML = html;
+}
+
+function addCustomDeduction(empId, year, month) {
+ const label = document.getElementById('newDeductLabel').value.trim();
+ const amount = parseFloat(document.getElementById('newDeductAmount').value);
+ const note = document.getElementById('newDeductNote').value.trim();
+ if (!label) { toast('กรุณาระบุรายการ', 'error'); return; }
+ if (!amount || amount <= 0) { toast('จำนวนต้องมากกว่า 0', 'error'); return; }
+ const monthStr = `${year}-${String(month).padStart(2,'0')}`;
+ const all = DB.load('customDeductions') || [];
+ all.push({
+ id: 'cd_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
+ employeeId: empId,
+ monthStr,
+ label,
+ amount,
+ note,
+ createdAt: new Date().toISOString(),
+ createdBy: currentUser.id
+ });
+ DB.save('customDeductions', all);
+ auditLog('add', 'customDeduction', empId, `${label}: ${amount} บาท (${monthStr})`);
+ toast('เพิ่มรายการหักพิเศษสำเร็จ');
+ openCustomDeductionModal(empId, year, month); // refresh
+}
+
+function removeCustomDeduction(id, empId, year, month) {
+ if (!confirm('ยืนยันลบรายการนี้?')) return;
+ const all = DB.load('customDeductions') || [];
+ const item = all.find(d => d.id === id);
+ const filtered = all.filter(d => d.id !== id);
+ DB.save('customDeductions', filtered);
+ if (item) auditLog('delete', 'customDeduction', empId, `ลบ ${item.label}: ${item.amount} บาท (${item.monthStr})`);
+ toast('ลบรายการสำเร็จ');
+ openCustomDeductionModal(empId, year, month); // refresh
 }
 
 function generateAllPaySlips() {
@@ -7457,6 +7693,12 @@ function buildPaySlipHTML(slip, emp, monthName) {
  <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">ประกันสังคม ${slip.sso.override ? '(กำหนดเอง)' : `(${slip.sso.rate}% × ฐาน ${slip.sso.base.toLocaleString()} บาท)`}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">-${slip.sso.amount.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
  ` : ''}
  <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};color:${C.muted};">วันลา (รับค่าจ้าง)</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;color:${C.muted};">${slip.leaveDays} วัน (ไม่หัก)</td></tr>
+ ${slip.customDeductions && slip.customDeductions.length ? slip.customDeductions.map(d => `
+ <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">${esc(d.label)}${d.note ? ` <small style="color:${C.muted};">— ${esc(d.note)}</small>` : ''}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">-${(Number(d.amount)||0).toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
+ `).join('') : ''}
+ ${slip.customDeductionsTotal > 0 ? `
+ <tr style="background:${C.lineSoft};"><td style="padding:9px 12px;font-weight:700;">รวมรายการหักพิเศษ (${slip.customDeductions.length} รายการ)</td><td style="padding:9px 12px;text-align:right;font-weight:700;">-${slip.customDeductionsTotal.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
+ ` : ''}
  </tbody>
  </table>
 
@@ -10046,30 +10288,19 @@ document.addEventListener('DOMContentLoaded', async () => {
  const alreadyInitialized = DB.load('initialized', false);
  if (!alreadyInitialized) {
  if (cloudSync && !pullResult.ok) {
- // Cloud pull failed AND localStorage is empty → DANGEROUS to seed
- // because we might overwrite real data when cloud comes back online.
- // Show warning and stop.
  alert('⚠ Cloud sync ไม่สำเร็จ และเครื่องไม่มีข้อมูลเดิม\n\nกรุณาเช็คอินเทอร์เน็ต แล้ว refresh หน้าใหม่');
  return;
  }
- // Safe to seed: cloud is truly empty OR cloud sync disabled
  seedData();
- // Push initial seed up to cloud — ONLY this one time, when truly fresh install
  if (cloudSync) {
  console.log('[Startup] Fresh install detected — pushing initial seed to cloud');
  await DB.cloudPushAll();
  }
  }
- // IMPORTANT: NO unconditional cloudPushAll() here.
- // Every save goes through DB.save → _cloudUpsert. That's sufficient.
 
- // v1.4.10 settings migration: update old defaults to new defaults (idempotent)
  migrateSettings_v1_4_10();
- // v1.4.14: hard-reset personal leave = 3 for everyone (legal standard)
  migrateLeaveQuota_v1_4_14();
- // v1.4.20: mark CEO/คนสวน/แม่บ้าน = exempt from attendance
  migrateAttendanceExempt_v1_4_20();
- // v1.4.27: force full sync if version changed (schema may differ)
  (function checkVersionForceSync() {
  const lastVer = localStorage.getItem('hr__lastVersion');
  if (lastVer !== APP_VERSION) {
@@ -10078,9 +10309,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  localStorage.setItem('hr__lastVersion', APP_VERSION);
  }
  })();
- // v1.4.26: backfill _updatedAt on existing employees (baseline for LWW)
  migrateEmployeeUpdatedAt_v1_4_26();
- // v1.4.28→1.4.29 hotfix: wire password hash migration into startup
  await migratePasswordsToHash_v1_4_28();
 
  if (restoreSession()) {
@@ -10092,7 +10321,6 @@ document.addEventListener('DOMContentLoaded', async () => {
  const id = document.getElementById('loginEmpId').value.trim().toUpperCase();
  const pass = document.getElementById('loginPassword').value;
  if (await login(id, pass)) {
- // Check if force password change is required
  if (currentUser.forceChangePassword) {
  showChangePasswordPage();
  } else {
@@ -10110,7 +10338,6 @@ document.addEventListener('DOMContentLoaded', async () => {
  const p2 = document.getElementById('newPass2').value;
  const alertDiv = document.getElementById('changePassAlert');
 
- // v1.4.32 (H3): Verify current password FIRST — prevents session-hijack takeover
  if (!currentP) {
  alertDiv.innerHTML = '<div class="alert alert-error">กรุณาระบุรหัสผ่านปัจจุบัน</div>';
  return;
@@ -10120,7 +10347,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  const empForVerify = empsForVerify.find(x => x.id === currentUser.id);
  const currentValid = empForVerify && (
  (empForVerify.passwordHash && empForVerify.passwordHash === currentPHash) ||
- (empForVerify.password && empForVerify.password === currentP) // legacy plaintext fallback
+ (empForVerify.password && empForVerify.password === currentP)
  );
  if (!currentValid) {
  alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านปัจจุบันไม่ถูกต้อง</div>';
@@ -10137,15 +10364,11 @@ document.addEventListener('DOMContentLoaded', async () => {
  alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านไม่ตรงกัน</div>';
  return;
  }
- // v1.4.32 (H3): Prevent no-op change (must actually differ from current)
  if (currentP === p1) {
  alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านใหม่ต้องต่างจากรหัสผ่านปัจจุบัน</div>';
  return;
  }
 
- // v1.4.21 CRITICAL: fresh pull cloud BEFORE modifying employees array
- // Prevents "REPLACE-then-overwrite" race — ensures we save on top of latest cloud state,
- // preserving any concurrent updates from other devices (e.g. migration that just ran there)
  alertDiv.innerHTML = '<div class="alert alert-info">กำลังซิงค์ข้อมูลล่าสุดจาก cloud...</div>';
  if (cloudSync && typeof DB.cloudPullAllSafe === 'function') {
  try {
@@ -10161,21 +10384,18 @@ document.addEventListener('DOMContentLoaded', async () => {
  }
  }
 
- // Now save new password on top of freshest data
  const emps = DB.load('employees');
  const emp = emps.find(x => x.id === currentUser.id);
  if (!emp) {
  alertDiv.innerHTML = '<div class="alert alert-error">⚠ ไม่พบข้อมูลพนักงาน — logout แล้ว login ใหม่</div>';
  return;
  }
- // v1.4.28: hash new password, remove plaintext
  emp.passwordHash = await hashPassword(p1);
  delete emp.password;
  emp.forceChangePassword = false;
- emp._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
+ emp._updatedAt = new Date().toISOString();
  DB.save('employees', emps);
 
- // Update current user (in-memory + sessionStorage)
  currentUser.passwordHash = emp.passwordHash;
  delete currentUser.password;
  currentUser.forceChangePassword = false;
@@ -10192,23 +10412,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 function showChangePasswordPage() {
  document.getElementById('loginPage').classList.add('hidden');
  document.getElementById('changePasswordPage').classList.remove('hidden');
- document.getElementById('changePasswordPage').classList.remove('hidden');
  document.getElementById('changePassAlert').innerHTML = '';
- document.getElementById('currentPass').value = ''; // v1.4.32 (H3)
+ document.getElementById('currentPass').value = '';
  document.getElementById('newPass1').value = '';
  document.getElementById('newPass2').value = '';
- document.getElementById('currentPass').focus(); // v1.4.32 UX: focus on current password
+ document.getElementById('currentPass').focus();
 }
 
 function showApp() {
  document.getElementById('loginPage').classList.add('hidden');
  document.getElementById('app').classList.remove('hidden');
- // v1.4.31: textContent has built-in escape — DO NOT wrap with esc() (causes double-encode)
  document.getElementById('userName').textContent = (currentUser.firstName || '') + ' ' + (currentUser.lastName || '');
  document.getElementById('userEmpId').textContent = currentUser.id + ' • ' + currentUser.department;
  const roleNames = {employee: 'พนักงาน', manager: 'หัวหน้างาน', accountant: 'บัญชี', admin: 'แอดมิน HR'};
  document.getElementById('userRole').textContent = roleNames[currentUser.role];
- // Default landing
  const defaultPage = currentUser.role === 'admin' ? 'dashboard' : 'dashboard-overview';
  navigate(defaultPage);
 }

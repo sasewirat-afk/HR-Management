@@ -861,7 +861,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.41</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.42</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -885,7 +885,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.41';
+const APP_VERSION = '1.4.42';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1329,40 +1329,34 @@ function migrateSettings_v1_4_10() {
  if (changed) DB.save('settings', s);
 }
 
-// v1.4.14: hard-reset ลากิจ = 3 ตามกฎหมาย — strip per-employee personal overrides
+// v1.4.14: hard-reset ลากิจ = 3 ตามกฎหมาย — original stripped per-employee overrides
+// v1.4.22: re-enabled per-employee personal override (Admin needs it)
+// v1.4.42 FIX: idempotent via settings._migrationsRun (was ping-pong with v1.4.10's _settingsVersion)
+//   AND removed the strip loop — v1.4.22 allows personal override per employee
 function migrateLeaveQuota_v1_4_14() {
  const s = DB.load('settings', null);
- if (s && s._settingsVersion === '1.4.14') return; // already migrated
- const emps = DB.load('employees', []);
- if (!emps.length) return;
- // Force settings.leaveQuotas.personal = 3
- if (s && s.leaveQuotas) {
- if (s.leaveQuotas.personal !== 3) {
- console.log(`[migrate v1.4.14] settings.leaveQuotas.personal: ${s.leaveQuotas.personal} → 3`);
+ if (!s) return;
+ // v1.4.42: use _migrationsRun array (idempotent, not conflict with other migrations' _settingsVersion)
+ if (s._migrationsRun && s._migrationsRun.includes('v1.4.14-personalDefault')) return;
+ let changed = false;
+ // Force settings.leaveQuotas.personal = 3 (legal default) — only if still at legacy 6
+ if (s.leaveQuotas && s.leaveQuotas.personal === 6) {
+ console.log('[migrate v1.4.14] settings.leaveQuotas.personal: 6 → 3');
  s.leaveQuotas.personal = 3;
+ changed = true;
  }
- // Probation cap also = 3 (no difference)
- if (s.probationPersonalCap !== 3) {
- console.log(`[migrate v1.4.14] probationPersonalCap: ${s.probationPersonalCap} → 3`);
+ // Probation cap also = 3
+ if (s.probationPersonalCap === undefined || s.probationPersonalCap !== 3) {
+ console.log(`[migrate v1.4.14] probationPersonalCap → 3`);
  s.probationPersonalCap = 3;
+ changed = true;
  }
- s._settingsVersion = '1.4.14';
+ // Mark migration complete — will NOT run again
+ s._migrationsRun = [...(s._migrationsRun || []), 'v1.4.14-personalDefault'];
  DB.save('settings', s);
- }
- // Strip per-employee personal override
- let stripped = 0;
- emps.forEach(e => {
- if (e.leaveQuotaOverride && e.leaveQuotaOverride.personal !== undefined) {
- delete e.leaveQuotaOverride.personal;
- stripped++;
- // If override object now empty, remove it
- if (Object.keys(e.leaveQuotaOverride).length === 0) delete e.leaveQuotaOverride;
- }
- });
- if (stripped > 0) {
- console.log(`[migrate v1.4.14] stripped personal override on ${stripped} employees`);
- DB.save('employees', emps);
- }
+ // v1.4.42 CRITICAL FIX: NO LONGER STRIP per-employee personal override
+ // (v1.4.22 re-enabled it — Admin needs to set custom values including 0)
+ if (changed) console.log('[migrate v1.4.14] settings default applied (per-employee overrides preserved)');
 }
 
 

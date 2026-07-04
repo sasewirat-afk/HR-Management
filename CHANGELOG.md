@@ -6,6 +6,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.42] — 2026-07-04
+
+**CRITICAL HOTFIX — leave quota override lost after logout (v1.4.14/v1.4.22 conflict)**
+
+### Bug
+Admin sets personal leave override to any value (e.g., 0) for employee → toast success → data saves to cloud + local. But after logout/login, override disappears; only settings default shows.
+
+Reproduced with employee `670318002` (นุชนาเดีย): personal=0 vanishes, sick=19 preserved.
+
+### Root Cause: 2 migrations ping-pong `_settingsVersion` → strip runs every load
+- `migrateSettings_v1_4_10()` — guard: `_settingsVersion !== '1.4.10'` → sets to `'1.4.10'`
+- `migrateLeaveQuota_v1_4_14()` — guard: `_settingsVersion === '1.4.14'` → sets to `'1.4.14'`
+
+Both migrations use the SAME key with DIFFERENT expected values. Every load:
+1. `_settingsVersion = '1.4.14'` (from previous run)
+2. v1.4.10 sees `!= '1.4.10'` → runs, resets to `'1.4.10'`
+3. v1.4.14 sees `!= '1.4.14'` → **runs, strips personal from all leaveQuotaOverride**, resets to `'1.4.14'`
+4. Loop back to step 1 next load
+
+The strip loop was written when v1.4.14 policy was "personal leave = 3 days by law, no per-employee override". But v1.4.22 re-enabled per-employee personal override (line 5326 comment: `// v1.4.22: 'personal' override ได้อีกครั้ง`). **The strip logic became obsolete but was never removed.**
+
+### Fix
+1. Removed the strip loop entirely
+2. Migration idempotency via `settings._migrationsRun` array (same pattern as v1.4.20+) — no more ping-pong with v1.4.10
+3. Kept legacy `personal: 6 → 3` reset (only fires if still at legacy 6)
+4. Kept `probationPersonalCap = 3` set
+
+### Immediate Recovery for User (670318002)
+After v1.4.42 deployed:
+1. Admin → จัดการพนักงาน → 670318002 → สิทธิ์ลา
+2. Set personal = 0 (same as before)
+3. Save
+4. Logout + login → **override should now persist** ✅
+
+Same recovery needed for ANY employee whose personal override was stripped in past sessions.
+
+### Verification Checklist
+- [ ] Save personal override = 0 → logout → login → verify shows 0
+- [ ] Save personal override = 5 → logout → login → verify shows 5
+- [ ] Empty personal (no override) → shows "default: 3" placeholder (unchanged behavior)
+- [ ] Existing settings default (`s.leaveQuotas.personal`) not touched if already = 3
+- [ ] `_migrationsRun` array includes `'v1.4.14-personalDefault'` after first load
+- [ ] Subsequent loads: no `[migrate v1.4.14]` console log (skipped by guard)
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.41] — 2026-07-04
 
 **Feature: บริษัท column across attendance report + per-company breakdown**

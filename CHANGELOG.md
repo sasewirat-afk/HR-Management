@@ -6,6 +6,71 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.40] — 2026-07-04
+
+**CRITICAL HOTFIX — INCREMENTAL sync clock skew race (data appears "lost")**
+
+### Incident
+User 430806001 uploaded 64 attendance records for 2026-07-04 at Thai 09:22.
+Audit log confirmed upload (attendance-upload · 64 records · 1 วัน).
+Cloud DB verified: 4417 total records with 64 rows for date 2026-07-04.
+BUT: Both uploader's and Admin's LOCAL localStorage showed only 4353 records (missing 64).
+Attendance report page date dropdown did NOT list 2026-07-04.
+Multiple hard-reloads + logout did not fix.
+
+### Root Cause: `cloudPullAllSafe()` watermark clock-skew race (v1.4.27 bug)
+```js
+// BEFORE (buggy):
+if (pulled > 0 || !lastPullStr) {
+  localStorage.setItem('hr__lastPullTimestamp', pulled > 0 ? maxTs : new Date(nowMs).toISOString());
+} else {
+  // pulled === 0 with existing watermark → bump to client wall-clock time
+  localStorage.setItem('hr__lastPullTimestamp', new Date(nowMs).toISOString());  // ← BUG
+}
+```
+
+**Race sequence**:
+1. Device X (with lastPullTimestamp = T1) starts pull cycle
+2. Device Y (a different user) uploads data → server writes row with `updated_at = T2` where T1 < T2 < clientNow
+3. Device X's query `WHERE updated_at > T1` returns 0 rows (query happened before server acknowledged T2 write, or race with realtime replication)
+4. Device X sets `lastPullTimestamp = clientNow` (which is > T2)
+5. **Watermark now > server's real write timestamp** — all future INCREMENTAL pulls filter T2 row out forever
+6. Data is invisible on Device X even though it exists in cloud
+
+Verified in this incident:
+- Cloud updated_at: `2026-07-04 02:22:16.283+00`
+- Device X (430806001) lastPullTimestamp: `2026-07-04T05:02:05.689+00:00` ← 2h40m AHEAD of cloud write
+- All subsequent INCREMENTAL pulls skipped the 64 Jul 4 records
+
+### Fix
+1. **Split debounce timer from sync watermark** — 2 localStorage keys:
+   - `hr__lastPullAttemptedAt` — advances always (30-sec debounce throttle)
+   - `hr__lastPullTimestamp` — advances ONLY on real data pulls (never past server writes)
+2. **Add 60-second safety margin** to INCREMENTAL query — subtracts 60s from watermark before filtering, catches records written near boundary
+3. **Never bump watermark on empty pull** with existing watermark — keep same watermark, retry next time (bandwidth cost: minimal, since empty response is tiny)
+
+### Immediate Recovery (before v1.4.40 deployed)
+Both affected devices (uploader + all viewers) run in Console:
+```javascript
+localStorage.removeItem('hr__lastPullTimestamp');
+localStorage.removeItem('hr__lastPullAttemptedAt');
+await DB.cloudPullAllSafe({ force: true });
+location.reload();
+```
+
+### Prevention Going Forward
+Once v1.4.40 deployed:
+- Force full sync on every version change (`hr__lastVersion` migration) — already in place
+- Every INCREMENTAL query has 60s overlap — de-facto belt-and-suspenders
+- Empty pull no longer poisons watermark
+
+### Bandwidth Impact
+Minimal. 60s overlap means at most 60 seconds of "recent writes" get re-pulled. In practice, most 30-second debounce windows are empty (idle) → same bytes as before. Active-write periods add ~10KB per pull vs before.
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.39] — 2026-07-03
 
 **Feature: วันหยุด status via shift schedule + include admins with attendance**

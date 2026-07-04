@@ -861,7 +861,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.39</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.40</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -885,7 +885,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.39';
+const APP_VERSION = '1.4.40';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1089,14 +1089,17 @@ const DB = {
  async cloudPullAllSafe(opts = {}) {
  const { force = false } = opts;
  if (!cloudSync) return { ok: false, count: 0, reason: 'no-cloud-sync' };
- // Debounce: skip pull if we pulled successfully < 30 seconds ago (unless forced)
+ // v1.4.40: SEPARATE debounce timer from sync watermark.
+ // Debounce uses 'hr__lastPullAttemptedAt' (always advance) — throttles pull frequency.
+ // Watermark uses 'hr__lastPullTimestamp' (only advance on real data) — safe from clock skew.
  const lastPullStr = localStorage.getItem('hr__lastPullTimestamp');
+ const lastAttemptStr = localStorage.getItem('hr__lastPullAttemptedAt');
  const nowMs = Date.now();
- if (!force && lastPullStr) {
- const lastMs = new Date(lastPullStr).getTime();
- const ageMs = nowMs - lastMs;
+ // Debounce based on attempt time (not watermark)
+ if (!force && lastAttemptStr) {
+ const ageMs = nowMs - new Date(lastAttemptStr).getTime();
  if (ageMs < 30000 && ageMs >= 0) {
- console.log(`[cloudPullAllSafe] Debounced (last pull ${(ageMs/1000).toFixed(1)}s ago)`);
+ console.log(`[cloudPullAllSafe] Debounced (attempt ${(ageMs/1000).toFixed(1)}s ago)`);
  return { ok: true, count: 0, debounced: true };
  }
  }
@@ -1104,8 +1107,12 @@ const DB = {
  let query = supa.from('hr_data').select('*');
  let mode = 'FULL';
  if (lastPullStr && !force) {
- // Incremental: only rows updated_at > last successful pull
- query = query.gt('updated_at', lastPullStr);
+ // v1.4.40: subtract 60-second safety margin from watermark before querying.
+ // Catches records written by another device between our last watermark and this query.
+ // Pulled records are idempotent (localStorage.setItem overwrites with same value = no-op).
+ const SAFE_MARGIN_MS = 60 * 1000;
+ const safeCutoff = new Date(Math.max(0, new Date(lastPullStr).getTime() - SAFE_MARGIN_MS)).toISOString();
+ query = query.gt('updated_at', safeCutoff);
  mode = 'INCREMENTAL';
  }
  const { data, error } = await query;
@@ -1120,18 +1127,18 @@ const DB = {
  pulled++;
  });
  }
- // Record successful pull timestamp (used for next incremental)
- // Use server-side max updated_at from response if available, else client now
- const maxTs = data && data.length > 0
- ? data.reduce((m, r) => r.updated_at > m ? r.updated_at : m, '1970-01-01')
- : (lastPullStr || new Date(nowMs).toISOString());
- // Only advance timestamp if data was pulled OR first-time full pull
- if (pulled > 0 || !lastPullStr) {
- localStorage.setItem('hr__lastPullTimestamp', pulled > 0 ? maxTs : new Date(nowMs).toISOString());
- } else {
- // No changes since last pull — still update timestamp so next debounce works
+ // v1.4.40: always advance ATTEMPT timestamp (for debounce)
+ localStorage.setItem('hr__lastPullAttemptedAt', new Date(nowMs).toISOString());
+ // v1.4.40: only advance WATERMARK if we actually received data, or bootstrapping first time.
+ // NEVER advance watermark to client-side wall-clock time on empty pull — that's the bug that skipped Jul 4 records.
+ if (pulled > 0) {
+ const maxTs = data.reduce((m, r) => r.updated_at > m ? r.updated_at : m, '1970-01-01');
+ localStorage.setItem('hr__lastPullTimestamp', maxTs);
+ } else if (!lastPullStr) {
+ // First-ever pull returned nothing — bootstrap watermark to now (subsequent pulls debounce OK)
  localStorage.setItem('hr__lastPullTimestamp', new Date(nowMs).toISOString());
  }
+ // else: pulled === 0 with existing watermark — KEEP watermark unchanged (retry same window next time)
  // v1.4.23 + v1.4.24: Apply tombstones smartly
  // - If employee's _addedAt > tombstone's deletedAt → tombstone is stale (employee re-added) → clear it
  // - Only remove employees whose tombstone is still valid (deletedAt >= their _addedAt)

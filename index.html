@@ -861,7 +861,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.40</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.41</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -885,7 +885,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.40';
+const APP_VERSION = '1.4.41';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -6238,16 +6238,18 @@ function renderAttendanceReport() {
  <div id="sec-present" class="att-section card">
  <div class="card-body" style="padding:0;">
  <table>
- <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>แผนก</th><th>เข้างาน</th><th>ออกงาน</th><th>สถานะ</th></tr></thead>
+ <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>บริษัท</th><th>แผนก</th><th>เข้างาน</th><th>ออกงาน</th><th>สถานะ</th></tr></thead>
  <tbody>
  ${present.map(r => {
  const empObj = getEmployee(r.employeeCode || r.employeeId);
  const nick = empObj ? (empObj.nickname || '') : '';
+ const companyLabel = empObj ? (getCompanyLabel(empObj.company) || '-') : '-';
  return `<tr>
  <td>${formatDate(r.date)}</td>
  <td>${r.employeeCode}</td>
  <td>${esc(r.employeeName)}${r._certified ? ' <span class="status-badge status-pending" style="font-size:9px;" title="รับรองเวลา: ' + (r._certReason||'') + '">รับรองเวลา</span>' : ''}</td>
  <td>${esc(nick)}</td>
+ <td>${companyLabel}</td>
  <td>${(() => { const d = getDeptForAttendance(r); return d === 'พนักงานใหม่' ? '<span class="status-badge status-pending">พนักงานใหม่</span>' : d; })()}</td>
  <td><strong>${r.checkIn}</strong></td>
  <td>${r.checkOut || '-'}</td>
@@ -6262,20 +6264,22 @@ function renderAttendanceReport() {
  <div id="sec-late" class="att-section card" style="display:none;">
  <div class="card-body" style="padding:0;">
  <table>
- <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>แผนก</th><th>เวลามาสาย</th></tr></thead>
+ <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>บริษัท</th><th>แผนก</th><th>เวลามาสาย</th></tr></thead>
  <tbody>
  ${lateArrived.map(r => {
  const empObj = getEmployee(r.employeeCode || r.employeeId);
  const nick = empObj ? (empObj.nickname || '') : '';
+ const companyLabel = empObj ? (getCompanyLabel(empObj.company) || '-') : '-';
  return `<tr>
  <td>${formatDate(r.date)}</td>
  <td>${r.employeeCode}</td>
  <td>${esc(r.employeeName)}</td>
  <td>${esc(nick)}</td>
+ <td>${companyLabel}</td>
  <td>${(() => { const d = getDeptForAttendance(r); return d === 'พนักงานใหม่' ? '<span class="status-badge status-pending">พนักงานใหม่</span>' : d; })()}</td>
  <td style="color:var(--danger);font-weight:600;">${r.checkIn}</td>
  </tr>`;
- }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;">ไม่มีคนมาสาย</td></tr>'}
+ }).join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;">ไม่มีคนมาสาย</td></tr>'}
  </tbody>
  </table>
  </div>
@@ -6284,16 +6288,18 @@ function renderAttendanceReport() {
  <div id="sec-absent" class="att-section card" style="display:none;">
  <div class="card-body" style="padding:0;">
  <table>
- <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>แผนก</th><th>เหตุผล</th></tr></thead>
+ <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>บริษัท</th><th>แผนก</th><th>เหตุผล</th></tr></thead>
  <tbody>
  ${absent.map(r => {
  const empObj = getEmployee(r.employeeCode || r.employeeId);
  const nick = empObj ? (empObj.nickname || '') : '';
+ const companyLabel = empObj ? (getCompanyLabel(empObj.company) || '-') : '-';
  return `<tr>
  <td>${formatDate(r.date || _attReportDate)}</td>
  <td>${r.employeeCode || '-'}</td>
  <td>${r.employeeName || '-'}</td>
  <td>${esc(nick)}</td>
+ <td>${companyLabel}</td>
  <td>${(() => { const d = getDeptForAttendance(r); return d === 'พนักงานใหม่' ? '<span class="status-badge status-pending">พนักงานใหม่</span>' : d; })()}</td>
  <td>${
  r._autoAbsent ? `<span class="status-badge status-rejected">ขาดอัตโนมัติ (สแกน ${r.checkIn})</span>` :
@@ -6301,7 +6307,7 @@ function renderAttendanceReport() {
  '<span class="status-badge status-rejected">ไม่ได้สแกน</span>'
  }</td>
  </tr>`;
- }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;">ทุกคนมาทำงาน / ลา</td></tr>'}
+ }).join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;">ทุกคนมาทำงาน / ลา</td></tr>'}
  </tbody>
  </table>
  </div>
@@ -6310,19 +6316,21 @@ function renderAttendanceReport() {
  <div id="sec-leave" class="att-section card" style="display:none;">
  <div class="card-body" style="padding:0;">
  <table>
- <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>ประเภทลา</th><th>วันที่ลา</th></tr></thead>
+ <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>บริษัท</th><th>ประเภทลา</th><th>วันที่ลา</th></tr></thead>
  <tbody>
  ${leaveOnDate.map(r => {
  const e = getEmployee(r.employeeId);
+ const companyLabel = e ? (getCompanyLabel(e.company) || '-') : '-';
  return `<tr>
  <td>${formatDate(_attReportDate)}</td>
  <td>${r.employeeId}</td>
  <td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td>
  <td>${e ? esc(e.nickname || '') : ''}</td>
+ <td>${companyLabel}</td>
  <td>${getLeaveTypeName(r.type)}</td>
  <td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? ' - ' + formatDate(r.endDate) : ''}</td>
  </tr>`;
- }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;">ไม่มีคนลา</td></tr>'}
+ }).join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;">ไม่มีคนลา</td></tr>'}
  </tbody>
  </table>
  </div>
@@ -6331,21 +6339,23 @@ function renderAttendanceReport() {
  <div id="sec-dayoff" class="att-section card" style="display:none;">
  <div class="card-body" style="padding:0;">
  <table>
- <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>แผนก</th><th>หมายเหตุ</th></tr></thead>
+ <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>บริษัท</th><th>แผนก</th><th>หมายเหตุ</th></tr></thead>
  <tbody>
  ${dayOff.map(r => {
  const empObj = getEmployee(r.employeeCode || r.employeeId);
  const nick = empObj ? (empObj.nickname || '') : '';
  const dept = empObj ? (empObj.department || '') : '-';
+ const companyLabel = empObj ? (getCompanyLabel(empObj.company) || '-') : '-';
  return `<tr>
  <td>${formatDate(_attReportDate)}</td>
  <td>${r.employeeCode || r.employeeId}</td>
  <td>${esc(r.employeeName)}</td>
  <td>${esc(nick)}</td>
+ <td>${companyLabel}</td>
  <td>${dept}</td>
  <td><span class="status-badge status-approved">วันหยุด (ตามตารางกะ)</span></td>
  </tr>`;
- }).join('') || '<tr><td colspan="6" style="text-align:center;padding:20px;">ไม่มีคนวันหยุดตามตารางกะ</td></tr>'}
+ }).join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;">ไม่มีคนวันหยุดตามตารางกะ</td></tr>'}
  </tbody>
  </table>
  </div>
@@ -6526,7 +6536,7 @@ function exportAttendanceXLSX() {
  const s1Data = [
  [`รายงานการเข้างาน วันที่ ${formatDate(_attReportDate)}`],
  [],
- ['วันที่','รหัสพนักงาน','ชื่อ-สกุล','ชื่อเล่น','แผนก','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่มาสาย']
+ ['วันที่','รหัสพนักงาน','ชื่อ-สกุล','ชื่อเล่น','บริษัท','แผนก','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่มาสาย']
  ];
  // Present (sorted by checkIn time)
  [...present].sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||'')).forEach(r => {
@@ -6540,6 +6550,7 @@ function exportAttendanceXLSX() {
  s1Data.push([
  r.date, r.employeeCode, r.employeeName,
  empObj ? (empObj.nickname || '') : '',
+ empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
  getDeptForAttendance(r), r.checkIn, r.checkOut || '-', status, lateMin
  ]);
  });
@@ -6549,7 +6560,9 @@ function exportAttendanceXLSX() {
  if (!e) return;
  s1Data.push([
  _attReportDate, e.id, `${e.firstName} ${e.lastName}`,
- e.nickname || '', e.department || '',
+ e.nickname || '',
+ getCompanyLabel(e.company) || '-',
+ e.department || '',
  '', '', `ลา (${getLeaveTypeName(r.type)})`, ''
  ]);
  });
@@ -6559,6 +6572,7 @@ function exportAttendanceXLSX() {
  s1Data.push([
  r.date || _attReportDate, r.employeeCode || '-', r.employeeName || '-',
  empObj ? (empObj.nickname || '') : '',
+ empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
  getDeptForAttendance(r), '', '', 'ขาดงาน', ''
  ]);
  });
@@ -6568,33 +6582,34 @@ function exportAttendanceXLSX() {
  s1Data.push([
  _attReportDate, r.employeeCode, r.employeeName,
  empObj ? (empObj.nickname || '') : '',
+ empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
  empObj ? (empObj.department || '') : getDeptForAttendance(r),
  '', '', 'วันหยุด', ''
  ]);
  });
 
  const ws1 = XLSX.utils.aoa_to_sheet(s1Data);
- ws1['!cols'] = [{wch:12},{wch:14},{wch:26},{wch:12},{wch:22},{wch:12},{wch:12},{wch:14},{wch:12}];
- ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:8}}];
+ ws1['!cols'] = [{wch:12},{wch:14},{wch:26},{wch:12},{wch:16},{wch:22},{wch:12},{wch:12},{wch:14},{wch:12}];
+ ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:9}}];
  // Style: title, header, data + red on last col if late > 0
  if (ws1['A1']) ws1['A1'].s = S.titleBig;
- for (let c = 0; c <= 8; c++) {
+ for (let c = 0; c <= 9; c++) {
  const addr = XLSX.utils.encode_cell({r:2, c});
  if (ws1[addr]) ws1[addr].s = S.headerCell;
  }
  for (let r = 3; r < s1Data.length; r++) {
- for (let c = 0; c <= 8; c++) {
+ for (let c = 0; c <= 9; c++) {
  const addr = XLSX.utils.encode_cell({r, c});
  if (!ws1[addr]) ws1[addr] = { v: '', t: 's' };
- if (c === 7) {
+ if (c === 8) {
  // สถานะ column — red for สาย/ขาดงาน
  const v = ws1[addr].v;
  ws1[addr].s = (v === 'มาสาย' || v === 'ขาดงาน' || (typeof v === 'string' && v.startsWith('ลา ')))
  ? S.dataCellRed : S.dataCellCenter;
- } else if (c === 8) {
+ } else if (c === 9) {
  const v = ws1[addr].v;
  ws1[addr].s = (typeof v === 'number' && v > 0) ? S.dataCellRed : S.dataCellCenter;
- } else if (c === 0 || c === 1 || c === 5 || c === 6) {
+ } else if (c === 0 || c === 1 || c === 6 || c === 7) {
  ws1[addr].s = S.dataCellCenter;
  } else {
  ws1[addr].s = S.dataCell;
@@ -6626,17 +6641,90 @@ function exportAttendanceXLSX() {
  [],
  ['ตรวจสอบยอด (มา + ลา + วันหยุด + ขาด)', present.length + leaveOnDate.length + dayOff.length + absent.length]
  ];
+
+ // v1.4.41: per-company breakdown (derived from same data as Sheet 1 ภาพรวม)
+ // Build company → { present, leave, dayOff, absent, total } map
+ const companyBreakdown = new Map();
+ const bumpCompany = (companyId, key) => {
+ const id = companyId || 'unknown';
+ if (!companyBreakdown.has(id)) companyBreakdown.set(id, { present:0, leave:0, dayOff:0, absent:0 });
+ companyBreakdown.get(id)[key]++;
+ };
+ present.forEach(r => {
+ const e = getEmployee(r.employeeCode || r.employeeId);
+ bumpCompany(e ? e.company : 'unknown', 'present');
+ });
+ leaveOnDate.forEach(r => {
+ const e = getEmployee(r.employeeId);
+ bumpCompany(e ? e.company : 'unknown', 'leave');
+ });
+ dayOff.forEach(r => {
+ const e = getEmployee(r.employeeCode || r.employeeId);
+ bumpCompany(e ? e.company : 'unknown', 'dayOff');
+ });
+ absent.forEach(r => {
+ const e = getEmployee(r.employeeCode || r.employeeId);
+ bumpCompany(e ? e.company : 'unknown', 'absent');
+ });
+
+ // Blank rows + section header
+ s2Data.push([]);
+ s2Data.push(['สรุปแยกตามบริษัท']);
+ s2Data.push(['บริษัท','มาทำงาน','ลาหยุด','วันหยุด','ขาดงาน','รวม']);
+ // Order by companies list (fallback to alphabetical for 'unknown')
+ const companyOrder = (settings.companies || []).map(c => c.id);
+ const seenIds = new Set();
+ const orderedIds = [];
+ companyOrder.forEach(id => { if (companyBreakdown.has(id)) { orderedIds.push(id); seenIds.add(id); } });
+ [...companyBreakdown.keys()].filter(id => !seenIds.has(id)).sort().forEach(id => orderedIds.push(id));
+ let totalP = 0, totalL = 0, totalD = 0, totalA = 0;
+ orderedIds.forEach(cid => {
+ const bd = companyBreakdown.get(cid);
+ const label = cid === 'unknown' ? '(ไม่ระบุ)' : (getCompanyLabel(cid) || cid);
+ const sum = bd.present + bd.leave + bd.dayOff + bd.absent;
+ totalP += bd.present; totalL += bd.leave; totalD += bd.dayOff; totalA += bd.absent;
+ s2Data.push([label, bd.present, bd.leave, bd.dayOff, bd.absent, sum]);
+ });
+ s2Data.push(['รวมทั้งหมด', totalP, totalL, totalD, totalA, totalP + totalL + totalD + totalA]);
+
  const ws2 = XLSX.utils.aoa_to_sheet(s2Data);
- ws2['!cols'] = [{wch:40},{wch:16}];
- ws2['!merges'] = [{s:{r:0,c:0},e:{r:0,c:1}}];
+ ws2['!cols'] = [{wch:40},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];
+ ws2['!merges'] = [{s:{r:0,c:0},e:{r:0,c:5}}];
+ // Merge "สรุปแยกตามบริษัท" section header across whole width
+ const companyHdrRow = s2Data.findIndex(row => row[0] === 'สรุปแยกตามบริษัท');
+ if (companyHdrRow >= 0) {
+ ws2['!merges'].push({s:{r:companyHdrRow, c:0}, e:{r:companyHdrRow, c:5}});
+ }
  if (ws2['A1']) ws2['A1'].s = S.titleBig;
- for (let r = 2; r < s2Data.length; r++) {
+ // Style the top summary block (rows 2 .. companyHdrRow-1)
+ const s2Top = companyHdrRow >= 0 ? companyHdrRow : s2Data.length;
+ for (let r = 2; r < s2Top; r++) {
  const a = XLSX.utils.encode_cell({r, c:0});
  const b = XLSX.utils.encode_cell({r, c:1});
  if (!ws2[a]) ws2[a] = { v: '', t: 's' };
  if (!ws2[b]) ws2[b] = { v: '', t: 's' };
  ws2[a].s = S.summaryLabel;
  ws2[b].s = S.summaryVal;
+ }
+ // Style the company breakdown section (header + rows)
+ if (companyHdrRow >= 0) {
+ // section title row
+ const hdrAddr = XLSX.utils.encode_cell({r: companyHdrRow, c:0});
+ if (ws2[hdrAddr]) ws2[hdrAddr].s = S.titleMd;
+ // column headers
+ for (let c = 0; c <= 5; c++) {
+ const a = XLSX.utils.encode_cell({r: companyHdrRow + 1, c});
+ if (ws2[a]) ws2[a].s = S.headerCell;
+ }
+ // data rows
+ for (let r = companyHdrRow + 2; r < s2Data.length; r++) {
+ for (let c = 0; c <= 5; c++) {
+ const addr = XLSX.utils.encode_cell({r, c});
+ if (!ws2[addr]) ws2[addr] = { v: '', t: 's' };
+ if (c === 0) ws2[addr].s = S.summaryLabel;
+ else ws2[addr].s = S.summaryVal;
+ }
+ }
  }
  ws2['!rows'] = [{ hpt: 24 }, undefined];
  XLSX.utils.book_append_sheet(wb, ws2, 'สรุป');

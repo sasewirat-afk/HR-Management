@@ -6,6 +6,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.41] — 2026-07-04
+
+**Feature: บริษัท column across attendance report + per-company breakdown**
+
+### Change 1: On-screen รายงานเข้างาน — บริษัท column
+เพิ่ม column `บริษัท` ระหว่าง `ชื่อเล่น` และ `แผนก` (หรือ `ประเภทลา` สำหรับ tab ลา) ใน 5 tabs:
+- มาทำงาน (present)
+- มาสาย (lateArrived)
+- ไม่มา (absent)
+- ลา (leaveOnDate)
+- วันหยุด (dayOff)
+
+ค่า derived จาก `employee.company` ผ่าน `getCompanyLabel()` — ถ้าไม่พบพนักงานหรือไม่มี company → แสดง `-`
+
+### Change 2: Excel Sheet 1 "ภาพรวม" — บริษัท column
+Columns ใหม่ (10 คอลัมน์):
+```
+วันที่ · รหัสพนักงาน · ชื่อ-สกุล · ชื่อเล่น · บริษัท · แผนก · เวลาเข้างาน · เวลาออกงาน · สถานะ · นาทีที่มาสาย
+```
+Column widths adjusted (added wch:16 for บริษัท), merge title updated to A:J.
+Cell style loop adjusted: col 8 = status (red for สาย/ขาด/ลา), col 9 = late minutes.
+
+### Change 3: Excel Sheet 2 "สรุป" — per-company breakdown section
+เพิ่มส่วนล่างของ Sheet 2 หลัง audit balance row:
+```
+สรุปแยกตามบริษัท              (merged A:F)
+บริษัท | มาทำงาน | ลาหยุด | วันหยุด | ขาดงาน | รวม
+------|--------|-------|--------|--------|-----
+Crochet     | 40 | 2 | 8  | 8  | 58
+Masterpiece | 15 | 1 | 3  | 4  | 23
+ConceptOne  | 6  | 0 | 1  | 1  | 8
+The Habita  | 3  | 0 | 1  | 1  | 5
+รวมทั้งหมด    | 64 | 3 | 13 | 14 | 94
+```
+
+Companies ordered per `settings.companies` array. Unknown company IDs shown as `(ไม่ระบุ)` at end.
+
+### Technical Details
+- New Map `companyBreakdown` in exportAttendanceXLSX: `{ present, leave, dayOff, absent }` per company id
+- Sheet 2 widths: `[40, 12, 12, 12, 12, 12]` (6 columns)
+- Header row (col 15) merged full width, section title `titleMd` style
+- Column headers (row 16) use `headerCell` style (dark blue fill + white bold)
+- Data rows use `summaryLabel` (col 0) + `summaryVal` (cols 1-5)
+
+### Backward Compatibility
+- Empty attendance days → breakdown shows only rows that have data
+- Employees with no `company` field → grouped under `(ไม่ระบุ)`
+- All existing columns/features preserved
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.40] — 2026-07-04
 
 **CRITICAL HOTFIX — INCREMENTAL sync clock skew race (data appears "lost")**

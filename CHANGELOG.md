@@ -6,6 +6,99 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.51] — 2026-07-05
+
+**PAYROLL CUTOFF Phase 2 — OT + Late/Absence reports use payroll month**
+
+### Context
+v1.4.48 introduced `payrollCutoffDay` (default 21) and helper functions `getPayrollMonth()` + `formatPayrollMonth()`. Phase 1 applied only to Admin Dashboard "การลาเดือนนี้" counter. v1.4.51 = Phase 2 extends the payroll month logic to reports so HR sees correct totals aligned with payroll cycle.
+
+**First real cutoff**: 21 Jul 2569 (Tuesday). Must ship v1.4.51 + v1.4.52 before that date so July payslips reflect correct scope.
+
+### Design Decisions (user confirmed 5 Jul 2569)
+- Q1: **Add month filter to OT report** (was showing all OTs regardless of period — pre-existing gap)
+- Q2: **Show one-time warning banner** on Reports page (dismissible)
+- Q3: **Deploy → Test → Announce via Line** (user says employees already familiar with day-21 cutoff via company policy)
+
+### Data Migration Analysis (per user request)
+| Layer | Impact | Migration Required |
+|---|---|---|
+| Data at rest (localStorage/cloud) | Records still store calendar date | **None** ✅ |
+| Data structure | Same JSON shape | **None** ✅ |
+| Calculation logic | Filter uses `getPayrollMonth()` | None (pure function) |
+| Display | Labels show payroll range | None |
+| Rollback | Setting `payrollCutoffDay=31` → behaves like calendar month | Instant, no code needed |
+
+**Zero downtime, zero data migration**. All records retain original calendar dates.
+
+### Risk Assessment — 8 items
+- 🔴 High: Users see "different numbers" — mitigated by warning banner + Line announcement
+- 🟠 Medium: Approver expects OT in "July" but sees in "August payroll" — mitigated by clear labels
+- 🟠 Medium: Cross-boundary edits — mitigated by Line training
+- 🟢 Low: Performance (getPayrollMonth is <1ms) — mitigated by v1.4.49 cache
+- 🟢 Low: Edge cases (null dates, timezone) — helper has guard clauses
+
+### Files Changed
+- `index.html` — 9 patches
+- Version 1.4.49 → 1.4.51 (skipped 1.4.50 — reserved for Supabase Storage next week)
+
+### Fix Details
+
+**Patch 3: New global variable**
+```js
+let _otReportMonth = null; // v1.4.51: YYYY-MM (payroll month), null = current
+```
+
+**Patch 4: OT Report — new month filter + dropdown**
+```js
+const monthStr = _otReportMonth || getPayrollMonth(today());
+const allReqs = DB.load('otRequests')
+ .filter(r => scopeIds.has(r.employeeId))
+ .filter(r => getPayrollMonth(r.date) === monthStr); // was: no filter
+```
+
+**Patches 5-8: Late Report — use payroll month everywhere**
+```js
+// Was:
+r.date.startsWith(monthStr)
+// Now:
+getPayrollMonth(r.date) === monthStr
+```
+
+**Patch 9: One-time notice banner**
+```js
+const noticeSeen = localStorage.getItem('hr__seenPayrollReportsNotice_v1_4_51');
+const noticeBanner = !noticeSeen ? `
+ <div class="alert alert-info">
+  ℹ️ v1.4.51 Update: รายงาน OT + มาสาย ใช้รอบเงินเดือน...
+  <button onclick="localStorage.setItem(...); this.parentElement.style.display='none';">×</button>
+ </div>
+` : '';
+```
+
+### Post-Deploy Verification
+1. Version 1.4.51 in Console + sidebar
+2. Reports page shows blue notice banner (first time)
+3. OT report has month dropdown (was missing before)
+4. Late report title shows "รอบ ก.ค. 2569 (22 มิ.ย. - 21 ก.ค.)" (was "เดือน กรกฎาคม 2569")
+5. Console: `getPayrollMonth('2026-07-22')` = "2026-08" ✅
+6. Late report for "ก.ค. 2569" shows records between 22 มิ.ย. - 21 ก.ค. ONLY
+7. Dismiss banner → refresh → banner does NOT reappear
+
+### Rollback
+- Git tag v1.4.49
+- Vercel promote v1.4.49 (10 sec)
+- OR: Set `payrollCutoffDay = 31` in Settings → behaves as calendar month
+- Pre-deploy backup: pre-Deploy v1.4.51_localStorage_2026-07-05.json
+
+### ⚠️ Coming Next
+- **v1.4.52 (tonight)**: Payslip calculation Phase 3 — apply payroll month to `calculatePaySlip()` (CRITICAL — affects actual employee pay)
+- v1.4.50 (Wed 8 Jul): Supabase Storage + Auto-cleanup 3 months
+- v1.5.0: Excel exports + Employee Dashboard + Docs
+- Day 4 (H1 RLS) — still paused
+
+---
+
 ## [1.4.49] — 2026-07-05
 
 **PERFORMANCE FIX — DB.load in-memory cache**

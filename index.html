@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.49</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.51</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.49';
+const APP_VERSION = '1.4.51';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -8337,6 +8337,7 @@ function downloadPaySlipPDF(empId, year, month) {
 let reportTab = 'leave-summary';
 let _timeCertReportFilter = 'all';
 let _lateReportMonth = null; // YYYY-MM, null = current month
+let _otReportMonth = null; // v1.4.51: YYYY-MM (payroll month), null = current payroll month
 
 function renderReports() {
  const isManager = currentUser.role === 'manager';
@@ -8345,11 +8346,20 @@ function renderReports() {
  const myTeam = DB.load('employees').filter(e => e.active && e.managerId === currentUser.id);
  return `<div class="alert alert-info mb-3" style="font-size:13px;"><strong>ขอบเขต:</strong> ลูกน้องในทีมของคุณ <strong>${myTeam.length}</strong> คน (สำหรับใช้สนทนา/อบรมรายบุคคล)</div>`;
  })() : '';
+ // v1.4.51: One-time notice about payroll month rollout on reports
+ const noticeSeen = localStorage.getItem('hr__seenPayrollReportsNotice_v1_4_51');
+ const noticeBanner = !noticeSeen ? `
+ <div class="alert alert-info mb-3" style="font-size:13px;position:relative;padding-right:36px;">
+ <strong>ℹ️ v1.4.51 Update:</strong> รายงาน <strong>OT</strong> และ <strong>มาสาย</strong> ตอนนี้ใช้<strong>รอบเงินเดือน</strong> ตามที่บริษัทตั้งค่าใน "ตั้งค่า → รอบเงินเดือน" (default: วันที่ 22 - 21) แทนปฏิทิน (1-31) — Events หลังวันตัดรอบจะไปคิดในรอบเดือนถัดไป
+ <button onclick="localStorage.setItem('hr__seenPayrollReportsNotice_v1_4_51','1');this.parentElement.style.display='none';" style="position:absolute;top:8px;right:8px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--gray-500);" title="ปิดข้อความนี้">×</button>
+ </div>
+ ` : '';
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
  <h1> ${title}</h1>
  </div>
  ${scopeBanner}
+ ${noticeBanner}
  <div class="tabs">
  <div class="tab ${reportTab==='leave-summary'?'active':''}" onclick="setReportTab('leave-summary')">สรุปสิทธิ์การลา</div>
  <div class="tab ${reportTab==='leave-detail'?'active':''}" onclick="setReportTab('leave-detail')">รายละเอียดการลา</div>
@@ -8452,7 +8462,20 @@ function drawReport() {
  }
 
  else if (reportTab === 'ot-report') {
- const allReqs = DB.load('otRequests').filter(r => scopeIds.has(r.employeeId)).sort((a,b) => new Date(b.date) - new Date(a.date));
+ // v1.4.51: Add payroll month filter (was: no filter — showed all OTs regardless of period)
+ const monthStr = _otReportMonth || getPayrollMonth(today());
+ // Generate 12 payroll months for dropdown (calendar month labels; getPayrollMonth handles cutoff)
+ const otMonthOptions = [];
+ const otNow = new Date();
+ for (let i = 0; i < 12; i++) {
+ const d = new Date(otNow.getFullYear(), otNow.getMonth() - i, 1);
+ const ms = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+ otMonthOptions.push({ value: ms, label: formatPayrollMonth(ms) });
+ }
+ const allReqs = DB.load('otRequests')
+ .filter(r => scopeIds.has(r.employeeId))
+ .filter(r => getPayrollMonth(r.date) === monthStr) // v1.4.51: payroll month filter
+ .sort((a,b) => new Date(b.date) - new Date(a.date));
  const approvedReqs = allReqs.filter(r => r.status === 'approved');
  // Group by employee (approved only)
  const byEmp = {};
@@ -8463,7 +8486,13 @@ function drawReport() {
  });
  html = `
  <div class="card">
- <div class="card-header"><h3>OT รายคน (อนุมัติแล้ว)</h3></div>
+ <div class="card-header" style="flex-wrap:wrap;gap:8px;">
+ <h3>OT รายคน — ${formatPayrollMonth(monthStr)}</h3>
+ <select onchange="_otReportMonth = this.value; drawReport();" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
+ ${otMonthOptions.map(o => `<option value="${o.value}" ${o.value === monthStr ? 'selected' : ''}>${o.label}</option>`).join('')}
+ </select>
+ </div>
+ <div class="card-header" style="border-top:1px solid var(--gray-200);padding-top:8px;"><h4 style="font-size:14px;color:var(--gray-500);margin:0;font-weight:normal;">อนุมัติแล้ว</h4></div>
  <div class="card-body" style="padding:0;">
  <table><thead><tr><th>รหัส</th><th>ชื่อ</th><th>จำนวนครั้ง</th><th>รวม (ชม.)</th></tr></thead>
  <tbody>${Object.keys(byEmp).map(eid => {
@@ -8682,10 +8711,11 @@ function drawReport() {
  const lateThreshold = settings.lateThreshold || '09:01';
  const [lthH, lthM] = lateThreshold.split(':').map(Number);
  const thresholdMinutes = lthH * 60 + lthM;
- const monthStr = _lateReportMonth || new Date().toISOString().slice(0, 7);
+ const monthStr = _lateReportMonth || getPayrollMonth(today()); // v1.4.51: default to current payroll month
  // v1.4.17: team scope — filter attendance by either employeeId OR employeeCode (Tigersoft uses code)
+ // v1.4.51: use payroll month (respects cutoffDay from Settings, was: r.date.startsWith(monthStr))
  const records = DB.load('attendanceRecords').filter(r =>
- r.checkIn && r.checkIn >= lateThreshold && r.date.startsWith(monthStr) &&
+ r.checkIn && r.checkIn >= lateThreshold && getPayrollMonth(r.date) === monthStr &&
  (scopeIds.has(r.employeeId) || scopeIds.has(r.employeeCode))
  );
 
@@ -8705,13 +8735,13 @@ function drawReport() {
 
  const summary = Object.values(byEmp).sort((a, b) => b.totalMinutes - a.totalMinutes);
 
- // Generate month options (last 12 months)
+ // Generate month options (last 12 months) — v1.4.51: labels show payroll range
  const monthOptions = [];
  const now = new Date();
  for (let i = 0; i < 12; i++) {
  const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
  const ms = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
- monthOptions.push({ value: ms, label: d.toLocaleDateString('th-TH', { year: 'numeric', month: 'long' }) });
+ monthOptions.push({ value: ms, label: formatPayrollMonth(ms) }); // v1.4.51: was toLocaleDateString
  }
 
  const totalLate = summary.reduce((s, e) => s + e.totalMinutes, 0);
@@ -8720,7 +8750,7 @@ function drawReport() {
  html = `
  <div class="card">
  <div class="card-header">
- <h3>มาสายสะสม (นาที) — เดือน ${new Date(monthStr+'-01').toLocaleDateString('th-TH', {year:'numeric', month:'long'})}</h3>
+ <h3>มาสายสะสม (นาที) — ${formatPayrollMonth(monthStr)}</h3>
  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
  <select onchange="_lateReportMonth = this.value; drawReport();" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
  ${monthOptions.map(o => `<option value="${o.value}" ${o.value === monthStr ? 'selected' : ''}>${o.label}</option>`).join('')}
@@ -8786,9 +8816,10 @@ function showLateDetailModal(empCode, monthStr) {
  const lateThreshold = settings.lateThreshold || '09:01';
  const [lthH, lthM] = lateThreshold.split(':').map(Number);
  const thresholdMinutes = lthH * 60 + lthM;
+ // v1.4.51: use payroll month (was: r.date.startsWith(monthStr))
  const records = DB.load('attendanceRecords').filter(r =>
  (r.employeeCode === empCode || r.employeeId === empCode) &&
- r.date.startsWith(monthStr) &&
+ getPayrollMonth(r.date) === monthStr &&
  r.checkIn && r.checkIn >= lateThreshold
  ).sort((a, b) => a.date.localeCompare(b.date));
 
@@ -8845,9 +8876,10 @@ function exportLateSummaryXLSX() {
  const lateThreshold = settings.lateThreshold || '09:01';
  const [lthH, lthM] = lateThreshold.split(':').map(Number);
  const thresholdMinutes = lthH * 60 + lthM;
- const monthStr = _lateReportMonth || new Date().toISOString().slice(0, 7);
+ const monthStr = _lateReportMonth || getPayrollMonth(today()); // v1.4.51: default to current payroll month
+ // v1.4.51: use payroll month (was: r.date.startsWith(monthStr))
  const records = DB.load('attendanceRecords').filter(r =>
- r.checkIn && r.checkIn >= lateThreshold && r.date.startsWith(monthStr)
+ r.checkIn && r.checkIn >= lateThreshold && getPayrollMonth(r.date) === monthStr
  );
 
  const byEmp = {};

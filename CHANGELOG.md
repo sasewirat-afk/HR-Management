@@ -6,6 +6,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.53] — 2026-07-05
+
+**PAYROLL CUTOFF Polish — Close the rollout (labels only, no money changes)**
+
+### Scope
+Complete the payroll cutoff rollout by updating remaining user-facing labels to show the cycle range instead of calendar month name. Money calculations already correct in v1.4.52. This version only touches labels + filenames.
+
+### Files Changed
+- `index.html` — 6 patches
+- Version 1.4.52 → 1.4.53
+
+### Fix Details
+
+**Patch 3: Custom Deductions Modal (line 7964)**
+```js
+// Was:  new Date(year, month-1, 1).toLocaleDateString('th-TH', {year:'numeric', month:'long'})
+//       → "กรกฎาคม 2569"
+// Now:  formatPayrollMonth(monthStr)
+//       → "รอบ ก.ค. 2569 (22 มิ.ย. - 21 ก.ค. 2569)"
+```
+
+**Patch 4: Employee mySlips List (line 8107)**
+Employee's own payslip history table now shows cycle range instead of calendar month.
+
+**Patch 5: Payslip PDF Template (line 8241)**
+The "งวด:" header on the printed/PNG payslip now shows cycle range. Passed via `monthName` param to `buildPaySlipHTML()` which was already using the value — zero template changes needed, just source data.
+```
+Before: "งวด: กรกฎาคม 2569"
+After:  "งวด: รอบ ก.ค. 2569 (22 มิ.ย. - 21 ก.ค. 2569)"
+```
+
+**Patch 6: Excel Export Filename (line 7119)**
+```js
+// Was:  Payroll-2026-07.xlsx
+// Now:  Payroll-2026-07-รอบ_ก.ค._2569_22_มิ.ย._-_21_ก.ค._2569.xlsx
+```
+
+### What's NOT Changed (intentional)
+- Payslip calculation logic (already payroll month in v1.4.52)
+- Data storage (records still calendar date — v1.4.52 unchanged)
+- Excel sheet name (kept as `Payroll YYYY-MM` for programmatic compatibility)
+- Shift schedule labels (not payroll-related — line 3924, 4105)
+- Attendance report labels (already payroll month via v1.4.51 — line 8858, 8920 already display "รอบ" via different code path)
+
+### Payroll Cutoff Rollout — Now Truly Complete
+| Version | Layer | Status |
+|---|---|---|
+| v1.4.48 | Settings + helpers + Dashboard | ✅ |
+| v1.4.51 | OT + Late reports | ✅ |
+| v1.4.52 | Payslip calculation | ✅ |
+| **v1.4.53** | **Labels + Excel filename + PDF template** | ✅ |
+
+**End-to-end** payroll cutoff rollout done. Ready for first real cutoff 21 Jul 2569.
+
+### Rollback
+- Git tag v1.4.52
+- Vercel promote v1.4.52 (10 sec)
+- Or: v1.4.53 changes are labels only — leaving as-is causes no data issue
+
+### ⚠️ Still Postponed
+- v1.4.50 (Supabase Storage) — scheduled reminder 8 Jul 2569 09:30
+- v1.4.48 backlog (attendanceRecords split)
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.52] — 2026-07-05
 
 **PAYROLL CUTOFF Phase 3 — Payslip calculation uses payroll month (CRITICAL — money)**

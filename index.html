@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.52</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.53</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.52';
+const APP_VERSION = '1.4.53';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -7116,7 +7116,9 @@ function exportPayrollXLSX() {
  rows.push(['รวม','','','', Math.round(totals.base),'',Math.round(totals.ot),Math.round(totals.comm),Math.round(totals.dil),'','',Math.round(totals.late),'',Math.round(totals.unp),Math.round(totals.sso),'','',Math.round(totals.net)]);
 
  const colWidths = [12,22,16,14,12,8,12,12,10,10,10,12,16,10,12,14,14,14];
- _xlsxSaveSheet(rows, `Payroll ${_slipMonth}`, `Payroll-${_slipMonth}.xlsx`, colWidths);
+ // v1.4.53: sheet name + filename include payroll cycle for clarity
+ const cycleLabel = formatPayrollMonth(_slipMonth).replace(/[()]/g, '').replace(/\s+/g, ' ').trim();
+ _xlsxSaveSheet(rows, `Payroll ${_slipMonth}`, `Payroll-${_slipMonth}-${cycleLabel.replace(/\s/g, '_')}.xlsx`, colWidths);
  toast(`Export ${emps.length} คน สำเร็จ — รวม ${Math.round(totals.net).toLocaleString()} บาท`);
 }
 
@@ -7959,7 +7961,8 @@ function openCustomDeductionModal(empId, year, month) {
  const emp = getEmployee(empId);
  if (!emp) { toast('ไม่พบข้อมูลพนักงาน', 'error'); return; }
  const monthStr = `${year}-${String(month).padStart(2,'0')}`;
- const monthLabel = new Date(year, month-1, 1).toLocaleDateString('th-TH', {year:'numeric', month:'long'});
+ // v1.4.53: use payroll month cycle label (was: calendar month name)
+ const monthLabel = formatPayrollMonth(monthStr);
  const items = (DB.load('customDeductions') || []).filter(d =>
  d.employeeId === empId && d.monthStr === monthStr
  );
@@ -8101,7 +8104,8 @@ function renderMyPaySlip() {
  <tbody>
  ${slips.map(s => {
  const [y, m] = s.monthStr.split('-').map(Number);
- const monthName = new Date(y, m-1, 1).toLocaleDateString('th-TH', { year:'numeric', month:'long'});
+ // v1.4.53: use payroll month cycle label (was: calendar month name)
+ const monthName = formatPayrollMonth(s.monthStr);
  return `<tr>
  <td><strong>${monthName}</strong></td>
  <td>${s.baseSalary.toLocaleString()} ฿</td>
@@ -8234,7 +8238,9 @@ async function generatePaySlipImage(empId, year, month) {
  const emp = getEmployee(empId);
  if (!slip || !emp) return null;
 
- const monthName = new Date(year, month-1, 1).toLocaleDateString('th-TH', { year:'numeric', month:'long'});
+ // v1.4.53: use payroll month cycle label (was: calendar month name)
+ const monthStr = `${year}-${String(month).padStart(2,'0')}`;
+ const monthName = formatPayrollMonth(monthStr);
 
  // Build off-screen container
  const container = document.createElement('div');

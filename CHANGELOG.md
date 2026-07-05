@@ -6,6 +6,134 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.52] — 2026-07-05
+
+**PAYROLL CUTOFF Phase 3 — Payslip calculation uses payroll month (CRITICAL — money)**
+
+### Impact
+Completes the payroll cutoff rollout to the CORE calculation. `calculatePaySlip()` now uses `getPayrollMonth()` instead of calendar month for ALL money-affecting filters: attendance, OT, unpaid leave, diligence eligibility, and time-cert merging. This is the critical fix that makes actual employee pay align with company payroll policy (day 22 → next payroll cycle).
+
+### Semantic Change (user-facing)
+| Before v1.4.52 | After v1.4.52 |
+|---|---|
+| Payslip "ก.ค. 2569" = 1-31 ก.ค. calendar | Payslip "ก.ค. 2569" = **22 มิ.ย. - 21 ก.ค.** payroll cycle |
+| OT on 22 ก.ค. = in July payslip | OT on 22 ก.ค. = in **August payslip** |
+| Late on 22 ก.ค. = in July deductions | Late on 22 ก.ค. = in **August deductions** |
+| Unpaid leave 22 ก.ค. = July deduction | Unpaid leave 22 ก.ค. = **August deduction** |
+
+### Files Changed
+- `index.html` — 11 patches to `calculatePaySlip()`, `mergeApprovedTimeCertForMonth()`, `renderPaySlipAdmin()`, `_slipMonth` init
+- Version 1.4.51 → 1.4.52
+
+### Fix Details
+
+**Patch 3: mergeApprovedTimeCertForMonth (line 6232)**
+```js
+// Was:  c.date.startsWith(monthStr)
+// Now:  getPayrollMonth(c.date) === monthStr
+```
+
+**Patch 4: Attendance filter in calculatePaySlip (line 7233)**
+```js
+// Was:  r.employeeId === employeeId && r.date.startsWith(monthStr)
+// Now:  r.employeeId === employeeId && getPayrollMonth(r.date) === monthStr
+```
+
+**Patch 5: OT filter (line 7261)**
+```js
+// Was:  r.date.startsWith(monthStr)
+// Now:  getPayrollMonth(r.date) === monthStr
+```
+
+**Patch 6: Unpaid leave (line 7276-7292)**
+```js
+// Was:  r.startDate.startsWith(monthStr) → check first day only
+// Now:  getPayrollMonth(r.startDate) === monthStr → check first day payroll month
+// AND:  Per-day counting via getPayrollMonth() (handles multi-day leaves spanning cutoff)
+```
+
+**Patch 7: Diligence eligibility (line 7329-7335)**
+```js
+// Was:  d.toISOString().slice(0,7) === monthStr
+// Now:  getPayrollMonth(d.toISOString().slice(0,10)) === monthStr
+```
+
+**Patch 8: _slipMonth lazy init (line 7867)**
+```js
+// Was:  let _slipMonth = `${YYYY}-${MM}` from new Date() at script load (calendar)
+// Now:  let _slipMonth = null; init in renderPaySlipAdmin() to getPayrollMonth(today())
+```
+
+**Patch 9: hasAttendance uses payroll month (line 7877)**
+```js
+// Was:  records.some(r => r.date.startsWith(_slipMonth))
+// Now:  records.some(r => getPayrollMonth(r.date) === _slipMonth)
+```
+
+**Patch 10: Payslip header uses formatPayrollMonth (line 7900)**
+```js
+// Was:  <h3>คำนวณสลิปเดือน ${_slipMonth}</h3>  (e.g. "เดือน 2026-07")
+// Now:  <h3>คำนวณสลิป ${formatPayrollMonth(_slipMonth)}</h3>  (e.g. "รอบ ก.ค. 2569 (22 มิ.ย. - 21 ก.ค. 2569)")
+```
+
+**Patch 11: One-time warning banner on Payslip page**
+Blue banner explaining rollout — dismissible, persists dismissal in localStorage.
+
+### Data Migration Analysis
+| Layer | Impact | Migration |
+|---|---|---|
+| Attendance records | Still store calendar date | **None** ✅ |
+| OT records | Still store calendar date | **None** ✅ |
+| Leave records | Still store calendar date | **None** ✅ |
+| Commissions | Store monthStr — semantic change (calendar → payroll) | **User education** ⚠️ |
+| customDeductions | Same as commissions | **User education** ⚠️ |
+| paySlips | Store by monthStr — semantic change | **User education** ⚠️ |
+| Rollback | Set `payrollCutoffDay = 31` in Settings | Instant, no code |
+
+**Zero data migration**. Records retain original dates. Only calculation logic + display changes.
+
+### Commissions / customDeductions Note
+These records store a `monthStr` field (e.g. `"2026-07"`). Semantics shift:
+- Before v1.4.52: Admin enters commission for July calendar → stored as `"2026-07"`
+- After v1.4.52: Admin enters commission for July payroll cycle (22 มิ.ย. - 21 ก.ค.) → stored as `"2026-07"`
+
+**Storage format unchanged**. Admin needs to enter values aligned to the new cycle semantics. Announce via Line.
+
+### Post-Deploy Verification
+1. Version 1.4.52 in Console + sidebar
+2. Payslip page shows blue notice banner (first time)
+3. Payslip header: "คำนวณสลิป รอบ ก.ค. 2569 (22 มิ.ย. - 21 ก.ค. 2569)"
+4. Sample calculation:
+   - Pick an employee with OT on 22 ก.ค. or attendance on 22 ก.ค.
+   - Payslip for "2026-07" should NOT include that OT/late
+   - Payslip for "2026-08" SHOULD include it
+5. Console: `calculatePaySlip('EMP001', 2026, 7)` returns object with monthStr="2026-07" and correct workDays/otHours for 22 มิ.ย. - 21 ก.ค.
+6. Change month picker → data refreshes correctly
+7. Export Excel → filename shows payroll month
+
+### Rollback
+- Git tag v1.4.51
+- Vercel promote v1.4.51 (10 sec)
+- OR: Set `payrollCutoffDay = 31` in Settings → behaves as calendar month
+- Pre-deploy backup: pre-Deploy v1.4.52_localStorage_2026-07-05.json
+
+### Deployment Timing
+- 5 Jul 2569 evening = safe (before 21 Jul first real cutoff)
+- App only launched 1 Jul 2569 = no historical payslips exist yet = no legacy conflict
+
+### ⚠️ Still Postponed
+- v1.4.50 (Supabase Storage) — scheduled reminder 8 Jul 2569 09:30
+- v1.5.0 (Excel exports refinements, employee dashboard, docs)
+- Day 4 (H1 RLS Lockdown)
+
+### Payroll Cutoff Rollout — COMPLETE
+- ✅ v1.4.48: Settings + helpers + Admin Dashboard counter
+- ✅ v1.4.51: OT + Late/Absence reports
+- ✅ **v1.4.52: Payslip calculation** ← this version
+- 📋 v1.5.0: Excel exports + Employee Dashboard (not urgent, calendar month currently OK for those)
+
+---
+
 ## [1.4.51] — 2026-07-05
 
 **PAYROLL CUTOFF Phase 2 — OT + Late/Absence reports use payroll month**

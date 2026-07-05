@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.51</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.52</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.51';
+const APP_VERSION = '1.4.52';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -6229,8 +6229,9 @@ function mergeApprovedTimeCertForDate(records, dateStr) {
 }
 
 // Merge approved time-cert requests across an entire month range
+// v1.4.52: monthStr is now PAYROLL month (was calendar month) — use getPayrollMonth
 function mergeApprovedTimeCertForMonth(records, monthStr) {
- const certs = DB.load('timeCertRequests', []).filter(c => c.status === 'approved' && c.date.startsWith(monthStr));
+ const certs = DB.load('timeCertRequests', []).filter(c => c.status === 'approved' && getPayrollMonth(c.date) === monthStr);
  if (!certs.length) return records;
  const dates = [...new Set(certs.map(c => c.date))];
  let merged = records;
@@ -7229,8 +7230,9 @@ function calculatePaySlip(employeeId, year, month) {
  const diligenceLateThreshold = settings.diligenceLateThreshold || lateThreshold;
 
  // Attendance for this month — merge approved time certifications
+ // v1.4.52: filter by PAYROLL month (was calendar) — respects cutoffDay from Settings
  const rawAttendance = DB.load('attendanceRecords').filter(r =>
- r.employeeId === employeeId && r.date.startsWith(monthStr)
+ r.employeeId === employeeId && getPayrollMonth(r.date) === monthStr
  );
  const attendance = mergeApprovedTimeCertForMonth(rawAttendance, monthStr);
  // Auto-absent: anyone with checkIn >= cutoff is excluded from workDays + lateRecords
@@ -7256,8 +7258,9 @@ function calculatePaySlip(employeeId, year, month) {
  const totalLateHours = Math.ceil(totalLateMinutes / 60);
 
  // OT for this month — split into normal vs holiday
+ // v1.4.52: filter by PAYROLL month (was calendar)
  const otReqs = DB.load('otRequests').filter(r =>
- r.employeeId === employeeId && r.status === 'approved' && r.date.startsWith(monthStr)
+ r.employeeId === employeeId && r.status === 'approved' && getPayrollMonth(r.date) === monthStr
  );
  const otHours = otReqs.reduce((sum, r) => sum + r.hours, 0);
  const otHoursNormal = otReqs.filter(r => !isHolidayDate(r.date)).reduce((sum, r) => sum + r.hours, 0);
@@ -7270,8 +7273,9 @@ function calculatePaySlip(employeeId, year, month) {
  let leaveDays = 0;
  let unpaidDaysThisMonth = 0; // new — count by days (รองรับครึ่งวัน)
  let unpaidHoursLegacy = 0; // backward-compat for old hourly records
+ // v1.4.52: filter by PAYROLL month (was calendar) — check each leave day against payroll cutoff
  leaves.forEach(r => {
- if (r.type === 'unpaid' && r.startDate.startsWith(monthStr)) {
+ if (r.type === 'unpaid' && getPayrollMonth(r.startDate) === monthStr) {
  if (r.unpaidHours && r.unpaidHours > 0) {
  // Legacy hourly record
  unpaidHoursLegacy += r.unpaidHours;
@@ -7284,7 +7288,8 @@ function calculatePaySlip(employeeId, year, month) {
  const start = new Date(r.startDate);
  const end = new Date(r.endDate);
  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
- if (d.toISOString().slice(0,7) === monthStr) leaveDays++;
+ // v1.4.52: use payroll month for per-day counting (multi-day leaves may span cutoff)
+ if (getPayrollMonth(d.toISOString().slice(0,10)) === monthStr) leaveDays++;
  }
  });
 
@@ -7321,12 +7326,13 @@ function calculatePaySlip(employeeId, year, month) {
 
  // Diligence bonus - eligibility check
  // v1.4.11: comp-off (ลาสะสมวันหยุด) = สลับวันหยุด ไม่ใช่ลาจริง → ไม่ตัดเบี้ยขยัน
+ // v1.4.52: use PAYROLL month (was calendar) for diligence eligibility check
  const hasLeaveThisMonth = leaves.some(r => {
  if (r.type === 'comp-off') return false; // exclude — comp-off คือสลับวันหยุด
- if (r.type === 'unpaid' && r.startDate.startsWith(monthStr)) return true;
+ if (r.type === 'unpaid' && getPayrollMonth(r.startDate) === monthStr) return true;
  const s = new Date(r.startDate), e = new Date(r.endDate);
  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
- if (d.toISOString().slice(0,7) === monthStr) return true;
+ if (getPayrollMonth(d.toISOString().slice(0,10)) === monthStr) return true;
  }
  return false;
  });
@@ -7857,14 +7863,18 @@ function exportCommissionReport() {
 // ============================================================
 // PAY SLIP ADMIN
 // ============================================================
-let _slipMonth = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+// v1.4.52: default = current PAYROLL month (was: calendar month). Lazy-init to ensure getPayrollMonth is defined.
+let _slipMonth = null;
 
 function renderPaySlipAdmin() {
+ // v1.4.52: initialize _slipMonth to current payroll month on first render
+ if (!_slipMonth) _slipMonth = getPayrollMonth(today());
  const [y, m] = _slipMonth.split('-').map(Number);
  const emps = DB.load('employees').filter(e => e.active);
  const slips = DB.load('paySlips');
  const records = DB.load('attendanceRecords');
- const hasAttendance = records.some(r => r.date.startsWith(_slipMonth));
+ // v1.4.52: check attendance by PAYROLL month
+ const hasAttendance = records.some(r => getPayrollMonth(r.date) === _slipMonth);
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
@@ -7878,9 +7888,16 @@ function renderPaySlipAdmin() {
  <div class="alert alert-error mb-3"> ยังไม่มีข้อมูลเวลาเข้างานของเดือนนี้ — กรุณาอัปโหลดไฟล์เวลาเข้างานก่อนสร้างสลิป</div>
  ` : ''}
 
+ ${!localStorage.getItem('hr__seenPayrollSlipNotice_v1_4_52') ? `
+ <div class="alert alert-info mb-3" style="font-size:13px;position:relative;padding-right:36px;">
+ <strong>ℹ️ v1.4.52 Update:</strong> การคำนวณสลิปเงินเดือนใช้<strong>รอบเงินเดือน</strong> (default: วันที่ 22 - 21) แทนปฏิทิน (1-31) — สลิปเดือน ก.ค. 2569 จะครอบคลุมข้อมูล 22 มิ.ย. - 21 ก.ค. เท่านั้น. Events หลังวันตัดรอบจะไปคิดในสลิปเดือนถัดไป
+ <button onclick="localStorage.setItem('hr__seenPayrollSlipNotice_v1_4_52','1');this.parentElement.style.display='none';" style="position:absolute;top:8px;right:8px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--gray-500);" title="ปิดข้อความนี้">×</button>
+ </div>
+ ` : ''}
+
  <div class="card">
  <div class="card-header">
- <h3>คำนวณสลิปเดือน ${_slipMonth}</h3>
+ <h3>คำนวณสลิป ${formatPayrollMonth(_slipMonth)}</h3>
  <div style="display:flex;gap:8px;flex-wrap:wrap;">
  <button class="btn btn-success btn-sm" ${!hasAttendance ? 'disabled' : ''} onclick="exportPayrollXLSX()">Export Excel</button>
  <button class="btn btn-success" ${!hasAttendance ? 'disabled' : ''} onclick="generateAllPaySlips()">สร้างสลิปทั้งหมด</button>

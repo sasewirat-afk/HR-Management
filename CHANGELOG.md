@@ -6,6 +6,156 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.47] — 2026-07-05
+
+**HOTFIX — LZ: prefix safety in direct JSON.parse calls**
+
+### Problem
+After v1.4.46 deploy, console showed:
+```
+[cloudPullAllSafe] tombstone apply failed:
+SyntaxError: Unexpected token 'L', "LZ:歂 ÖĪÄĪ"... is not valid JSON
+at JSON.parse (<anonymous>) at cloudPullAllSafe (index:1271:20)
+```
+Root cause: 5 places in code still used direct `JSON.parse(localStorage.getItem('hr_KEY') || '[]')` bypassing `DB.load`. When keys are stored as `LZ:` compressed format (v1.4.46 feature), JSON.parse fails.
+
+### Impact (before fix)
+- 🟡 **Line 1269-1271** (cloudPullAllSafe tombstone cleanup): failed silently in try/catch → stale tombstones accumulate → potential resurrection of deleted employees
+- 🔴 **Line 1360** (cloudPushAll): would fail on first compressed key → block manual full-sync
+- 🟡 **Line 1118** (EMP-GUARD merge): tombstones small currently (<200 chars, not compressed) but fragile
+- 🟡 **Line 5137** (UI delete): same fragility
+
+Data integrity was not compromised due to try/catch guards.
+
+### Fix
+Replaced all 5 direct `JSON.parse(localStorage.getItem(...))` with `DB.load(key, default)`:
+
+```js
+// Before (line 1118, 1269, 5137)
+const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
+// After
+const tombstones = DB.load('deletedEmployeeIds', []); // v1.4.47: LZ: safe
+
+// Before (line 1271)
+const emps = JSON.parse(localStorage.getItem('hr_employees') || '[]');
+// After
+const emps = DB.load('employees', []); // v1.4.47: LZ: safe
+
+// Before (cloudPushAll)
+const keys = Object.keys(localStorage).filter(k => k.startsWith('hr_'));
+const val = JSON.parse(localStorage.getItem(k));
+// After
+const keys = Object.keys(localStorage).filter(k => k.startsWith('hr_') && !k.startsWith('hr__'));
+const val = DB.load(key);
+if (val === undefined || val === null) continue;
+```
+
+### Also Fixed — cloudPushAll `hr__` System Key Filter
+`Object.keys(localStorage).filter(k => k.startsWith('hr_'))` matched BOTH `hr_*` (user data JSON) AND `hr__*` (system watermarks stored as raw ISO strings like `2026-07-05T12:00:00.000Z`). `JSON.parse('2026-07-05T...')` fails. Added `!k.startsWith('hr__')` filter.
+
+### Files Changed
+- `index.html` — 5 read replacements + 1 filter add + version bump
+- Version 1.4.46 → 1.4.47
+
+### Backup
+- Pre-deploy snapshot: pre-Deploy v1.4.47_localStorage_2026-07-05.json
+- Fingerprint: 98 emps / 98 hashed / 44 overrides / 6 tombstones (must match post-deploy)
+- Cloud checkpoint: Supabase daily backup + Git tag v1.4.46 = rollback anchor
+
+### Post-Deploy Verification Required
+- Console must NOT show tombstone apply failed error
+- Emps count = 98
+- Manual cloudPushAll test (Console: `DB.cloudPushAll()`) — must complete without error
+
+### ⚠️ Still Postponed
+- v1.4.42 (leave quota), v1.4.43 (debug panel), Day 4 (H1 RLS)
+
+### Next
+- Payroll cutoff logic (day 21 → next month for events on day 22+)
+
+---
+
+## [1.4.46] — 2026-07-05
+
+**MOBILE QUOTA FIX — Defensive LZ-String compression**
+
+### Problem
+After v1.4.44 deploy, iOS Safari mobile still couldn't sync — cloudPullAllSafe threw `QuotaExceededError`. Diagnostic (via v1.4.43 debug panel) revealed 3.5 MB total localStorage vs iOS Safari's ~5 MB quota. Desktop unaffected (~10 MB quota).
+
+### v1.4.45 Attempt (ROLLED BACK — same day)
+First compression attempt added `localStorage.removeItem(...)` in `DB.load` when LZ decompression failed. During upgrade transition, some keys had ambiguous format → `removeItem` triggered → **all employee records destroyed on Test Desktop**. v1.4.44 EMP-GUARD push guard successfully blocked the corrupt local state from overwriting cloud (98 emps preserved). Rolled back within 15 minutes via `git revert HEAD` + Vercel promotion.
+
+### v1.4.46 Design Principles
+1. **`DB.load` NEVER destroys localStorage** — corrupted keys return default, awaiting cloud recovery
+2. **Compression roundtrip verification** — every compressed blob is decompressed and compared to source before commit
+3. **`DB.save` validates before setItem** — rejects non-string/empty compression output
+4. **Graceful quota handling** — catches QuotaExceededError, toasts warning, continues sync
+
+### Fix Details
+```js
+// v1.4.46 DB.load (defensive)
+if (v === 'undefined' || v === 'null') {
+ console.warn(`[DB.load v1.4.46] '${key}' corrupt literal. Returning default. Not destroying — awaiting cloud recovery.`);
+ return def;  // ← was: localStorage.removeItem(...); return def;
+}
+
+// v1.4.46 _compressForStorage (new helper)
+_compressForStorage(val) {
+ const json = JSON.stringify(val);
+ if (typeof LZString === 'undefined' || json.length < 200) return json;
+ const compressed = LZString.compressToUTF16(json);
+ if (compressed.length >= json.length) return json;
+ // CRITICAL: verify roundtrip before committing
+ const roundtrip = LZString.decompressFromUTF16(compressed);
+ if (roundtrip !== json) return json;  // safe fallback
+ return 'LZ:' + compressed;
+}
+```
+
+### Post-Deploy Verification (2026-07-05 12:00)
+- Admin desktop: 98 emps / 98 hashed / 0 resurrected ✅
+- Total localStorage: 3.5 MB → **2.73 MB** (22% reduction)
+- iOS Safari sync: **WORKING** (Green banner: "ซิงค์จาก Cloud สำเร็จ (19 รายการ)")
+- Leave overrides preserved (44 total, including นุชนาเดีย ลาป่วย=19, ลากิจ=0)
+- v1.4.44 defenses intact: seed guard, EMP-GUARD, baseline 2020
+
+### v1.4.47 Backlog (non-urgent)
+1. Tombstone `JSON.parse` at line 1298 fails on `LZ:` prefix — replace with `DB.load`
+2. Grep other direct `JSON.parse(localStorage.getItem(` calls for LZ: safety
+3. Auto-force full re-compress on version change (currently only 1/19 keys compressed after upgrade)
+4. Filter `hr__` (double underscore) system keys in `cloudPushAll`
+
+### Files Changed
+- `index.html` — 6 patches (LZ CDN, DB.load defensive, _compressForStorage helper, DB.save validation, cloudPullAllSafe compression + graceful quota, version bump)
+- Version 1.4.44 → 1.4.46 (v1.4.45 skipped due to rollback)
+- Diff: +100 / -11 lines
+- File size: 10,201 lines
+
+### Backup Trail
+- Pre-deploy snapshot: [[pre-Deploy_v1.4.44_localStorage_2026-07-05.json]]
+- Cloud checkpoint: Supabase automated backup 2026-07-05 morning
+- Rollback recipe: Vercel promote v1.4.44 (10 sec) or `git revert HEAD` (60 sec)
+
+### ⚠️ Still Postponed
+- v1.4.42 (leave quota fix)
+- v1.4.43 debug panel (only if mobile issues return)
+- Day 4 (H1 RLS Lockdown)
+
+---
+
+## [1.4.45] — 2026-07-05 (ROLLED BACK — same day)
+
+**COMPRESSION ATTEMPT — Rolled back within 15 min due to destructive DB.load**
+
+Superseded by v1.4.46. See v1.4.46 entry for full narrative. Key finding: `localStorage.removeItem(...)` in `DB.load` failure paths caused data loss on Test Desktop during upgrade. v1.4.44 EMP-GUARD prevented cloud corruption. No production users affected.
+
+**Lessons captured**:
+- `DB.load` must never mutate localStorage on read failure — cloud recovery requires the corrupt key to still exist for later re-pull
+- Compression must have roundtrip verification before committing to compressed format
+- Test compression in staging with real production-size data before deploying
+
+---
+
 ## [1.4.44] — 2026-07-05
 
 **CRITICAL ROOT CAUSE FIX — 3 defenses against employees data disaster**

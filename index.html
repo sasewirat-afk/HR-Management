@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.46</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.47</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.46';
+const APP_VERSION = '1.4.47';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1115,7 +1115,7 @@ const DB = {
  if (Array.isArray(cloudEmps) && cloudEmps.length > 0) {
  const cloudMap = new Map(cloudEmps.map(e => [e.id, e]));
  const localMap = new Map(val.map(e => [e.id, e]));
- const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
+ const tombstones = DB.load('deletedEmployeeIds', []); // v1.4.47: was JSON.parse, LZ: safe now
  const tombstoneIds = new Set(tombstones.map(t => t.id));
 
  const merged = [];
@@ -1266,9 +1266,9 @@ const DB = {
  // - If employee's _addedAt > tombstone's deletedAt → tombstone is stale (employee re-added) → clear it
  // - Only remove employees whose tombstone is still valid (deletedAt >= their _addedAt)
  try {
- const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
+ const tombstones = DB.load('deletedEmployeeIds', []); // v1.4.47: was JSON.parse, LZ: safe now
  if (tombstones.length > 0) {
- const emps = JSON.parse(localStorage.getItem('hr_employees') || '[]');
+ const emps = DB.load('employees', []); // v1.4.47: was JSON.parse, LZ: safe now
  const empMap = new Map(emps.map(e => [e.id, e]));
  // Split tombstones: valid vs stale (employee was re-added AFTER deletion)
  const validTombs = [];
@@ -1354,10 +1354,13 @@ const DB = {
 
  async cloudPushAll() {
  if (!cloudSync) return;
- const keys = Object.keys(localStorage).filter(k => k.startsWith('hr_'));
+ // v1.4.47: filter out hr__ (double underscore) system keys — watermarks, timestamps (raw strings, not JSON)
+ // v1.4.47: use DB.load for LZ: prefix support (was JSON.parse — failed on compressed values)
+ const keys = Object.keys(localStorage).filter(k => k.startsWith('hr_') && !k.startsWith('hr__'));
  for (const k of keys) {
  const key = k.replace(/^hr_/, '');
- const val = JSON.parse(localStorage.getItem(k));
+ const val = DB.load(key);
+ if (val === undefined || val === null) continue;
  await this._cloudUpsert(key, val);
  }
  console.log(` Pushed ${keys.length} keys to cloud`);
@@ -5134,7 +5137,7 @@ function deleteEmployee(id) {
  if (!confirm(` ยืนยันการลบพนักงาน "${esc(emp.firstName)} ${esc(emp.lastName)}" (${emp.id})?\n\nข้อมูลที่จะถูกลบ:\n• ข้อมูลพนักงาน\n• คำขอลา/OT/สะสมวันหยุด/งานนอกสถานที่ของพนักงาน\n• ข้อมูลการเข้างาน\n• ประวัติสลิปเงินเดือน\n\nการลบไม่สามารถย้อนกลับได้!`)) return;
 
  // v1.4.23: add tombstone BEFORE removing — prevents resurrection by stale devices
- const tombstones = JSON.parse(localStorage.getItem('hr_deletedEmployeeIds') || '[]');
+ const tombstones = DB.load('deletedEmployeeIds', []); // v1.4.47: was JSON.parse, LZ: safe now
  tombstones.push({ id, deletedAt: new Date().toISOString(), deletedBy: currentUser?.id });
  localStorage.setItem('hr_deletedEmployeeIds', JSON.stringify(tombstones));
  if (cloudSync) DB._cloudUpsert('deletedEmployeeIds', tombstones);

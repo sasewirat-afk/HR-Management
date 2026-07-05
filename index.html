@@ -13,6 +13,8 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- v1.4.46: LZ-String compression (defensive) for iOS Safari ~5MB quota fix -->
+<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
 <style>
 :root {
  /* Corporate Navy + Liquid Glass Palette */
@@ -861,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.44</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.46</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -885,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.44';
+const APP_VERSION = '1.4.46';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -942,21 +944,68 @@ const DB = {
 
  load(key, def = []) {
  const v = localStorage.getItem('hr_' + key);
- // Guard against the "undefined" string literal — sign of past corruption
+ // v1.4.46 DEFENSIVE: never destroy localStorage on read failure.
+ // If corrupted, next cloud pull will restore. Destroying prevents recovery.
  if (!v || v === 'undefined' || v === 'null') {
  if (v === 'undefined' || v === 'null') {
- console.warn(`[DB.load] '${key}' was corrupted (stored as "${v}"), reseting to default.`);
- localStorage.removeItem('hr_' + key);
+ console.warn(`[DB.load v1.4.46] '${key}' corrupt literal (${v}). Returning default. Not destroying — awaiting cloud recovery.`);
  }
+ return def;
+ }
+ // v1.4.46: LZ-string compression support (backward compat with pre-v1.4.46 raw JSON)
+ let json = v;
+ if (v.startsWith('LZ:')) {
+ if (typeof LZString === 'undefined') {
+ console.error(`[DB.load v1.4.46] '${key}' has LZ: prefix but LZString CDN not loaded. Returning default (preserved).`);
  return def;
  }
  try {
- const parsed = JSON.parse(v);
+ json = LZString.decompressFromUTF16(v.slice(3));
+ if (!json) {
+ console.error(`[DB.load v1.4.46] '${key}' decompression returned empty. Returning default (preserved).`);
+ return def;
+ }
+ } catch (e) {
+ console.error(`[DB.load v1.4.46] '${key}' decompression exception: ${e.message}. Returning default (preserved).`);
+ return def;
+ }
+ }
+ try {
+ const parsed = JSON.parse(json);
  return parsed === null || parsed === undefined ? def : parsed;
  } catch (e) {
- console.error(`[DB.load] '${key}' has invalid JSON, reseting:`, e.message);
- localStorage.removeItem('hr_' + key);
+ console.error(`[DB.load v1.4.46] '${key}' JSON.parse failed: ${e.message}. Returning default (preserved).`);
  return def;
+ }
+ },
+
+ // v1.4.46: DEFENSIVE compression helper with roundtrip verification.
+ // Returns 'LZ:' + compressed if verified smaller AND roundtrip works, else raw JSON.
+ // NEVER returns undefined/null — always returns a valid string (or throws).
+ _compressForStorage(val) {
+ const json = JSON.stringify(val);
+ if (typeof json !== 'string') {
+ throw new Error(`[DB._compress v1.4.46] JSON.stringify returned non-string (${typeof json})`);
+ }
+ // Skip compression for small data or if LZ unavailable
+ if (typeof LZString === 'undefined' || json.length < 200) return json;
+ try {
+ const compressed = LZString.compressToUTF16(json);
+ if (!compressed || typeof compressed !== 'string' || compressed.length === 0) {
+ console.warn('[DB._compress v1.4.46] invalid compression output, using raw JSON');
+ return json;
+ }
+ if (compressed.length >= json.length) return json; // no benefit
+ // CRITICAL: verify roundtrip before committing to compressed format
+ const roundtrip = LZString.decompressFromUTF16(compressed);
+ if (roundtrip !== json) {
+ console.warn('[DB._compress v1.4.46] roundtrip mismatch — using raw JSON (safe fallback)');
+ return json;
+ }
+ return 'LZ:' + compressed;
+ } catch (e) {
+ console.warn('[DB._compress v1.4.46] exception during compression, using raw JSON:', e.message);
+ return json;
  }
  },
 
@@ -966,7 +1015,32 @@ const DB = {
  console.error(`[DB.save] refused to save undefined for '${key}'`);
  return;
  }
- localStorage.setItem('hr_' + key, JSON.stringify(val));
+ // v1.4.46: DEFENSIVE — compress + validate BEFORE setItem
+ let stored;
+ try {
+ stored = this._compressForStorage(val);
+ } catch (e) {
+ console.error(`[DB.save v1.4.46] compression failed for '${key}':`, e.message);
+ if (typeof toast === 'function') toast(`⚠️ ไม่สามารถบันทึก '${key}' (compress error)`, 'error');
+ return; // ABORT — don't corrupt localStorage
+ }
+ if (typeof stored !== 'string' || stored.length === 0) {
+ console.error(`[DB.save v1.4.46] compress returned invalid value for '${key}' (${typeof stored}), aborting`);
+ return;
+ }
+ try {
+ localStorage.setItem('hr_' + key, stored);
+ } catch (e) {
+ if (e.name === 'QuotaExceededError' || (e.message && e.message.toLowerCase().includes('quota'))) {
+ console.error(`[DB.save v1.4.46] Quota exceeded for '${key}'. Size:`, stored.length, 'bytes');
+ if (typeof toast === 'function') {
+ toast(`⚠️ localStorage เต็ม — '${key}' (${(stored.length/1024).toFixed(0)}KB)`, 'error');
+ }
+ // Continue — cloud upsert will still fire
+ } else {
+ throw e;
+ }
+ }
  // v1.4.10: counter (not Set) for concurrent saves to same key
  // v1.4.11: decrement moved into _cloudUpsert's finally (guarantees decrement on ANY exit path
  // — fixes leak when upsert hangs and .then() never runs, causing realtime echoes to be permanently skipped)
@@ -1152,14 +1226,29 @@ const DB = {
  const { data, error } = await query;
  if (error) throw error;
  let pulled = 0;
+ let quotaExceededKeys = [];
  if (data && data.length > 0) {
  data.forEach(row => {
  if (row.value === undefined || row.value === null) return;
  const json = JSON.stringify(row.value);
- if (json === undefined) return;
- localStorage.setItem('hr_' + row.key, json);
+ if (typeof json !== 'string') return;
+ // v1.4.46: use compression helper + graceful quota handling for mobile iOS Safari
+ try {
+ const stored = DB._compressForStorage(row.value);
+ localStorage.setItem('hr_' + row.key, stored);
  pulled++;
+ } catch (e) {
+ if (e.name === 'QuotaExceededError' || (e.message && e.message.toLowerCase().includes('quota'))) {
+ console.warn(`[cloudPullAllSafe v1.4.46] Quota exceeded on '${row.key}' (${(json.length/1024).toFixed(0)}KB). Skipping.`);
+ quotaExceededKeys.push(row.key);
+ } else {
+ console.error(`[cloudPullAllSafe v1.4.46] setItem failed for '${row.key}':`, e.message);
+ }
+ }
  });
+ }
+ if (quotaExceededKeys.length > 0 && typeof toast === 'function') {
+ toast(`⚠️ ${quotaExceededKeys.length} key(s) ไม่ cache (localStorage เต็ม): ${quotaExceededKeys.join(', ')}`, 'warn');
  }
  // v1.4.40: always advance ATTEMPT timestamp (for debounce)
  localStorage.setItem('hr__lastPullAttemptedAt', new Date(nowMs).toISOString());

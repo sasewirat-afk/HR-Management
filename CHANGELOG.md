@@ -6,6 +6,152 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.44] — 2026-07-05
+
+**CRITICAL ROOT CAUSE FIX — 3 defenses against employees data disaster**
+
+### Incident (2026-07-05 morning)
+User reported catastrophic employees data loss:
+- ADMIN001 + all real employees' passwords reverted to `'1234'` plaintext
+- passwordHash field removed on ADMIN001
+- 44 leave overrides destroyed
+- 681008002 (อโนชา) resurrected from deletion (persistent 4-day bug)
+- Other tables intact (attendance, leaves, shifts, OT, etc.)
+
+### Root Cause Analysis
+Attack chain identified via debug mantra:
+1. Mobile device (offline mode issue) had SEED employees in localStorage (6 accounts with plaintext '1234' password, no `_updatedAt`)
+2. Mobile came online → cloudPullAllSafe INCREMENTAL returned 0 keys (watermark race)
+3. Local `hr_employees` stayed as SEED data (not overwritten by cloud pull)
+4. `migrateEmployeeUpdatedAt_v1_4_26` at line 1449 set `_updatedAt = new Date()` = TODAY on all 6 seed employees
+5. Any DB.save('employees') triggered → LWW merge in `_cloudUpsert`
+6. Seed employees (today's timestamp) > real cloud employees (yesterday's timestamps) → **local wins per employee**
+7. Cloud employees array partially overwritten with seed defaults
+
+### Fix 1 — seedData() Defensive Guard
+Added check: never seed if `hr_employees` already has records locally.
+Prevents edge case where `initialized` flag missing but employees exist.
+```js
+const existingEmps = DB.load('employees', []);
+if (Array.isArray(existingEmps) && existingEmps.length > 0) {
+  console.warn('[seedData v1.4.44] REFUSING to seed...');
+  DB.save('initialized', true);
+  return;
+}
+```
+
+### Fix 2 — Baseline Timestamp Changed to 2020-01-01
+Migration `migrateEmployeeUpdatedAt_v1_4_26` used `baseline = new Date().toISOString()` (TODAY).
+Changed to `'2020-01-01T00:00:00.000Z'` (ancient).
+```js
+// Before: const baseline = new Date().toISOString();  // ← caused disaster
+// After:  const baseline = '2020-01-01T00:00:00.000Z';
+```
+**Effect**: seed/old records now ALWAYS LOSE LWW to any real cloud record with recent timestamp.
+Real cloud data (2026 timestamps) always wins over migrated baseline (2020).
+
+### Fix 3 — Employees Push Guard (Dramatic Drop Detection)
+Added to `_cloudUpsert` when key='employees':
+```js
+if (cloudEmps.length > 10 && val.length < cloudEmps.length * 0.3) {
+  console.error(`REFUSING PUSH: local < 30% of cloud`);
+  toast(`🛡️ ป้องกันข้อมูลถูกทับ`, 'error');
+  localStorage.setItem('hr_' + key, JSON.stringify(cloudEmps));
+  return;
+}
+```
+**Effect**:
+- If local has 6 employees and cloud has 98 → 6 < 29.4 → BLOCKED
+- If local has 90 and cloud has 98 → 90 > 29.4 → allowed (legitimate small drops OK)
+- Local also reverted to cloud state to prevent repeated stale writes
+
+### Compound Defense
+All 3 fixes work together as defense-in-depth:
+- **Fix 1** stops seed data from being created if any real data exists
+- **Fix 2** ensures any accidentally-created seed data LOSES the LWW comparison
+- **Fix 3** even if Fix 1+2 fail, catastrophic push is blocked at the network layer
+
+### Data Recovery Prior to Deploy
+User restored from local backup:
+- Source: `pre-deploy v1.4.41_localStorage_2026-07-04T08:20:46Z.json`
+- Cloud restored via 15 chunked SQL files (SQL Editor size limit workaround)
+- Both desktops localStorage cleared + fresh cloud pull
+- Verified: 98 emps / 98 hashed / 0 plain / 44 overrides / 6 tombstones ✅
+
+### Files Changed
+- `index.html` — 3 patches (seedData guard, baseline, push guard)
+- Version 1.4.43 → 1.4.44
+- File size: 10,858 lines
+
+### ⚠️ Postponed Until v1.4.44 Verified
+- v1.4.42 (leave quota fix) — postponed
+- v1.4.43 (mobile debug panel) — postponed
+- Day 4 (H1 RLS) — still paused
+
+---
+
+## [1.4.43] — 2026-07-04
+
+**DEBUG BUILD — Mobile offline mode diagnostic**
+
+### Bug
+Mobile browsers (both iOS Safari + Android Chrome) show "ดึงข้อมูลจาก Cloud ไม่สำเร็จ - ใช้ข้อมูลในเครื่อง (offline mode)" banner.
+
+Ruled out via testing:
+- ✅ Network to jsdelivr.net CDN — works
+- ✅ Network to Supabase API — works (returns expected 401)
+- ✅ Supabase incident — services all Operational for our project
+- ✅ Cache poisoning — full cache clear did NOT resolve
+
+Root cause: **UNKNOWN** — need actual error detail from mobile.
+
+### Approach
+Instead of guessing, deploy diagnostic build that surfaces actual error to user.
+
+### Added
+1. **`window._diag` global trace object** — captures:
+ - Version, startedAt, User-Agent
+ - Supabase CDN load status
+ - `supa` client init result (OK/FAIL/SKIP)
+ - `cloudSync` flag value
+ - Last 5 pull attempts (success + failures)
+ - Last error message
+
+2. **Enhanced offline banner** — replaces generic message with:
+ - Actual error name + first 60 chars
+ - Clickable — "แตะเพื่อดู debug"
+
+3. **Debug panel modal** — shows on tap:
+ - Full diagnostic state
+ - Pull attempt history
+ - Two buttons:
+   - **🔄 Retry Pull** — force retry with error message
+   - **📋 Copy Diagnostic** — copy JSON to clipboard
+
+4. **Error surfacing** — `cloudPullAllSafe()` now returns `errorDetail` field with name + message from thrown error
+
+### How to Use (for user on mobile)
+1. Hard reload production URL
+2. If offline banner shows → **tap it** → debug panel opens
+3. Look at:
+ - "Supabase CDN": expected ✅ loaded (object)
+ - "supa client": expected OK
+ - "cloudSync flag": expected true
+ - Pull attempts: what actually failed
+4. Tap **Copy Diagnostic** → paste ให้ admin analyze
+5. Or tap **Retry Pull** to test again
+
+### No Data Risk
+This build is UI + logging only. No changes to:
+- Data flow / storage
+- Existing pull/push logic
+- Sync guards
+- Migration code
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.42] — 2026-07-04
 
 **CRITICAL HOTFIX — leave quota override lost after logout (v1.4.14/v1.4.22 conflict)**

@@ -861,7 +861,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.42</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.44</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -885,7 +885,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.42';
+const APP_VERSION = '1.4.44';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -899,15 +899,38 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 let supa = null;
 let cloudSync = false;
+// v1.4.43: diagnostic trace — capture what actually happens on mobile
+window._diag = {
+ version: '1.4.43',
+ startedAt: new Date().toISOString(),
+ userAgent: navigator.userAgent,
+ supabaseCdnLoaded: typeof window.supabase !== 'undefined',
+ supabaseCdnType: typeof window.supabase,
+ xlsxLoaded: typeof window.XLSX !== 'undefined',
+ supaCreateResult: null,
+ supaCreateError: null,
+ cloudSync: false,
+ pullAttempts: [],
+ pushErrors: [],
+ lastError: null
+};
 if (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase) {
  try {
  supa = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
  cloudSync = true;
+ window._diag.supaCreateResult = 'OK';
+ window._diag.cloudSync = true;
  console.log(' Supabase cloud sync: ENABLED');
  } catch (e) {
+ window._diag.supaCreateResult = 'FAIL';
+ window._diag.supaCreateError = e.message + ' | ' + (e.stack || '').slice(0, 200);
+ window._diag.lastError = 'createClient: ' + e.message;
  console.error('Supabase init failed:', e);
  }
 } else {
+ window._diag.supaCreateResult = 'SKIP';
+ window._diag.supaCreateError = 'window.supabase not defined at init time (CDN slow?)';
+ window._diag.lastError = 'CDN not loaded before init';
  console.log(' Local-only mode (Supabase not configured)');
 }
 
@@ -1004,6 +1027,17 @@ const DB = {
  try {
  const { data: existing } = await supa.from('hr_data').select('value').eq('key', key).maybeSingle();
  const cloudEmps = existing?.value || [];
+ // v1.4.44: DRAMATIC-DROP GUARD — refuse push if local count < 30% of cloud count.
+ // Prevents SEED DATA (6 employees) or STALE MOBILE (few employees) from destroying full cloud (98+).
+ if (Array.isArray(cloudEmps) && cloudEmps.length > 10 && val.length < cloudEmps.length * 0.3) {
+ console.error(`[EMP-GUARD v1.4.44] REFUSING PUSH: local=${val.length} < 30% of cloud=${cloudEmps.length}. Possible seed/stale data corruption.`);
+ if (typeof toast === 'function') {
+ toast(`🛡️ ป้องกันข้อมูลถูกทับ: local (${val.length}) น้อยกว่า cloud (${cloudEmps.length}) มากผิดปกติ — ไม่ push`, 'error');
+ }
+ // Revert local to cloud to prevent further stale writes
+ localStorage.setItem('hr_' + key, JSON.stringify(cloudEmps));
+ return;
+ }
  if (Array.isArray(cloudEmps) && cloudEmps.length > 0) {
  const cloudMap = new Map(cloudEmps.map(e => [e.id, e]));
  const localMap = new Map(val.map(e => [e.id, e]));
@@ -1175,10 +1209,30 @@ const DB = {
  } catch (e) { console.warn('[cloudPullAllSafe] tombstone apply failed:', e); }
  // v1.4.27: log mode + estimate egress saved
  console.log(`[cloudPullAllSafe] OK (${mode}), pulled ${pulled} keys`);
+ // v1.4.43: capture success too
+ window._diag.pullAttempts.push({
+ at: new Date().toISOString(),
+ ok: true,
+ mode,
+ count: pulled,
+ forced: force
+ });
+ // Keep only last 10 attempts to avoid memory bloat
+ if (window._diag.pullAttempts.length > 10) window._diag.pullAttempts.shift();
  return { ok: true, count: pulled, mode };
  } catch (e) {
  console.error('[cloudPullAllSafe] FAILED:', e);
- return { ok: false, count: 0, reason: e.message };
+ // v1.4.43: capture full error for mobile debug
+ window._diag.pullAttempts.push({
+ at: new Date().toISOString(),
+ ok: false,
+ error: e.message,
+ stack: (e.stack || '').slice(0, 300),
+ name: e.name,
+ forced: force
+ });
+ window._diag.lastError = 'pull: ' + e.name + ': ' + e.message;
+ return { ok: false, count: 0, reason: e.message, errorDetail: e.name + ': ' + e.message };
  }
  },
 
@@ -1401,7 +1455,11 @@ function migrateEmployeeUpdatedAt_v1_4_26() {
  const emps = DB.load('employees', []);
  if (!emps.length) return;
  let changed = 0;
- const baseline = new Date().toISOString();
+ // v1.4.44 CRITICAL FIX: use ancient baseline (was: new Date() = TODAY)
+ // Reason: employees with no _updatedAt were mostly SEED data or very old records.
+ // Setting today's timestamp made seed data WIN LWW against real cloud data → CATASTROPHIC DATA LOSS.
+ // Now: baseline = 2020-01-01, so seed/old records ALWAYS LOSE LWW to any real cloud record.
+ const baseline = '2020-01-01T00:00:00.000Z';
  emps.forEach(e => {
  if (!e._updatedAt) {
  e._updatedAt = e._addedAt || baseline;
@@ -1448,6 +1506,14 @@ async function migratePasswordsToHash_v1_4_28() {
 
 function seedData() {
  if (DB.load('initialized', false)) return;
+ // v1.4.44: CRITICAL SAFEGUARD — never seed if local already has employees
+ // (defends against edge case: initialized flag missing but employees exist)
+ const existingEmps = DB.load('employees', []);
+ if (Array.isArray(existingEmps) && existingEmps.length > 0) {
+ console.warn(`[seedData v1.4.44] REFUSING to seed — ${existingEmps.length} employees already exist locally. Marking initialized.`);
+ DB.save('initialized', true);
+ return;
+ }
 
  const employees = [
  {
@@ -10550,9 +10616,14 @@ document.addEventListener('DOMContentLoaded', async () => {
  loadingDiv.innerHTML = pullResult.count > 0 ? ` ซิงค์จาก Cloud สำเร็จ (${pullResult.count} รายการ)` : ' Cloud พร้อม (ว่าง)';
  loadingDiv.style.background = '#16a34a';
  } else {
- loadingDiv.innerHTML = ` ⚠ ดึงข้อมูลจาก Cloud ไม่สำเร็จ - ใช้ข้อมูลในเครื่อง (offline mode)`;
+ // v1.4.43: enhanced offline banner with detail + debug button
+ const errDetail = pullResult.errorDetail || pullResult.reason || 'unknown';
+ loadingDiv.innerHTML = `<span style="cursor:pointer;" onclick="showDebugPanel()">⚠ ดึงข้อมูลจาก Cloud ไม่สำเร็จ (${esc(errDetail).slice(0, 60)}) - <u>แตะเพื่อดู debug</u></span>`;
  loadingDiv.style.background = '#f59e0b';
- console.error('[Startup] Cloud pull failed:', pullResult.reason);
+ loadingDiv.style.cursor = 'pointer';
+ loadingDiv.onclick = () => showDebugPanel();
+ window._diag.lastError = 'startup: ' + errDetail;
+ console.error('[Startup] Cloud pull failed:', pullResult.reason, pullResult.errorDetail);
  }
  setTimeout(() => loadingDiv.remove(), 3000);
  }
@@ -10691,6 +10762,86 @@ function showChangePasswordPage() {
  document.getElementById('newPass2').value = '';
  document.getElementById('currentPass').focus();
 }
+
+// v1.4.43: Mobile-friendly debug panel — shows actual error + retry
+window.showDebugPanel = function() {
+ const d = window._diag || {};
+ const attempts = d.pullAttempts || [];
+ const attemptsHtml = attempts.slice(-5).reverse().map((a, i) =>
+ `<div style="padding:6px 0;border-bottom:1px solid #eee;font-size:12px;">
+ <div><strong>${a.ok ? '✅ OK' : '❌ FAIL'}</strong> · ${a.at}</div>
+ ${a.ok ? `<div>mode=${a.mode} · pulled=${a.count} keys · forced=${a.forced}</div>` : `<div style="color:#dc2626;">${a.error}</div><div style="font-size:10px;color:#666;word-break:break-all;">${(a.stack||'').slice(0,150)}</div>`}
+ </div>`).join('') || '<div style="padding:8px;color:#999;">ยังไม่มี pull attempts</div>';
+
+ const info = `
+ <div style="font-size:13px;line-height:1.6;">
+ <div><strong>Version:</strong> ${d.version}</div>
+ <div><strong>Started:</strong> ${d.startedAt}</div>
+ <div><strong>Supabase CDN:</strong> ${d.supabaseCdnLoaded ? '✅ loaded (' + d.supabaseCdnType + ')' : '❌ NOT LOADED'}</div>
+ <div><strong>XLSX CDN:</strong> ${d.xlsxLoaded ? '✅' : '❌'}</div>
+ <div><strong>supa client:</strong> ${d.supaCreateResult}</div>
+ ${d.supaCreateError ? `<div style="color:#dc2626;font-size:11px;word-break:break-all;"><strong>Init error:</strong> ${d.supaCreateError}</div>` : ''}
+ <div><strong>cloudSync flag:</strong> ${d.cloudSync ? '✅ true' : '❌ false'}</div>
+ <div><strong>Last error:</strong> ${d.lastError || '(none)'}</div>
+ <div style="margin-top:10px;font-size:11px;color:#666;word-break:break-all;"><strong>UA:</strong> ${d.userAgent}</div>
+ </div>
+ <h4 style="margin-top:16px;margin-bottom:8px;">Pull attempts (last 5):</h4>
+ ${attemptsHtml}`;
+
+ const panel = document.createElement('div');
+ panel.id = 'debugPanel';
+ panel.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:99999;display:flex;align-items:center;justify-content:center;padding:16px;';
+ panel.innerHTML = `
+ <div style="background:white;border-radius:12px;max-width:500px;width:100%;max-height:90vh;overflow:auto;padding:20px;">
+ <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+ <h3 style="margin:0;">📱 Cloud Debug</h3>
+ <button onclick="document.getElementById('debugPanel').remove()" style="border:none;background:#eee;font-size:20px;padding:4px 12px;border-radius:6px;cursor:pointer;">✕</button>
+ </div>
+ ${info}
+ <div style="margin-top:16px;display:flex;gap:8px;flex-wrap:wrap;">
+ <button onclick="retryCloudPull()" style="flex:1;padding:12px;background:#1e3a8a;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;">🔄 Retry Pull</button>
+ <button onclick="copyDiagToClipboard()" style="flex:1;padding:12px;background:#059669;color:white;border:none;border-radius:6px;font-size:14px;cursor:pointer;">📋 Copy Diagnostic</button>
+ </div>
+ <div style="margin-top:12px;padding:10px;background:#fef3c7;border-radius:6px;font-size:12px;">
+ <strong>วิธีส่ง diagnostic:</strong> กด "Copy Diagnostic" → paste ลง chat/email ส่งให้ admin
+ </div>
+ </div>`;
+ document.body.appendChild(panel);
+};
+
+window.retryCloudPull = async function() {
+ const btn = event.target;
+ const orig = btn.textContent;
+ btn.textContent = '⏳ Pulling...';
+ btn.disabled = true;
+ try {
+ const result = await DB.cloudPullAllSafe({ force: true });
+ alert(result.ok ? `✅ สำเร็จ! Pulled ${result.count} keys` : `❌ ยังพัง: ${result.errorDetail || result.reason}`);
+ } catch (e) {
+ alert('❌ Exception: ' + e.message);
+ }
+ btn.textContent = orig;
+ btn.disabled = false;
+ // Refresh panel
+ document.getElementById('debugPanel').remove();
+ showDebugPanel();
+};
+
+window.copyDiagToClipboard = function() {
+ const text = JSON.stringify(window._diag, null, 2);
+ if (navigator.clipboard && navigator.clipboard.writeText) {
+ navigator.clipboard.writeText(text).then(() => alert('✅ Copied — paste ให้ admin ดู'));
+ } else {
+ // Fallback: create textarea + select
+ const ta = document.createElement('textarea');
+ ta.value = text;
+ document.body.appendChild(ta);
+ ta.select();
+ try { document.execCommand('copy'); alert('✅ Copied'); }
+ catch (e) { alert('❌ Copy failed — screenshot panel แทน'); }
+ ta.remove();
+ }
+};
 
 function showApp() {
  document.getElementById('loginPage').classList.add('hidden');

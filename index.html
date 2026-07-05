@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.47</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.48</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.47';
+const APP_VERSION = '1.4.48';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1686,6 +1686,7 @@ function seedData() {
  leaveCarryOverMax: 5, // ยกยอดลาพักร้อนข้ามปีได้สูงสุด (วัน)
  leaveCarryOverCutoff: '03-31', // ตัดยอดยกข้ามปี (MM-DD)
  backDatedLeaveMaxDays: 7, // ห้ามยื่นลาย้อนหลังเกิน (วัน)
+ payrollCutoffDay: 21, // v1.4.48: วันตัดรอบเงินเดือน — events วันที่ > cutoff → คิดในรอบเดือนถัดไป (leave quota ยังนับปีปฏิทิน)
  autoAbsentLateMinutes: 240, // มาสายเกิน X นาที จาก lateThreshold → นับเป็นขาดงานอัตโนมัติ
  timeCertEnabled: true, // เปิดใช้งานฟังก์ชั่นรับรองเวลา (Time Certification)
  // v1.4.34: Report letter defaults (แก้ผ่าน Settings > Console: DB.save('settings', {...s, reportRecipientName:'...',...}))
@@ -1831,6 +1832,44 @@ function formatDate(d) {
 function formatDateTime(d) {
  if (!d) return '-';
  return new Date(d).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' });
+}
+
+// ============================================================
+// v1.4.48: PAYROLL MONTH HELPERS (Phase 1 — Dashboard counter only)
+// ============================================================
+// Rule: events on day > cutoffDay → shift to NEXT payroll month
+// Example: cutoffDay=21, event on 2026-07-22 → payroll month "2026-08"
+// NOTE: leave QUOTA still resets by calendar year (Q2 confirmed).
+//       This only affects "reporting month" for OT/late/absence aggregation.
+function getPayrollMonth(dateStr) {
+ if (!dateStr) return null;
+ const d = new Date(dateStr);
+ if (isNaN(d.getTime())) return null;
+ const s = DB.load('settings', {});
+ const cutoffDay = (typeof s.payrollCutoffDay === 'number' && s.payrollCutoffDay > 0 && s.payrollCutoffDay <= 31)
+  ? s.payrollCutoffDay
+  : 21; // default 21
+ // If day > cutoffDay → shift to next month
+ if (d.getDate() > cutoffDay) {
+  d.setMonth(d.getMonth() + 1);
+ }
+ return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// Format payroll month for display: "2026-07" → "รอบ ก.ค. 2569 (22 มิ.ย. - 21 ก.ค.)"
+function formatPayrollMonth(payrollMonth) {
+ if (!payrollMonth || !/^\d{4}-\d{2}$/.test(payrollMonth)) return payrollMonth || '-';
+ const [year, month] = payrollMonth.split('-').map(Number);
+ const thaiMonths = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+ const s = DB.load('settings', {});
+ const cutoffDay = s.payrollCutoffDay || 21;
+ const buddhistYear = year + 543;
+ // Start = day AFTER cutoff of previous month
+ // End = cutoff day of THIS month
+ const prevMonthIdx = month === 1 ? 11 : month - 2;
+ const prevYearBE = month === 1 ? buddhistYear - 1 : buddhistYear;
+ const startDay = cutoffDay + 1 > 31 ? 1 : cutoffDay + 1;
+ return `รอบ ${thaiMonths[month - 1]} ${buddhistYear} (${startDay} ${thaiMonths[prevMonthIdx]}${month === 1 ? ' ' + prevYearBE : ''} - ${cutoffDay} ${thaiMonths[month - 1]} ${buddhistYear})`;
 }
 
 function daysBetween(start, end) {
@@ -2357,11 +2396,10 @@ function renderAdminDashboard() {
  const emps = DB.load('employees').filter(e => e.active);
  const allLeaves = DB.load('leaveRequests');
  const pendingLeaves = allLeaves.filter(r => r.status === 'pending').length;
- const monthLeaves = allLeaves.filter(r => {
- const d = new Date(r.startDate);
- const now = new Date();
- return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
- }).length;
+ // v1.4.48: use payroll month (respects cutoffDay from Settings; default 21)
+ // events on day > cutoffDay → count toward NEXT payroll month
+ const currentPayrollMonth = getPayrollMonth(today());
+ const monthLeaves = allLeaves.filter(r => getPayrollMonth(r.startDate) === currentPayrollMonth).length;
  const allOT = DB.load('otRequests').filter(r => r.status === 'approved').length;
 
  document.getElementById('mainContent').innerHTML = `
@@ -2373,7 +2411,7 @@ function renderAdminDashboard() {
  <div class="stats-grid">
  <div class="stat-card"><div class="label">พนักงานทั้งหมด</div><div class="value">${emps.length} <small>คน</small></div></div>
  <div class="stat-card orange"><div class="label">รออนุมัติ (ทั้งระบบ)</div><div class="value">${pendingLeaves}</div></div>
- <div class="stat-card green"><div class="label">การลาเดือนนี้</div><div class="value">${monthLeaves}</div></div>
+ <div class="stat-card green" title="${formatPayrollMonth(currentPayrollMonth)}"><div class="label">การลาเดือนนี้ <small style="font-size:10px;color:var(--gray-500);cursor:help;" title="${formatPayrollMonth(currentPayrollMonth)}">(รอบเงินเดือน)</small></div><div class="value">${monthLeaves}</div></div>
  <div class="stat-card"><div class="label">OT ทั้งหมด (อนุมัติ)</div><div class="value">${allOT}</div></div>
  </div>
 
@@ -9076,6 +9114,30 @@ function renderSettings() {
  </div>
 
  <div class="card">
+ <div class="card-header"><h3>รอบเงินเดือน <small style="font-size:11px;color:var(--gray-500);font-weight:400;">(v1.4.48)</small></h3></div>
+ <div class="card-body">
+ <div class="form-row">
+ <div class="form-group">
+ <label>วันตัดรอบเงินเดือน (Payroll Cutoff Day)</label>
+ <input type="number" id="qPayrollCutoffDay" min="1" max="31" step="1" value="${s.payrollCutoffDay ?? 21}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
+ Events ที่เกิด<strong>หลัง</strong>วันตัดรอบ (เช่น วันที่ 22 ขึ้นไป) จะถูกนำไปคิดใน<strong>รอบเงินเดือนเดือนถัดไป</strong><br>
+ ตัวอย่าง: ตั้ง 21 → OT วันที่ 22 ก.ค. จะถูกคิดในรอบเงินเดือน ส.ค.<br>
+ <span style="color:var(--warning);">⚠️ v1.4.48: currently applies to Admin Dashboard counter only. Full rollout in v1.4.49-v1.5.0.</span><br>
+ <span style="color:var(--gray-500);">📌 Leave quota (ลาป่วย 30 วัน/ปี ฯลฯ) ยังคำนวณตาม<strong>ปีปฏิทิน</strong> ไม่ได้รับผลกระทบจากการตั้งค่านี้</span>
+ </div>
+ </div>
+ <div class="form-group">
+ <label>รอบเงินเดือนปัจจุบัน</label>
+ <div style="padding:10px;background:var(--gray-100);border-radius:6px;font-size:13px;">
+ ${formatPayrollMonth(getPayrollMonth(today()))}
+ </div>
+ </div>
+ </div>
+ </div>
+ </div>
+
+ <div class="card">
  <div class="card-header"><h3>กฎการรับรองเวลา & ขาดงานอัตโนมัติ</h3></div>
  <div class="card-body">
  <div class="form-group">
@@ -9427,6 +9489,9 @@ function saveSettings() {
  s.backDatedLeaveMaxDays = parseInt(document.getElementById('qBackDatedMax').value) || 0;
  s.leaveCarryOverMax = parseFloat(document.getElementById('qCarryOverMax').value) || 0;
  s.leaveCarryOverCutoff = document.getElementById('qCarryOverCutoff').value.trim() || '03-31';
+ // v1.4.48: Payroll cutoff day (1-31), default 21. Validate range.
+ const cutoffInput = parseInt(document.getElementById('qPayrollCutoffDay').value);
+ s.payrollCutoffDay = (cutoffInput >= 1 && cutoffInput <= 31) ? cutoffInput : 21;
  s.autoAbsentLateMinutes = parseInt(document.getElementById('qAutoAbsentLate').value) || 0;
  s.timeCertEnabled = document.getElementById('qTimeCertEnabled').checked;
  s.vacationAccrual = {

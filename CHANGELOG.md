@@ -6,6 +6,65 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.48] — 2026-07-05
+
+**PAYROLL CUTOFF Phase 1 — Configurable cutoff day + Dashboard counter**
+
+### Feature Request
+Company payroll cycle: cutoff on day 21 of each month. Events on day 22 onwards (OT, late, absence, etc.) should count toward NEXT month's payroll instead of the current calendar month.
+
+Example: OT worked on 2026-07-22 → counts in August 2026 payroll (paid end of August).
+
+### Design Decisions (user confirmed)
+- **Q1**: Configurable in Settings (default 21, admin-editable 1-31)
+- **Q2**: Leave quota REMAINS calendar year — payroll month affects reporting only, NOT quota calculation
+- **Q3**: Freeze historical snapshots (moot — app launched 2026-07-01, no historical payslips)
+- **Q4**: Phased rollout across v1.4.48 → v1.5.0
+
+### v1.4.48 Scope (smallest possible — Phase 1)
+1. Add `payrollCutoffDay` field to Settings (default 21, seed data + saveSettings handler)
+2. Add helper functions `getPayrollMonth(dateStr)` + `formatPayrollMonth(pm)` — reusable in all future phases
+3. Apply ONLY to Admin Dashboard "การลาเดือนนี้" counter (single UI change)
+4. Add tooltip showing current payroll month range
+
+### Not Yet Applied (deferred to v1.4.49-v1.5.0)
+- OT reports monthly aggregation
+- Late/absence report monthly aggregation
+- Payslip calculation logic
+- All other "monthly" grouping in reports
+
+### Files Changed
+- `index.html` — 8 patches (2 version markers, 1 seed field, 2 helper functions, 2 dashboard tweaks, 1 settings UI card, 1 save handler)
+- Version 1.4.47 → 1.4.48
+
+### Backward Compatibility
+- Existing installations without `payrollCutoffDay` field default to 21 (helper has fallback)
+- No data migration needed — helper is pure function operating on raw dates
+- Setting reset behavior: input validates 1-31, invalid values default to 21
+
+### Rollback Anchor
+- Git tag v1.4.47
+- Vercel promote v1.4.47 (10 sec)
+- Pre-deploy backup: pre-Deploy v1.4.48_localStorage_2026-07-05.json
+
+### Post-Deploy Verification
+1. Version = 1.4.48 in Console + sidebar
+2. Settings page shows "รอบเงินเดือน" card with input value 21
+3. Admin Dashboard "การลาเดือนนี้" tooltip shows "รอบ ก.ค. 2569 (22 มิ.ย. - 21 ก.ค.)"
+4. Change cutoff to 15 → save → dashboard counter updates
+5. Console: `getPayrollMonth('2026-07-22')` → "2026-08" ✅
+6. Console: `getPayrollMonth('2026-07-21')` → "2026-07" ✅
+
+### ⚠️ Still Postponed
+- Day 4 (H1 RLS Lockdown)
+
+### Next
+- **v1.4.49**: Apply payroll month to OT + Late reports
+- **v1.4.50**: Apply to Payslip calculation
+- **v1.5.0**: Full rollout + comprehensive docs
+
+---
+
 ## [1.4.47] — 2026-07-05
 
 **HOTFIX — LZ: prefix safety in direct JSON.parse calls**

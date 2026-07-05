@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.48</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.49</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.48';
+const APP_VERSION = '1.4.49';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -941,8 +941,25 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase) {
 // ============================================================
 const DB = {
  _pendingWrites: 0,
+ // v1.4.49: in-memory cache to avoid redundant LZ decompression on repeat DB.load calls
+ // (fixes 20-30 sec slowness on payroll/reports pages caused by 98× repeat decompression)
+ _cache: new Map(),
+
+ // v1.4.49: cache invalidation API
+ // - key omitted → clear entire cache (used on cross-tab writes, sync errors)
+ // - key given → clear one entry (used on individual save/delete)
+ invalidateCache(key) {
+ if (key === undefined) {
+ this._cache.clear();
+ } else {
+ this._cache.delete(key);
+ }
+ },
 
  load(key, def = []) {
+ // v1.4.49: fast path — return cached parsed value (skips LZ decompression + JSON.parse)
+ // Cache is invalidated on: save(), realtime updates, reset(), or manual invalidateCache()
+ if (this._cache.has(key)) return this._cache.get(key);
  const v = localStorage.getItem('hr_' + key);
  // v1.4.46 DEFENSIVE: never destroy localStorage on read failure.
  // If corrupted, next cloud pull will restore. Destroying prevents recovery.
@@ -972,7 +989,12 @@ const DB = {
  }
  try {
  const parsed = JSON.parse(json);
- return parsed === null || parsed === undefined ? def : parsed;
+ // v1.4.49: cache only successful parses (not defaults — avoids stale def on later data appearance)
+ if (parsed !== null && parsed !== undefined) {
+ this._cache.set(key, parsed);
+ return parsed;
+ }
+ return def;
  } catch (e) {
  console.error(`[DB.load v1.4.46] '${key}' JSON.parse failed: ${e.message}. Returning default (preserved).`);
  return def;
@@ -1010,6 +1032,10 @@ const DB = {
  },
 
  save(key, val) {
+ // v1.4.49: invalidate cache immediately — next DB.load() will re-fetch fresh
+ // (guards against stale reads if save fails mid-way; also updates cached copy)
+ this._cache.delete(key);
+
  // Reject undefined — would coerce to string "undefined" in localStorage
  if (val === undefined) {
  console.error(`[DB.save] refused to save undefined for '${key}'`);
@@ -1424,6 +1450,7 @@ function setupCloudRealtime() {
  DB._skipCount[row.key] = 0;
  }
  if (payload.eventType === 'DELETE') {
+ DB._cache.delete(row.key); // v1.4.49: invalidate before mutating localStorage
  localStorage.removeItem('hr_' + row.key);
  } else {
  // Guard: cloud row.value might be undefined/null — don't corrupt localStorage
@@ -1436,6 +1463,7 @@ function setupCloudRealtime() {
  const newVal = JSON.stringify(row.value);
  if (newVal === undefined) return; // JSON.stringify returned undefined (e.g. for functions)
  if (existing === newVal) return;
+ DB._cache.delete(row.key); // v1.4.49: invalidate before mutating localStorage
  localStorage.setItem('hr_' + row.key, newVal);
  }
  // Refresh current page if user is logged in

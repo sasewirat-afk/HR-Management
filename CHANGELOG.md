@@ -6,6 +6,98 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.49] — 2026-07-05
+
+**PERFORMANCE FIX — DB.load in-memory cache**
+
+### Problem
+After v1.4.46 LZ compression + v1.4.48 deploy, user reported payroll-export and reports pages take 20-30 seconds to load. Diagnostic profiling (F12 Console) confirmed root cause:
+
+**Test 1** (per-key timings):
+- attendanceRecords: 17.6ms decompress × 4451 records
+- otRequests: 31.4ms × 73 records
+- leaveRequests: 48.5ms × 11 records (contains 2 base64 attachments = 752 KB / 99% of size)
+
+**Test 2** (98 iterations × 3 heavy loads = 294 total calls): **7.4 seconds** just for redundant decompression.
+
+Actual page load: ~20-25 sec = compression overhead + calculatePaySlip logic + DOM rendering (98 rows × 11 cols).
+
+### Root Cause (multi-factor)
+1. `calculatePaySlip()` called 98× inside `renderPaySlipAdmin` .map()
+2. Each call re-loads `attendanceRecords`, `otRequests`, `leaveRequests` via `DB.load`
+3. Each `DB.load` triggers full LZ decompression (v1.4.46 defensive fallback path)
+4. Total: 294 redundant decompressions of ~2.2 MB combined data
+
+### Fix — In-Memory Cache Layer
+Added `DB._cache: new Map()` with strict invalidation:
+
+```js
+load(key, def = []) {
+ // v1.4.49: fast path
+ if (this._cache.has(key)) return this._cache.get(key);
+ // ... existing decompress logic ...
+ if (parsed !== null && parsed !== undefined) {
+  this._cache.set(key, parsed);  // cache only successful parses
+  return parsed;
+ }
+ return def;
+}
+
+save(key, val) {
+ this._cache.delete(key);  // invalidate on write
+ // ... existing save logic ...
+}
+```
+
+**Also invalidated in**:
+- Realtime handler (line 1453, 1466): before localStorage mutation on cross-tab updates
+- Available via `DB.invalidateCache(key)` public API for manual clearing
+
+### Performance Impact (expected)
+- Cold read (cache miss): unchanged (~17-48ms per key)
+- Warm read (cache hit): **~0.01ms** (99.9% faster)
+- 294 loads: 7.4 sec → **~0.05 sec** (99% reduction of decompression overhead)
+- Payroll page total: 20-25 sec → **~10-13 sec** (50-60% faster)
+
+### Safety Analysis
+| Scenario | Behavior | Safe? |
+|---|---|---|
+| Local save → next load | Cache invalidated, re-fetched | ✅ |
+| Realtime update from other device | Cache invalidated in handler | ✅ |
+| JSON.parse failure | No cache write (uses def) | ✅ |
+| Memory usage | +~2 MB in-memory (browser has 4+ GB) | ✅ |
+| Page refresh | Cache resets (browser tab context) | ✅ |
+| Multiple tabs open | Each tab has independent cache | ✅ |
+
+### Files Changed
+- `index.html` — 7 patches (2 version markers, 3 DB object changes, 2 realtime invalidations)
+- Version 1.4.48 → 1.4.49
+
+### Not Included in This Version (deferred to v1.4.50)
+- Supabase Storage for attachments (fixes 752 KB base64 bloat)
+- Auto-cleanup local attachments > 3 months old (cloud retains per Thai labor law 2 years)
+- Reminder scheduled for 8 Jul 2569 09:30
+
+### Rollback
+- Git tag v1.4.48
+- Vercel promote v1.4.48 (10 sec)
+- Pre-deploy backup: pre-Deploy v1.4.49_localStorage_2026-07-05.json
+- Cache is memory-only — rollback removes all cache automatically (no data corruption possible)
+
+### Post-Deploy Verification
+1. Version 1.4.49 in Console + sidebar
+2. Payroll page loads in ~10-13 sec (was 20-25 sec)
+3. Reports page similar improvement
+4. Edit + save employee → verify cache invalidates → next load has fresh data
+5. Multi-tab test: change in Tab A → Tab B receives realtime update → cache in Tab B invalidates → correct data shown
+6. Mobile still works (2.73 MB localStorage unchanged)
+
+### ⚠️ Still Postponed
+- v1.4.50 (Supabase Storage) — scheduled reminder 8 Jul 2569
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.48] — 2026-07-05
 
 **PAYROLL CUTOFF Phase 1 — Configurable cutoff day + Dashboard counter**

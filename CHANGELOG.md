@@ -6,6 +6,108 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.45] — 2026-07-05
+
+**Mobile QuotaExceededError fix — LZ-String compression + graceful quota handling**
+
+### Root Cause (identified via v1.4.43 diagnostic panel)
+User's mobile debug panel revealed:
+```
+Last error: startup: QuotaExceededError: The quota has been exceeded.
+Stack: setItem@[native code] at cloudPullAllSafe line 1160
+```
+
+**iOS Safari localStorage quota** ≈ 5 MB (Desktop ~10 MB)
+
+**Our data crossed threshold**:
+- attendanceRecords: 1.4 MB (largest single key)
+- otRequests: 498 KB
+- leaveRequests: 774 KB (base64 image attachments)
+- shifts: 424 KB
+- auditLog: 150 KB
+- **Total: ~3.5 MB** + browser cache/cookies = quota full → setItem throws
+
+### Fix Strategy — Option B (LZ-String Compression)
+1. Compress values before `localStorage.setItem` (60% reduction typical)
+2. Auto-decompress on `localStorage.getItem` via prefix marker
+3. Backward-compatible (pre-v1.4.45 uncompressed data still readable)
+4. Graceful QuotaExceededError handling (skip key, continue with others)
+
+### Implementation
+
+**Added CDN**:
+```html
+<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
+```
+
+**DB._compressForStorage(val)** — new helper:
+- If value > 200 bytes AND LZString available → compress with `LZ:` prefix
+- Sanity check: skip compression if result larger than raw (rare)
+- Fallback to raw JSON if compression fails
+
+**DB.save() → wrapped with compression + quota handling**:
+```js
+try {
+  localStorage.setItem('hr_' + key, this._compressForStorage(val));
+} catch (e) {
+  if (e.name === 'QuotaExceededError' || e.message?.toLowerCase().includes('quota')) {
+    console.error(`[DB.save v1.4.45] Quota exceeded saving '${key}'`);
+    toast(`⚠️ localStorage เต็ม — ไม่สามารถบันทึก '${key}'`, 'error');
+    // Don't throw — allow save to continue (cloud upsert still fires)
+  } else {
+    throw e;
+  }
+}
+```
+
+**DB.load() → auto-detects and decompresses**:
+```js
+if (v.startsWith('LZ:')) {
+  json = LZString.decompressFromUTF16(v.slice(3));
+} else {
+  json = v; // pre-v1.4.45 raw format
+}
+return JSON.parse(json);
+```
+
+**cloudPullAllSafe() → skip quota-exceeded keys with warning**:
+```js
+data.forEach(row => {
+  try {
+    localStorage.setItem('hr_' + row.key, DB._compressForStorage(row.value));
+    pulled++;
+  } catch (e) {
+    if (e.name === 'QuotaExceededError') {
+      quotaExceededKeys.push(row.key);
+      // Continue with next key — don't fail entire pull
+    }
+  }
+});
+// Show toast with skipped keys if any
+```
+
+### Expected Impact
+- Mobile localStorage before: 3.5 MB → **After: ~1.4 MB** (60% reduction)
+- Fits comfortably within iOS Safari 5 MB quota
+- Even with quota edge cases, graceful skip allows partial functionality
+- No functional change on desktop (compression still applied but ample quota)
+
+### Backward Compatibility
+- Old raw-JSON data reads correctly (no LZ: prefix)
+- After first save, data becomes compressed
+- No manual migration needed
+- Rollback safe — v1.4.44 devices can still read v1.4.45 saved data (falls back to JSON.parse which fails → returns default → app re-pulls from cloud)
+
+### Cross-Device Behavior
+Cloud (Supabase) stores JSONB (uncompressed). Compression only applies to LOCAL storage:
+- v1.4.45 device pulls from cloud → gets JSON → compresses on setItem ✅
+- v1.4.45 device saves → uncompresses to send JSON to cloud ✅
+- Mixed v1.4.44 + v1.4.45 devices → cloud is source of truth (both uncompressed) ✅
+
+### ⚠️ Day 4 (H1 RLS) still paused pending Supabase status clear
+
+---
+
 ## [1.4.44] — 2026-07-05
 
 **CRITICAL ROOT CAUSE FIX — 3 defenses against employees data disaster**

@@ -13,6 +13,8 @@
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- v1.4.45: LZ-String compression for localStorage — reduces size 60%+ to fit iOS Safari ~5MB quota -->
+<script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
 <style>
 :root {
  /* Corporate Navy + Liquid Glass Palette */
@@ -861,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.44</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.45</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -885,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.44';
+const APP_VERSION = '1.4.45';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -950,13 +952,45 @@ const DB = {
  }
  return def;
  }
+ // v1.4.45: LZ-string compression support
+ // - If starts with 'LZ:' prefix → decompress
+ // - Else → treat as raw JSON (backward compat with pre-v1.4.45 data)
+ let json = v;
+ if (v.startsWith('LZ:')) {
  try {
- const parsed = JSON.parse(v);
+ json = LZString.decompressFromUTF16(v.slice(3));
+ if (!json) throw new Error('decompression returned null');
+ } catch (e) {
+ console.error(`[DB.load v1.4.45] '${key}' decompression failed:`, e.message);
+ localStorage.removeItem('hr_' + key);
+ return def;
+ }
+ }
+ try {
+ const parsed = JSON.parse(json);
  return parsed === null || parsed === undefined ? def : parsed;
  } catch (e) {
  console.error(`[DB.load] '${key}' has invalid JSON, reseting:`, e.message);
  localStorage.removeItem('hr_' + key);
  return def;
+ }
+ },
+
+ // v1.4.45: safe compress helper for localStorage — reduces size 60%+ for JSON data.
+ // Falls back to raw JSON if LZ-string unavailable (defense-in-depth).
+ _compressForStorage(val) {
+ const json = JSON.stringify(val);
+ // Only compress if data is > 200 bytes AND LZString is available
+ // (small data doesn't benefit and adds prefix overhead)
+ if (typeof LZString === 'undefined' || json.length < 200) return json;
+ try {
+ const compressed = LZString.compressToUTF16(json);
+ // Sanity check: if compressed larger than raw (unusual), skip compression
+ if (compressed.length >= json.length) return json;
+ return 'LZ:' + compressed;
+ } catch (e) {
+ console.warn('[DB._compress] failed, using raw JSON:', e.message);
+ return json;
  }
  },
 
@@ -966,7 +1000,20 @@ const DB = {
  console.error(`[DB.save] refused to save undefined for '${key}'`);
  return;
  }
- localStorage.setItem('hr_' + key, JSON.stringify(val));
+ // v1.4.45: compressed + quota-safe setItem
+ try {
+ localStorage.setItem('hr_' + key, this._compressForStorage(val));
+ } catch (e) {
+ if (e.name === 'QuotaExceededError' || (e.message && e.message.toLowerCase().includes('quota'))) {
+ console.error(`[DB.save v1.4.45] Quota exceeded saving '${key}'. Size:`, JSON.stringify(val).length, 'bytes');
+ if (typeof toast === 'function') {
+ toast(`⚠️ localStorage เต็ม — ไม่สามารถบันทึก '${key}' (${(JSON.stringify(val).length/1024).toFixed(0)}KB)`, 'error');
+ }
+ // Don't throw — allow save to continue (cloud upsert still fires)
+ } else {
+ throw e;
+ }
+ }
  // v1.4.10: counter (not Set) for concurrent saves to same key
  // v1.4.11: decrement moved into _cloudUpsert's finally (guarantees decrement on ANY exit path
  // — fixes leak when upsert hangs and .then() never runs, causing realtime echoes to be permanently skipped)
@@ -1153,13 +1200,30 @@ const DB = {
  if (error) throw error;
  let pulled = 0;
  if (data && data.length > 0) {
+ let quotaExceededKeys = [];
  data.forEach(row => {
  if (row.value === undefined || row.value === null) return;
  const json = JSON.stringify(row.value);
  if (json === undefined) return;
- localStorage.setItem('hr_' + row.key, json);
+ // v1.4.45: use compression + graceful quota handling
+ try {
+ localStorage.setItem('hr_' + row.key, DB._compressForStorage(row.value));
  pulled++;
+ } catch (e) {
+ if (e.name === 'QuotaExceededError' || (e.message && e.message.toLowerCase().includes('quota'))) {
+ console.warn(`[cloudPullAllSafe v1.4.45] Quota exceeded on '${row.key}' (${(json.length/1024).toFixed(0)}KB). Skipping.`);
+ quotaExceededKeys.push(row.key);
+ } else {
+ console.error(`[cloudPullAllSafe] setItem failed for '${row.key}':`, e.message);
+ }
+ }
  });
+ if (quotaExceededKeys.length > 0) {
+ console.warn(`[cloudPullAllSafe v1.4.45] ${quotaExceededKeys.length} keys skipped due to quota:`, quotaExceededKeys);
+ if (typeof toast === 'function') {
+ toast(`⚠️ ${quotaExceededKeys.length} key(s) ไม่ cache: ${quotaExceededKeys.join(', ')}`, 'warn');
+ }
+ }
  }
  // v1.4.40: always advance ATTEMPT timestamp (for debounce)
  localStorage.setItem('hr__lastPullAttemptedAt', new Date(nowMs).toISOString());

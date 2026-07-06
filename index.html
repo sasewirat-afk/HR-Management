@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.53</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.54</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.53';
+const APP_VERSION = '1.4.54';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1534,6 +1534,30 @@ function migrateLeaveQuota_v1_4_14() {
 }
 
 
+// v1.4.54: persist payroll-related settings fields (payrollCutoffDay + slipMonthDefault)
+// Idempotent via _migrationsRun. Ensures new fields are saved to settings even for installs
+// that were seeded before v1.4.48 (in which case the fallback `s.payrollCutoffDay || 21` was
+// working, but the field never made it into localStorage/cloud until Admin clicked save).
+function migratePayrollFields_v1_4_54() {
+ const s = DB.load('settings', null);
+ if (!s) return;
+ if (s._migrationsRun && s._migrationsRun.includes('v1.4.54-payrollFields')) return;
+ let changed = false;
+ if (s.payrollCutoffDay === undefined) {
+ s.payrollCutoffDay = 21;
+ changed = true;
+ console.log('[migrate v1.4.54] Added settings.payrollCutoffDay = 21');
+ }
+ if (s.slipMonthDefault === undefined) {
+ s.slipMonthDefault = 'calendar';
+ changed = true;
+ console.log('[migrate v1.4.54] Added settings.slipMonthDefault = "calendar"');
+ }
+ s._migrationsRun = [...(s._migrationsRun || []), 'v1.4.54-payrollFields'];
+ DB.save('settings', s); // save even if !changed, to persist the migration flag
+ if (changed) console.log('[migrate v1.4.54] Payroll fields persisted to settings');
+}
+
 // v1.4.20: mark specific employees as exempt from attendance tracking
 // (CEO / คนสวน / แม่บ้าน — ไม่ต้องสแกน ไม่ขึ้นรายงาน)
 function migrateAttendanceExempt_v1_4_20() {
@@ -1715,6 +1739,7 @@ function seedData() {
  leaveCarryOverCutoff: '03-31', // ตัดยอดยกข้ามปี (MM-DD)
  backDatedLeaveMaxDays: 7, // ห้ามยื่นลาย้อนหลังเกิน (วัน)
  payrollCutoffDay: 21, // v1.4.48: วันตัดรอบเงินเดือน — events วันที่ > cutoff → คิดในรอบเดือนถัดไป (leave quota ยังนับปีปฏิทิน)
+ slipMonthDefault: 'calendar', // v1.4.54: 'calendar' or 'payroll' — how _slipMonth is defaulted on render
  autoAbsentLateMinutes: 240, // มาสายเกิน X นาที จาก lateThreshold → นับเป็นขาดงานอัตโนมัติ
  timeCertEnabled: true, // เปิดใช้งานฟังก์ชั่นรับรองเวลา (Time Certification)
  // v1.4.34: Report letter defaults (แก้ผ่าน Settings > Console: DB.save('settings', {...s, reportRecipientName:'...',...}))
@@ -1885,6 +1910,7 @@ function getPayrollMonth(dateStr) {
 }
 
 // Format payroll month for display: "2026-07" → "รอบ ก.ค. 2569 (22 มิ.ย. - 21 ก.ค.)"
+// v1.4.54: kept for backward compat + still used by Admin Dashboard counter (leave count = cycle-based)
 function formatPayrollMonth(payrollMonth) {
  if (!payrollMonth || !/^\d{4}-\d{2}$/.test(payrollMonth)) return payrollMonth || '-';
  const [year, month] = payrollMonth.split('-').map(Number);
@@ -1898,6 +1924,38 @@ function formatPayrollMonth(payrollMonth) {
  const prevYearBE = month === 1 ? buddhistYear - 1 : buddhistYear;
  const startDay = cutoffDay + 1 > 31 ? 1 : cutoffDay + 1;
  return `รอบ ${thaiMonths[month - 1]} ${buddhistYear} (${startDay} ${thaiMonths[prevMonthIdx]}${month === 1 ? ' ' + prevYearBE : ''} - ${cutoffDay} ${thaiMonths[month - 1]} ${buddhistYear})`;
+}
+
+// v1.4.54: Slip Month display — Q1 Option B format
+// "2026-07" → "กรกฎาคม 2569 (OT/ลา/มาสาย: 22 มิ.ย. - 21 ก.ค. 2569)"
+// Base salary period = calendar month; adjustments period = cutoff cycle. See CONTEXT.md.
+function formatSlipMonth(slipMonth) {
+ if (!slipMonth || !/^\d{4}-\d{2}$/.test(slipMonth)) return slipMonth || '-';
+ const [year, month] = slipMonth.split('-').map(Number);
+ const fullMonths = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+ const thaiMonths = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+ const s = DB.load('settings', {});
+ const cutoffDay = s.payrollCutoffDay || 21;
+ const buddhistYear = year + 543;
+ const prevMonthIdx = month === 1 ? 11 : month - 2;
+ const prevYearBE = month === 1 ? buddhistYear - 1 : buddhistYear;
+ const startDay = cutoffDay + 1 > 31 ? 1 : cutoffDay + 1;
+ return `${fullMonths[month - 1]} ${buddhistYear} (OT/ลา/มาสาย: ${startDay} ${thaiMonths[prevMonthIdx]}${month === 1 ? ' ' + prevYearBE : ''} - ${cutoffDay} ${thaiMonths[month - 1]} ${buddhistYear})`;
+}
+
+// v1.4.54: Payroll Cycle display for reports — Q3 Option C format
+// "2026-07" → "รอบเงินเดือน ก.ค. 2569 (adjustments: 22 มิ.ย. - 21 ก.ค. 2569)"
+function formatPayrollCycle(payrollMonth) {
+ if (!payrollMonth || !/^\d{4}-\d{2}$/.test(payrollMonth)) return payrollMonth || '-';
+ const [year, month] = payrollMonth.split('-').map(Number);
+ const thaiMonths = ['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'];
+ const s = DB.load('settings', {});
+ const cutoffDay = s.payrollCutoffDay || 21;
+ const buddhistYear = year + 543;
+ const prevMonthIdx = month === 1 ? 11 : month - 2;
+ const prevYearBE = month === 1 ? buddhistYear - 1 : buddhistYear;
+ const startDay = cutoffDay + 1 > 31 ? 1 : cutoffDay + 1;
+ return `รอบเงินเดือน ${thaiMonths[month - 1]} ${buddhistYear} (adjustments: ${startDay} ${thaiMonths[prevMonthIdx]}${month === 1 ? ' ' + prevYearBE : ''} - ${cutoffDay} ${thaiMonths[month - 1]} ${buddhistYear})`;
 }
 
 function daysBetween(start, end) {
@@ -2439,7 +2497,7 @@ function renderAdminDashboard() {
  <div class="stats-grid">
  <div class="stat-card"><div class="label">พนักงานทั้งหมด</div><div class="value">${emps.length} <small>คน</small></div></div>
  <div class="stat-card orange"><div class="label">รออนุมัติ (ทั้งระบบ)</div><div class="value">${pendingLeaves}</div></div>
- <div class="stat-card green" title="${formatPayrollMonth(currentPayrollMonth)}"><div class="label">การลาเดือนนี้ <small style="font-size:10px;color:var(--gray-500);cursor:help;" title="${formatPayrollMonth(currentPayrollMonth)}">(รอบเงินเดือน)</small></div><div class="value">${monthLeaves}</div></div>
+ <div class="stat-card green" title="${formatPayrollCycle(currentPayrollMonth)}"><div class="label">การลาเดือนนี้ <small style="font-size:10px;color:var(--gray-500);cursor:help;" title="${formatPayrollCycle(currentPayrollMonth)}">(รอบเงินเดือน)</small></div><div class="value">${monthLeaves}</div></div>
  <div class="stat-card"><div class="label">OT ทั้งหมด (อนุมัติ)</div><div class="value">${allOT}</div></div>
  </div>
 
@@ -7116,9 +7174,9 @@ function exportPayrollXLSX() {
  rows.push(['รวม','','','', Math.round(totals.base),'',Math.round(totals.ot),Math.round(totals.comm),Math.round(totals.dil),'','',Math.round(totals.late),'',Math.round(totals.unp),Math.round(totals.sso),'','',Math.round(totals.net)]);
 
  const colWidths = [12,22,16,14,12,8,12,12,10,10,10,12,16,10,12,14,14,14];
- // v1.4.53: sheet name + filename include payroll cycle for clarity
- const cycleLabel = formatPayrollMonth(_slipMonth).replace(/[()]/g, '').replace(/\s+/g, ' ').trim();
- _xlsxSaveSheet(rows, `Payroll ${_slipMonth}`, `Payroll-${_slipMonth}-${cycleLabel.replace(/\s/g, '_')}.xlsx`, colWidths);
+ // v1.4.54: filename uses formatSlipMonth (Q1 B) — calendar-month emphasis with cycle detail
+ const slipLabel = formatSlipMonth(_slipMonth).replace(/[()]/g, '').replace(/[/:]/g, '-').replace(/\s+/g, '_');
+ _xlsxSaveSheet(rows, `Payroll ${_slipMonth}`, `Payroll-${_slipMonth}-${slipLabel}.xlsx`, colWidths);
  toast(`Export ${emps.length} คน สำเร็จ — รวม ${Math.round(totals.net).toLocaleString()} บาท`);
 }
 
@@ -7231,12 +7289,19 @@ function calculatePaySlip(employeeId, year, month) {
  const diligenceBonus = settings.diligenceBonus || 500;
  const diligenceLateThreshold = settings.diligenceLateThreshold || lateThreshold;
 
- // Attendance for this month — merge approved time certifications
- // v1.4.52: filter by PAYROLL month (was calendar) — respects cutoffDay from Settings
- const rawAttendance = DB.load('attendanceRecords').filter(r =>
+ // v1.4.54: Split attendance into two scopes per ADR-0001
+ // - CUTOFF cycle (22 prev - 21 current): used for OT filter, late, absent, diligence gate
+ // - CALENDAR month (1 - end of month): used for workDays display only
+ //
+ // Attendance for CUTOFF CYCLE (adjustments) — merge approved time certifications
+ const rawAttendanceCycle = DB.load('attendanceRecords').filter(r =>
  r.employeeId === employeeId && getPayrollMonth(r.date) === monthStr
  );
- const attendance = mergeApprovedTimeCertForMonth(rawAttendance, monthStr);
+ const attendance = mergeApprovedTimeCertForMonth(rawAttendanceCycle, monthStr);
+ // Attendance for CALENDAR MONTH (display only) — used to compute workDays shown on slip
+ const rawAttendanceCalendar = DB.load('attendanceRecords').filter(r =>
+ r.employeeId === employeeId && r.date && r.date.startsWith(monthStr)
+ );
  // Auto-absent: anyone with checkIn >= cutoff is excluded from workDays + lateRecords
  const autoAbsentCutoff = computeAutoAbsentCutoff(settings);
  const presentInMonth = autoAbsentCutoff
@@ -7245,7 +7310,13 @@ function calculatePaySlip(employeeId, year, month) {
  const autoAbsentDays = autoAbsentCutoff
  ? attendance.filter(r => r.checkIn && r.checkIn >= autoAbsentCutoff).length
  : 0;
- const workDays = presentInMonth.length;
+ // v1.4.54 Q4 answer B: workDays DISPLAYED = calendar count (matches base salary period)
+ const presentInCalendar = autoAbsentCutoff
+ ? rawAttendanceCalendar.filter(r => r.checkIn && r.checkIn < autoAbsentCutoff)
+ : rawAttendanceCalendar.filter(r => r.checkIn);
+ const workDays = presentInCalendar.length; // v1.4.54: calendar-scoped for display
+ // v1.4.54 Q4.2 answer B: internal cycle-scoped workDays used for diligence gate
+ const _workDaysCycle = presentInMonth.length;
  const lateRecords = presentInMonth.filter(r => r.checkIn >= lateThreshold);
  const lateDays = lateRecords.length;
 
@@ -7340,7 +7411,8 @@ function calculatePaySlip(employeeId, year, month) {
  });
  const hasLateThisMonth = attendance.some(r => r.checkIn && r.checkIn >= diligenceLateThreshold);
  const hasAbsentThisMonth = attendance.some(r => !r.checkIn);
- const eligibleForDiligence = !hasLeaveThisMonth && !hasLateThisMonth && !hasAbsentThisMonth && workDays > 0;
+ // v1.4.54 Q4.2 B: diligence gate uses CYCLE workDays (consistent with late/absent scoping)
+ const eligibleForDiligence = !hasLeaveThisMonth && !hasLateThisMonth && !hasAbsentThisMonth && _workDaysCycle > 0;
  const diligenceAmount = eligibleForDiligence ? diligenceBonus : 0;
  const diligenceReasons = [];
  if (hasLeaveThisMonth) diligenceReasons.push('มีการลา');
@@ -7865,12 +7937,23 @@ function exportCommissionReport() {
 // ============================================================
 // PAY SLIP ADMIN
 // ============================================================
-// v1.4.52: default = current PAYROLL month (was: calendar month). Lazy-init to ensure getPayrollMonth is defined.
+// v1.4.52/v1.4.54: default is lazy-init to respect slipMonthDefault setting ('calendar' or 'payroll')
 let _slipMonth = null;
 
 function renderPaySlipAdmin() {
- // v1.4.52: initialize _slipMonth to current payroll month on first render
- if (!_slipMonth) _slipMonth = getPayrollMonth(today());
+ // v1.4.54: initialize _slipMonth using setting-controlled default (calendar vs payroll)
+ // Setting `slipMonthDefault` = 'calendar' (default) → current calendar month
+ //                            = 'payroll' → current payroll cycle month via getPayrollMonth
+ if (!_slipMonth) {
+ const s = DB.load('settings', {});
+ const mode = s.slipMonthDefault || 'calendar';
+ if (mode === 'payroll') {
+ _slipMonth = getPayrollMonth(today());
+ } else {
+ const d = new Date();
+ _slipMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+ }
+ }
  const [y, m] = _slipMonth.split('-').map(Number);
  const emps = DB.load('employees').filter(e => e.active);
  const slips = DB.load('paySlips');
@@ -7890,19 +7973,20 @@ function renderPaySlipAdmin() {
  <div class="alert alert-error mb-3"> ยังไม่มีข้อมูลเวลาเข้างานของเดือนนี้ — กรุณาอัปโหลดไฟล์เวลาเข้างานก่อนสร้างสลิป</div>
  ` : ''}
 
- ${!localStorage.getItem('hr__seenPayrollSlipNotice_v1_4_52') ? `
+ ${!localStorage.getItem('hr__seenPayrollSlipNotice_v1_4_54') ? `
  <div class="alert alert-info mb-3" style="font-size:13px;position:relative;padding-right:36px;">
- <strong>ℹ️ v1.4.52 Update:</strong> การคำนวณสลิปเงินเดือนใช้<strong>รอบเงินเดือน</strong> (default: วันที่ 22 - 21) แทนปฏิทิน (1-31) — สลิปเดือน ก.ค. 2569 จะครอบคลุมข้อมูล 22 มิ.ย. - 21 ก.ค. เท่านั้น. Events หลังวันตัดรอบจะไปคิดในสลิปเดือนถัดไป
- <button onclick="localStorage.setItem('hr__seenPayrollSlipNotice_v1_4_52','1');this.parentElement.style.display='none';" style="position:absolute;top:8px;right:8px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--gray-500);" title="ปิดข้อความนี้">×</button>
+ <strong>ℹ️ v1.4.54 Update:</strong> สลิปเดือน<strong> ก.ค. 2569</strong> = <strong>เงินเดือน</strong> คำนวณตามปฏิทิน (1-31 ก.ค.) + <strong>OT/ลา/มาสาย/ขาดงาน/เบี้ยขยัน</strong> ตัดรอบวันที่ 21 (22 มิ.ย. - 21 ก.ค.). Events หลังวันตัดรอบจะไปคิดในสลิปเดือนถัดไป. Admin เปลี่ยน default month ได้ใน "ตั้งค่า → รอบเงินเดือน"
+ <button onclick="localStorage.setItem('hr__seenPayrollSlipNotice_v1_4_54','1');this.parentElement.style.display='none';" style="position:absolute;top:8px;right:8px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--gray-500);" title="ปิดข้อความนี้">×</button>
  </div>
  ` : ''}
 
  <div class="card">
  <div class="card-header">
- <h3>คำนวณสลิป ${formatPayrollMonth(_slipMonth)}</h3>
+ <h3>คำนวณสลิป ${formatSlipMonth(_slipMonth)}</h3>
  <div style="display:flex;gap:8px;flex-wrap:wrap;">
  <button class="btn btn-success btn-sm" ${!hasAttendance ? 'disabled' : ''} onclick="exportPayrollXLSX()">Export Excel</button>
  <button class="btn btn-success" ${!hasAttendance ? 'disabled' : ''} onclick="generateAllPaySlips()">สร้างสลิปทั้งหมด</button>
+ <button class="btn btn-danger btn-sm" onclick="deleteAllTestPaySlips()" title="ลบสลิปทดสอบทั้งหมด (Admin only)">🗑️ ลบสลิปทั้งหมด</button>
  </div>
  </div>
  <div class="card-body" style="padding:0;overflow-x:auto;">
@@ -7961,8 +8045,8 @@ function openCustomDeductionModal(empId, year, month) {
  const emp = getEmployee(empId);
  if (!emp) { toast('ไม่พบข้อมูลพนักงาน', 'error'); return; }
  const monthStr = `${year}-${String(month).padStart(2,'0')}`;
- // v1.4.53: use payroll month cycle label (was: calendar month name)
- const monthLabel = formatPayrollMonth(monthStr);
+ // v1.4.54: use slip month label (Q1 B format) — calendar-month emphasis
+ const monthLabel = formatSlipMonth(monthStr);
  const items = (DB.load('customDeductions') || []).filter(d =>
  d.employeeId === empId && d.monthStr === monthStr
  );
@@ -8075,6 +8159,25 @@ function generateAllPaySlips() {
  renderPage();
 }
 
+// v1.4.54: Admin-only — bulk delete all saved paySlips (for cleaning test data before first real cutoff)
+function deleteAllTestPaySlips() {
+ if (currentUser.role !== 'admin') { toast('เฉพาะ Admin เท่านั้น', 'error'); return; }
+ const slips = DB.load('paySlips');
+ const count = slips.length;
+ if (count === 0) { toast('ไม่มีสลิปให้ลบ', 'info'); return; }
+ const msg = `⚠️ ยืนยันการลบสลิปทั้งหมด ${count} ใบ?\n\n` +
+ `การกระทำนี้จะลบสลิปที่ถูกบันทึกทั้งหมดออกจากระบบ (ทั้ง Cloud และ localStorage)\n` +
+ `เหมาะสำหรับการเคลียร์ test data ก่อน production\n\n` +
+ `⚠️ การลบไม่สามารถย้อนกลับได้!`;
+ if (!confirm(msg)) return;
+ // Second confirm for safety
+ if (!confirm(`ยืนยันอีกครั้ง — จะลบสลิป ${count} ใบ (พิมพ์ OK เพื่อยืนยัน)`)) return;
+ DB.save('paySlips', []);
+ auditLog('paySlips-bulk-delete', 'paySlips', 'ALL', `Deleted ${count} test paySlips (v1.4.54 cleanup)`);
+ toast(`🗑️ ลบสลิป ${count} ใบสำเร็จ`);
+ renderPage();
+}
+
 // ============================================================
 // MY PAY SLIP (Employee)
 // ============================================================
@@ -8104,8 +8207,8 @@ function renderMyPaySlip() {
  <tbody>
  ${slips.map(s => {
  const [y, m] = s.monthStr.split('-').map(Number);
- // v1.4.53: use payroll month cycle label (was: calendar month name)
- const monthName = formatPayrollMonth(s.monthStr);
+ // v1.4.54: use slip month label (Q1 B format) — calendar-month emphasis
+ const monthName = formatSlipMonth(s.monthStr);
  return `<tr>
  <td><strong>${monthName}</strong></td>
  <td>${s.baseSalary.toLocaleString()} ฿</td>
@@ -8238,9 +8341,9 @@ async function generatePaySlipImage(empId, year, month) {
  const emp = getEmployee(empId);
  if (!slip || !emp) return null;
 
- // v1.4.53: use payroll month cycle label (was: calendar month name)
+ // v1.4.54: use slip month label (Q1 B format) — calendar-month emphasis
  const monthStr = `${year}-${String(month).padStart(2,'0')}`;
- const monthName = formatPayrollMonth(monthStr);
+ const monthName = formatSlipMonth(monthStr);
 
  // Build off-screen container
  const container = document.createElement('div');
@@ -8493,7 +8596,7 @@ function drawReport() {
  for (let i = 0; i < 12; i++) {
  const d = new Date(otNow.getFullYear(), otNow.getMonth() - i, 1);
  const ms = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
- otMonthOptions.push({ value: ms, label: formatPayrollMonth(ms) });
+ otMonthOptions.push({ value: ms, label: formatPayrollCycle(ms) });
  }
  const allReqs = DB.load('otRequests')
  .filter(r => scopeIds.has(r.employeeId))
@@ -8510,7 +8613,7 @@ function drawReport() {
  html = `
  <div class="card">
  <div class="card-header" style="flex-wrap:wrap;gap:8px;">
- <h3>OT รายคน — ${formatPayrollMonth(monthStr)}</h3>
+ <h3>OT รายคน — ${formatPayrollCycle(monthStr)}</h3>
  <select onchange="_otReportMonth = this.value; drawReport();" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
  ${otMonthOptions.map(o => `<option value="${o.value}" ${o.value === monthStr ? 'selected' : ''}>${o.label}</option>`).join('')}
  </select>
@@ -8764,7 +8867,7 @@ function drawReport() {
  for (let i = 0; i < 12; i++) {
  const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
  const ms = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
- monthOptions.push({ value: ms, label: formatPayrollMonth(ms) }); // v1.4.51: was toLocaleDateString
+ monthOptions.push({ value: ms, label: formatPayrollCycle(ms) }); // v1.4.51: was toLocaleDateString
  }
 
  const totalLate = summary.reduce((s, e) => s + e.totalMinutes, 0);
@@ -8773,7 +8876,7 @@ function drawReport() {
  html = `
  <div class="card">
  <div class="card-header">
- <h3>มาสายสะสม (นาที) — ${formatPayrollMonth(monthStr)}</h3>
+ <h3>มาสายสะสม (นาที) — ${formatPayrollCycle(monthStr)}</h3>
  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
  <select onchange="_lateReportMonth = this.value; drawReport();" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
  ${monthOptions.map(o => `<option value="${o.value}" ${o.value === monthStr ? 'selected' : ''}>${o.label}</option>`).join('')}
@@ -9206,14 +9309,28 @@ function renderSettings() {
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
  Events ที่เกิด<strong>หลัง</strong>วันตัดรอบ (เช่น วันที่ 22 ขึ้นไป) จะถูกนำไปคิดใน<strong>รอบเงินเดือนเดือนถัดไป</strong><br>
  ตัวอย่าง: ตั้ง 21 → OT วันที่ 22 ก.ค. จะถูกคิดในรอบเงินเดือน ส.ค.<br>
- <span style="color:var(--warning);">⚠️ v1.4.48: currently applies to Admin Dashboard counter only. Full rollout in v1.4.49-v1.5.0.</span><br>
- <span style="color:var(--gray-500);">📌 Leave quota (ลาป่วย 30 วัน/ปี ฯลฯ) ยังคำนวณตาม<strong>ปีปฏิทิน</strong> ไม่ได้รับผลกระทบจากการตั้งค่านี้</span>
+ <span style="color:var(--success);">✅ v1.4.54: applied to Admin Dashboard, OT report, Late report, Payslip calculation, and PDF labels</span><br>
+ <span style="color:var(--gray-500);">📌 Leave quota (ลาป่วย 30 วัน/ปี ฯลฯ) ยังคำนวณตาม<strong>ปีปฏิทิน</strong> ไม่ได้รับผลกระทบจากการตั้งค่านี้</span><br>
+ <span style="color:var(--gray-500);">📌 <strong>เงินเดือน (base salary)</strong> คำนวณตาม<strong>ปฏิทิน 1 - สิ้นเดือน</strong> — Adjustments (OT/ลา/มาสาย) เท่านั้นที่ใช้รอบตัดรอบ</span>
  </div>
  </div>
  <div class="form-group">
  <label>รอบเงินเดือนปัจจุบัน</label>
  <div style="padding:10px;background:var(--gray-100);border-radius:6px;font-size:13px;">
- ${formatPayrollMonth(getPayrollMonth(today()))}
+ ${formatPayrollCycle(getPayrollMonth(today()))}
+ </div>
+ </div>
+ </div>
+ <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
+ <div class="form-row">
+ <div class="form-group">
+ <label>สลิปเงินเดือน — Default Month <small style="color:var(--gray-500);">(v1.4.54)</small></label>
+ <select id="qSlipMonthDefault" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
+ <option value="calendar" ${(s.slipMonthDefault ?? 'calendar') === 'calendar' ? 'selected' : ''}>ปฏิทิน (เดือนปัจจุบัน — แนะนำ)</option>
+ <option value="payroll" ${s.slipMonthDefault === 'payroll' ? 'selected' : ''}>Payroll Cycle (getPayrollMonth ของวันนี้)</option>
+ </select>
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
+ เมื่อเปิดหน้า "ส่งออก Payroll" เดือน default จะถูกเลือกอัตโนมัติตาม option นี้
  </div>
  </div>
  </div>
@@ -9575,6 +9692,11 @@ function saveSettings() {
  // v1.4.48: Payroll cutoff day (1-31), default 21. Validate range.
  const cutoffInput = parseInt(document.getElementById('qPayrollCutoffDay').value);
  s.payrollCutoffDay = (cutoffInput >= 1 && cutoffInput <= 31) ? cutoffInput : 21;
+ // v1.4.54: slipMonthDefault ('calendar' | 'payroll')
+ const slipDefEl = document.getElementById('qSlipMonthDefault');
+ s.slipMonthDefault = slipDefEl && (slipDefEl.value === 'payroll' || slipDefEl.value === 'calendar')
+ ? slipDefEl.value
+ : 'calendar';
  s.autoAbsentLateMinutes = parseInt(document.getElementById('qAutoAbsentLate').value) || 0;
  s.timeCertEnabled = document.getElementById('qTimeCertEnabled').checked;
  s.vacationAccrual = {
@@ -10883,6 +11005,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
  migrateSettings_v1_4_10();
  migrateLeaveQuota_v1_4_14();
+ migratePayrollFields_v1_4_54();
  migrateAttendanceExempt_v1_4_20();
  (function checkVersionForceSync() {
  const lastVer = localStorage.getItem('hr__lastVersion');

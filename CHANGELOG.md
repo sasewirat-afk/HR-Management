@@ -6,6 +6,98 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.54] — 2026-07-06
+
+**PAYROLL SEMANTIC CORRECTION — labels + workDays split (per ADR-0001)**
+
+### Context
+Grilling session on 6 Jul 2569 revealed a misunderstanding baked into v1.4.48-v1.4.53. Company policy:
+- **Base salary** = calendar month (1 - end of month)
+- **Adjustments** (OT, late, absent, unpaid leave, diligence eligibility) = cutoff cycle (22 prev - 21 current)
+
+Previous rollout treated the entire payslip period as the cutoff cycle. Calculation was correct for adjustments but wrong for `workDays` display, and all labels claimed the whole slip was scoped to 22-21 — misleading.
+
+See `CONTEXT.md` (glossary) and `docs/adr/0001-payroll-cutoff-semantics.md` for the full domain model + decision record.
+
+### Files Changed
+- `index.html` — ~20 patches
+- `CONTEXT.md` — NEW (payroll domain glossary)
+- `docs/adr/0001-payroll-cutoff-semantics.md` — NEW (decision record)
+- `CHANGELOG.md`
+
+### Decisions (from grilling)
+- **Q1 B**: Payslip label = `กรกฎาคม 2569 (OT/ลา/มาสาย: 22 มิ.ย. - 21 ก.ค.)` — new helper `formatSlipMonth()`
+- **Q2 C + Q2.1 A**: `_slipMonth` default = configurable via `settings.slipMonthDefault` ('calendar' | 'payroll'), default `'calendar'`
+- **Q3 C**: Report label = `รอบเงินเดือน ก.ค. 2569 (adjustments: 22 มิ.ย. - 21 ก.ค.)` — new helper `formatPayrollCycle()`
+- **Q4 B**: `workDays` displayed = calendar count (matches base salary period)
+- **Q4.1 A**: The "same day counted differently in adjacent slips" paradox is acceptable
+- **Q4.2 B**: Diligence eligibility gate still uses cycle-scoped work-day count (internal `_workDaysCycle`)
+
+### Fix Details
+
+**New helpers** (line 1929+):
+```js
+// formatSlipMonth("2026-07") → "กรกฎาคม 2569 (OT/ลา/มาสาย: 22 มิ.ย. - 21 ก.ค. 2569)"
+// formatPayrollCycle("2026-07") → "รอบเงินเดือน ก.ค. 2569 (adjustments: 22 มิ.ย. - 21 ก.ค. 2569)"
+// formatPayrollMonth (unchanged) → still used by Admin Dashboard tooltip
+```
+
+**calculatePaySlip** (line 7290+): now loads attendance TWICE — once for cycle (adjustments), once for calendar (display):
+```js
+const rawAttendanceCycle = /* filter by getPayrollMonth === monthStr */;
+const rawAttendanceCalendar = /* filter by r.date.startsWith(monthStr) */;
+const workDays = presentInCalendar.length; // display (Q4 B)
+const _workDaysCycle = presentInMonth.length; // internal diligence gate (Q4.2 B)
+const eligibleForDiligence = ... && _workDaysCycle > 0;
+```
+
+**Settings**:
+- Seed data: `slipMonthDefault: 'calendar'` added
+- UI: dropdown in "รอบเงินเดือน" card
+- saveSettings: handles the new field
+- Migration `migratePayrollFields_v1_4_54()`: idempotent — sets `payrollCutoffDay: 21` + `slipMonthDefault: 'calendar'` on existing installs whose settings are missing these fields (Finding 1 from backup fingerprint)
+
+**Delete all test slips button** (Admin only, `renderPaySlipAdmin`): red "🗑️ ลบสลิปทั้งหมด" button. Double-confirm dialog. Writes empty `paySlips` array + auditLog entry. For cleaning the 10 test slips generated during v1.4.48-v1.4.53 testing before the first real cutoff.
+
+### Data Migration Analysis
+| Layer | Impact | Migration |
+|---|---|---|
+| Attendance / OT / Leave records | Store calendar date unchanged | **None** |
+| paySlips existing 10 test slips | Old `workDays` value stays until re-generated; label rendered via new formatSlipMonth | Manual delete via new button (user's Finding 2 C: Leave-as-is, cleanup via button) |
+| settings | Migration adds `payrollCutoffDay` + `slipMonthDefault` if missing | Idempotent, one-time on load |
+| Cross-device sync | v1.4.53 devices see extra fields, ignore harmlessly | Backward-compat |
+
+**No destructive DB operations. Zero data loss risk.**
+
+### Payslip Calculation — Effect on Net Pay
+`baseSalary`, `otPay`, `commissionTotal`, `diligenceAmount`, `lateDeducTotal`, `unpaidDeduction`, `sso.amount`, `customDeductionsTotal` — **all unchanged**. Only `workDays` (informational only) changed semantics. Net pay identical to v1.4.53.
+
+### Post-Deploy Verification
+1. Version 1.4.54 in Console + sidebar
+2. Console: `getPayrollMonth('2026-07-22')` = "2026-08" (unchanged from v1.4.52)
+3. Console: `formatSlipMonth('2026-07')` = "กรกฎาคม 2569 (OT/ลา/มาสาย: 22 มิ.ย. - 21 ก.ค. 2569)"
+4. Console: `formatPayrollCycle('2026-07')` = "รอบเงินเดือน ก.ค. 2569 (adjustments: 22 มิ.ย. - 21 ก.ค. 2569)"
+5. Console: `DB.load('settings').payrollCutoffDay` = 21 (migration persisted)
+6. Console: `DB.load('settings').slipMonthDefault` = "calendar" (migration persisted)
+7. Payslip page: header shows `formatSlipMonth` output
+8. Payslip PDF: "งวด: กรกฎาคม 2569 (OT/ลา/มาสาย: 22 มิ.ย. - 21 ก.ค. 2569)"
+9. Reports page: OT + Late headers use `formatPayrollCycle`
+10. Settings page: new dropdown "สลิปเงินเดือน — Default Month"
+11. Delete button: clicking twice-confirms then wipes `paySlips`
+12. Sample payslip math unchanged (spot-check ADMIN001 net pay = 49,750 as before)
+
+### Rollback
+- Git tag v1.4.53
+- Vercel promote v1.4.53 (10 sec)
+- Migration writes are idempotent — even if rolled back, extra settings fields are harmless
+- Pre-deploy backup: `pre-Deploy v1.4.54_localStorage_2026-07-06.json`, `pre-Deploy v1.4.54_fingerprint_2026-07-06.json`
+
+### ⚠️ Still Postponed
+- v1.4.50 (Supabase Storage) — auto-reminder Wed 8 Jul 2569 09:30
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.53] — 2026-07-05
 
 **PAYROLL CUTOFF Polish — Close the rollout (labels only, no money changes)**

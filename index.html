@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.56</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.57</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.56';
+const APP_VERSION = '1.4.57';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -8403,6 +8403,86 @@ function generateAllPaySlips() {
  renderPage();
 }
 
+// v1.4.57 EMERGENCY HOTFIX: Cleanup base64 attachments from OT + Leave records.
+// Motivation: otRequests grew to 3.73 MB (past Supabase's ~1 MB row limit) — cloud sync failed.
+// Prepares the system for v1.4.50 (physical certs workflow per SOP MTP.CC.HR.WI.001).
+// Removes these attachment-blob fields (defensive — covers all historical field names):
+// attachment, attachments, attachmentBase64, file, fileBase64, medCertBase64, imageBase64
+// Preserves record shape + all non-blob fields. Double-confirms. Reports byte savings.
+// Idempotent — safe to run multiple times.
+function cleanupAttachmentBlobs() {
+ if (currentUser?.role !== 'admin') { toast('เฉพาะ Admin เท่านั้น', 'error'); return; }
+ const ATTACH_FIELDS = ['attachment', 'attachments', 'attachmentBase64', 'file', 'fileBase64', 'medCertBase64', 'imageBase64'];
+
+ const ots = DB.load('otRequests', []);
+ const leaves = DB.load('leaveRequests', []);
+
+ const audit = (records) => {
+ let count = 0, totalSize = 0;
+ records.forEach(r => {
+ ATTACH_FIELDS.forEach(f => {
+ if (r[f] !== undefined && r[f] !== null && r[f] !== '') {
+ count++;
+ totalSize += (typeof r[f] === 'string' ? r[f].length : JSON.stringify(r[f]).length);
+ }
+ });
+ });
+ return { count, totalSize, records: records.length };
+ };
+
+ const otAudit = audit(ots);
+ const leaveAudit = audit(leaves);
+ const totalBytes = otAudit.totalSize + leaveAudit.totalSize;
+ const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
+
+ if (otAudit.count === 0 && leaveAudit.count === 0) {
+ toast('✅ ไม่มี attachment ให้ลบ (records ปลอดภัยดีอยู่แล้ว)', 'success');
+ return;
+ }
+
+ const msg = `⚠️ Cleanup Attachments (v1.4.57)\n\n` +
+ `จะลบ base64 attachments ทั้งหมดจาก:\n` +
+ `• OT records: ${otAudit.count} attachments (${(otAudit.totalSize/1024/1024).toFixed(2)} MB) จาก ${otAudit.records} รายการ\n` +
+ `• Leave records: ${leaveAudit.count} attachments (${(leaveAudit.totalSize/1024/1024).toFixed(2)} MB) จาก ${leaveAudit.records} รายการ\n` +
+ `━━━━━━━━━━━━━━━━━━━━\n` +
+ `รวม: ${totalMB} MB จะถูกลบ\n\n` +
+ `หลังลบ:\n` +
+ `✅ Cloud sync จะกลับมาทำงาน (ปัจจุบันติดที่ Supabase row limit)\n` +
+ `✅ Mobile จะ sync ได้เร็วขึ้น\n` +
+ `⚠️ ไฟล์แนบใน records เดิมจะหาย (records อื่นๆ ยังอยู่)\n\n` +
+ `📌 ตาม SOP MTP.CC.HR.WI.001 (v1.4.50): ใช้เอกสารตัวจริง / SharePoint / GDrive แทน\n\n` +
+ `ยืนยันการลบ?`;
+ if (!confirm(msg)) return;
+ if (!confirm(`ยืนยันครั้งที่ 2 — จะลบ ${totalMB} MB (การลบไม่สามารถย้อนกลับได้)`)) return;
+
+ let otCleaned = 0;
+ ots.forEach(r => {
+ ATTACH_FIELDS.forEach(f => {
+ if (r[f] !== undefined) { delete r[f]; otCleaned++; }
+ });
+ // Mark as cleaned for future traceability
+ r._attachmentCleaned = new Date().toISOString();
+ });
+ let leaveCleaned = 0;
+ leaves.forEach(r => {
+ ATTACH_FIELDS.forEach(f => {
+ if (r[f] !== undefined) { delete r[f]; leaveCleaned++; }
+ });
+ r._attachmentCleaned = new Date().toISOString();
+ });
+
+ if (otCleaned > 0) DB.save('otRequests', ots);
+ if (leaveCleaned > 0) DB.save('leaveRequests', leaves);
+
+ if (typeof auditLog === 'function') {
+ auditLog('attachment-cleanup', 'system', 'ALL',
+ `v1.4.57: Removed ${otCleaned + leaveCleaned} attachments (${totalMB} MB freed). OT=${otCleaned}, Leave=${leaveCleaned}`);
+ }
+
+ toast(`🗑️ ลบ ${otCleaned + leaveCleaned} attachments (${totalMB} MB) สำเร็จ — Refreshing...`, 'success', 4000);
+ setTimeout(() => location.reload(), 3500);
+}
+
 // v1.4.54: Admin-only — bulk delete all saved paySlips (for cleaning test data before first real cutoff)
 function deleteAllTestPaySlips() {
  if (currentUser.role !== 'admin') { toast('เฉพาะ Admin เท่านั้น', 'error'); return; }
@@ -8874,7 +8954,10 @@ function drawReport() {
  <div class="card">
  <div class="card-header">
  <h3>รายละเอียด OT ทั้งหมด <small style="font-size:13px;color:var(--gray-500);">(${allReqs.length} รายการ)</small></h3>
+ <div style="display:flex;gap:8px;flex-wrap:wrap;">
  <button class="btn btn-success btn-sm" onclick="exportCSV('ot-report')">⬇ Export CSV</button>
+ ${currentUser?.role === 'admin' ? `<button class="btn btn-danger btn-sm" onclick="cleanupAttachmentBlobs()" title="ลบไฟล์แนบ base64 ใน OT + Leave (v1.4.57 — แก้ปัญหา Supabase row limit)">🗑️ ล้าง Attachments</button>` : ''}
+ </div>
  </div>
  <div class="card-body" style="padding:0;">
  <table id="reportTable">

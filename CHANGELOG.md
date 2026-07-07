@@ -6,6 +6,79 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.57] — 2026-07-07 (emergency hotfix)
+
+**EMERGENCY — otRequests exceeded Supabase row limit (3.73 MB), cloud sync failing**
+
+### Symptom
+User console showed:
+```
+[CloudUpsert] 'otRequests' is 3.73 MB — may exceed Supabase row limit
+[Realtime] 'otRequests' has empty value, skipping
+```
+Repeated multiple times. Supabase Postgres row size limit is ~1 MB — writes to `otRequests` were being silently rejected, and realtime handlers received null values. Any new OT approval would not have synced to cloud or other devices.
+
+### Root Cause
+Same pattern as the earlier leaveRequests bloat (752 KB / 99% attachments): historical OT records accumulated base64 file uploads. ~76 records averaging ~50 KB each = 3.73 MB total. Normal OT records without attachments are 1-2 KB.
+
+This is the exact issue the planned v1.4.50 physical-cert workflow was designed to prevent — but v1.4.50 was scheduled for 8 Jul, and cloud sync started failing today.
+
+### Fix
+Added `cleanupAttachmentBlobs()` — Admin-only function that removes the following blob fields from `otRequests` and `leaveRequests`:
+- `attachment`, `attachments`, `attachmentBase64`
+- `file`, `fileBase64`
+- `medCertBase64`, `imageBase64`
+
+Preserves all other record fields. Marks cleaned records with `_attachmentCleaned` timestamp. Idempotent — safe to run multiple times.
+
+**Access**:
+- Button in **Reports → OT Report** (Admin only): 🗑️ ล้าง Attachments
+- Callable from Console: `cleanupAttachmentBlobs()`
+
+**Safety**:
+- Two-step confirmation dialog with size preview
+- Audit log entry with counts + bytes freed
+- Auto-reload after cleanup
+
+### Files Changed
+- `index.html` — 4 patches (2 version markers + 1 function + 1 button)
+- `CHANGELOG.md`
+
+### Post-Deploy Action Required (Admin)
+1. Hard reload
+2. Reports → OT Report tab
+3. Click 🗑️ **ล้าง Attachments** button
+4. Confirm both dialogs
+5. Verify cloud sync warning is gone from Console
+6. Verify otRequests size drops to ~200 KB
+
+### Data Migration Analysis
+| Layer | Impact | Migration |
+|---|---|---|
+| otRequests records | Blob fields removed on Admin click | Manual button (not auto) |
+| leaveRequests records | Same (extends v1.4.50 preparation) | Manual button |
+| Cloud sync | Restored once localStorage size drops below 1 MB per key | Automatic on next upsert |
+| Existing SharePoint/GDrive attachments | Not touched | Manual re-upload by employee/HR per SOP |
+
+### Alignment with SOP MTP.CC.HR.WI.001
+Per SOP section 5.2 (issued 6 Jul 2569):
+- On-site medical certificates → physical delivery to supervisor
+- Remote medical certificates → scan + upload to SharePoint/GDrive
+- OT requests → no attachment field (approval based on reason text)
+
+This hotfix removes the digital attachments from the old workflow. New records created after v1.4.50 deploy tomorrow will not have attachment fields at all.
+
+### Rollback
+Git tag v1.4.56. Records cleared cannot be restored from client (base64 blobs were the only copy). If original attachments are still needed, restore from:
+- Pre-deploy backup: `pre-Deploy v1.4.55_localStorage_2026-07-07.json` (contains the blobs)
+- Or Supabase pre-cleanup daily backup
+
+### ⚠️ Still Postponed
+- v1.4.50 (physical cert workflow — Wed 8 Jul 2569 09:30 auto-reminder)
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.56] — 2026-07-07 (hotfix)
 
 **HOTFIX — Excel export ws2 not defined**

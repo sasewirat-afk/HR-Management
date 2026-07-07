@@ -6,6 +6,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.56] — 2026-07-07 (hotfix)
+
+**HOTFIX — Excel export ws2 not defined**
+
+### Bug
+`exportAttendanceXLSX()` threw `Uncaught ReferenceError: ws2 is not defined` at line 7181 when user clicked Export Excel. Introduced by v1.4.55 refactor — the `const ws2 = XLSX.utils.aoa_to_sheet(s2Data)` line was accidentally omitted during the per-company sheet split refactor, but the code that uses `ws2` (styling, columns, sheet append) remained.
+
+### Fix
+Re-added the missing initialization block:
+```js
+const ws2 = XLSX.utils.aoa_to_sheet(s2Data);
+ws2['!cols'] = [{wch:52},{wch:12}];
+ws2['!merges'] = [{s:{r:0,c:0},e:{r:0,c:1}}];
+if (ws2['A1']) ws2['A1'].s = S.titleBig;
+```
+
+### Files Changed
+- `index.html` — 3 patches (2 version markers + 1 code insertion)
+
+### Verification
+- Attendance Report → Export Excel → file downloads successfully
+- Sheets present: ภาพรวม, สรุป-ทั้งหมด, สรุป-{company} × N
+
+### Rollback
+Git tag v1.4.55 (already deployed, buggy for Excel export only). Only the Export Excel button was affected — v1.4.55's core payroll and status resolver logic worked correctly.
+
+---
+
 ## [1.4.55] — 2026-07-06 (afternoon)
 
 **ATTENDANCE STATUS RESOLUTION — Field Work + Company sheets + Admin exception (per ADR-0002)**

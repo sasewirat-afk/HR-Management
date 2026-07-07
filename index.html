@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.54</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.55</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.54';
+const APP_VERSION = '1.4.55';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1534,6 +1534,28 @@ function migrateLeaveQuota_v1_4_14() {
 }
 
 
+// v1.4.55: Set countInAttendance=true for admin employee 430806001
+// (per Q12 A + exception: role='admin' excluded by default, EXCEPT this user who scans)
+// Idempotent — runs once per install, tracked in settings._migrationsRun.
+function migrateAttendanceCountability_v1_4_55() {
+ const s = DB.load('settings', null);
+ if (s && s._migrationsRun && s._migrationsRun.includes('v1.4.55-countInAttendance')) return;
+ const emps = DB.load('employees', []);
+ const target = emps.find(e => e.id === '430806001');
+ let changed = false;
+ if (target && target.countInAttendance !== true) {
+ target.countInAttendance = true;
+ changed = true;
+ console.log('[migrate v1.4.55] Set 430806001.countInAttendance = true (admin who scans)');
+ DB.save('employees', emps);
+ }
+ if (s) {
+ s._migrationsRun = [...(s._migrationsRun || []), 'v1.4.55-countInAttendance'];
+ DB.save('settings', s);
+ }
+ if (changed) console.log('[migrate v1.4.55] Attendance countability applied');
+}
+
 // v1.4.54: persist payroll-related settings fields (payrollCutoffDay + slipMonthDefault)
 // Idempotent via _migrationsRun. Ensures new fields are saved to settings even for installs
 // that were seeded before v1.4.48 (in which case the fallback `s.payrollCutoffDay || 21` was
@@ -1941,6 +1963,124 @@ function formatSlipMonth(slipMonth) {
  const prevYearBE = month === 1 ? buddhistYear - 1 : buddhistYear;
  const startDay = cutoffDay + 1 > 31 ? 1 : cutoffDay + 1;
  return `${fullMonths[month - 1]} ${buddhistYear} (OT/ลา/มาสาย: ${startDay} ${thaiMonths[prevMonthIdx]}${month === 1 ? ' ' + prevYearBE : ''} - ${cutoffDay} ${thaiMonths[month - 1]} ${buddhistYear})`;
+}
+
+// ============================================================
+// v1.4.55: ATTENDANCE STATUS DOMAIN (per ADR-0002)
+// ============================================================
+// Central resolver for attendance status. See CONTEXT.md > Attendance Status.
+// Returns exactly ONE of 11 canonical values via strict Priority Ladder:
+//   1. วันหยุด (day off — shift 'O' or weekend + no shift + company holiday)
+//   2. Leave (ลากิจ/ลาป่วย/ลาพักร้อน/ลาสะสมวันหยุด/ลาอื่นๆ)
+//   3. ทำงานนอกสถานที่ (approved field work — overrides late scan per Q3 B)
+//   4. Present from scan (มาตรงเวลา/มาหลังเวลา/มาสาย)
+//   5. Exempt Present (มาตรงเวลา for exemptFromAttendance emps on working days)
+//   6. ขาดงาน (fallback)
+function resolveAttendanceStatus(emp, dateStr, ctx) {
+ if (!emp || !dateStr) return 'ขาดงาน';
+ const settings = ctx?.settings || DB.load('settings');
+ const workStart = settings.workStartTime || '08:45';
+ const lateThreshold = settings.lateThreshold || '09:01';
+ const companyHolidays = ctx?.companyHolidays || new Set(settings.companyHolidays || []);
+
+ // 1. Day Off — shift schedule OR weekend/holiday
+ const shifts = ctx?.shifts || DB.load('shifts', []);
+ const shiftForDay = shifts.find(s => s.employeeId === emp.id && s.date === dateStr);
+ if (shiftForDay) {
+ if (shiftForDay.type === 'O' || shiftForDay.type === 'off') return 'วันหยุด';
+ } else {
+ const d = new Date(dateStr);
+ const dow = d.getDay();
+ if (dow === 0 || dow === 6 || companyHolidays.has(dateStr)) return 'วันหยุด';
+ }
+
+ // 2. Leave — check approved leave that covers this date
+ const leaves = ctx?.leaves || DB.load('leaveRequests');
+ const leaveOnDay = leaves.find(l =>
+ l.status === 'approved' &&
+ l.employeeId === emp.id &&
+ dateStr >= l.startDate && dateStr <= l.endDate
+ );
+ if (leaveOnDay) {
+ switch (leaveOnDay.type) {
+ case 'personal': return 'ลากิจ';
+ case 'sick': case 'sick-cert': case 'sick-without-cert': return 'ลาป่วย';
+ case 'vacation': return 'ลาพักร้อน';
+ case 'comp-off': return 'ลาสะสมวันหยุด';
+ default: return 'ลาอื่นๆ'; // maternity, ordination, unpaid, other — grouped per Q6 A
+ }
+ }
+
+ // 3. Field Work — approved off-site work. Q3 B: OVERRIDES late scan.
+ const fieldWork = ctx?.fieldWork || DB.load('fieldWorkRequests', []);
+ const fwOnDay = fieldWork.find(f =>
+ f.status === 'approved' &&
+ f.employeeId === emp.id &&
+ f.date === dateStr
+ );
+ if (fwOnDay) return 'ทำงานนอกสถานที่';
+
+ // 4. Present from Tigersoft scan
+ const records = ctx?.attendance || DB.load('attendanceRecords');
+ const recordOnDay = records.find(r =>
+ (r.employeeCode === emp.id || r.employeeId === emp.id) &&
+ r.date === dateStr && r.checkIn
+ );
+ if (recordOnDay) {
+ const checkIn = recordOnDay.checkIn;
+ if (checkIn >= lateThreshold) return 'มาสาย';
+ if (checkIn >= workStart) return 'มาหลังเวลา';
+ return 'มาตรงเวลา';
+ }
+
+ // 5. Exempt Present — CEO/gardener/maid on working days (Q13 C)
+ // Already ruled out Day Off + Leave above.
+ if (emp.exemptFromAttendance) return 'มาตรงเวลา';
+
+ // 6. Absent (fallback)
+ return 'ขาดงาน';
+}
+
+// v1.4.55: Merge approved field work into attendance records for a payroll month
+// Called from calculatePaySlip to inject virtual "present" records for field work days.
+// Protects those days from late/absent detection (per Q3 B).
+function mergeApprovedFieldWorkForMonth(records, employeeId, monthStr) {
+ const fw = DB.load('fieldWorkRequests', []).filter(f =>
+ f.status === 'approved' &&
+ f.employeeId === employeeId &&
+ getPayrollMonth(f.date) === monthStr
+ );
+ if (!fw.length) return { attendance: records, fieldWorkDates: new Set() };
+ const existingDates = new Set(records.map(r => r.date));
+ const merged = [...records];
+ const fwDates = new Set();
+ fw.forEach(f => {
+ fwDates.add(f.date);
+ if (!existingDates.has(f.date)) {
+ // Insert virtual "present" record — checkIn set BEFORE workStart so it's never counted as late
+ merged.push({
+ date: f.date,
+ employeeId: employeeId,
+ employeeCode: employeeId,
+ checkIn: '08:00', // dummy — well before workStart
+ checkOut: null,
+ _fieldWork: true, // marker
+ });
+ }
+ });
+ return { attendance: merged, fieldWorkDates: fwDates };
+}
+
+// v1.4.55: Attendance Countability — governs headcount inclusion
+// - emp.countInAttendance === false → exclude (unusual)
+// - emp.countInAttendance === true → include (override for admins who scan, e.g. 430806001)
+// - unset → derive from role: admin excluded (Q12 A), other included
+function isCountedInAttendance(emp) {
+ if (!emp) return false;
+ if (emp.countInAttendance === false) return false;
+ if (emp.countInAttendance === true) return true;
+ if (emp.role === 'admin') return false;
+ return true;
 }
 
 // v1.4.54: Payroll Cycle display for reports — Q3 Option C format
@@ -6744,13 +6884,25 @@ function exportAttendanceXLSX() {
  const present = uniqueRecs.filter(r => r.checkIn);
  const explicitAbsent = uniqueRecs.filter(r => !r.checkIn);
 
- // v1.4.39: use only exemptFromAttendance (role='admin' still gets tracked if not exempt)
- const activeEmps = DB.load('employees').filter(e => e.active && !e.exemptFromAttendance);
+ // v1.4.55: Approved field work for the day (ADR-0002 Topic 1)
+ const fieldWorkOnDate = DB.load('fieldWorkRequests', []).filter(f =>
+ f.status === 'approved' && f.date === _attReportDate
+ );
+ const fieldWorkIds = new Set(fieldWorkOnDate.map(f => f.employeeId));
+
+ // v1.4.55 (Q12 A + exception): filter via isCountedInAttendance helper (respects countInAttendance override)
+ // Also exclude exemptFromAttendance from the "must scan" pool — they get virtual Exempt Present later.
+ const allActive = DB.load('employees').filter(e => e.active);
+ const activeEmps = allActive.filter(e => isCountedInAttendance(e) && !e.exemptFromAttendance);
+ const exemptEmps = allActive.filter(e => isCountedInAttendance(e) && e.exemptFromAttendance);
  const presentIds = new Set(present.map(r => r.employeeCode || r.employeeId));
  const leaveIds = new Set(leaveOnDate.map(r => r.employeeId));
  const trackedIds = new Set(uniqueRecs.map(r => r.employeeCode || r.employeeId));
  // v1.4.39: split by shift — type 'O' = วันหยุด, else = ขาดงาน
- const absentCandidates = activeEmps.filter(e => !presentIds.has(e.id) && !leaveIds.has(e.id) && !trackedIds.has(e.id));
+ // v1.4.55: field-work employees are NOT counted as absent (Q3 B — takes priority over Present in ladder)
+ const absentCandidates = activeEmps.filter(e =>
+ !presentIds.has(e.id) && !leaveIds.has(e.id) && !trackedIds.has(e.id) && !fieldWorkIds.has(e.id)
+ );
  const dayOff = [];
  const inferredAbsent = [];
  absentCandidates.forEach(e => {
@@ -6765,6 +6917,24 @@ function exportAttendanceXLSX() {
  else inferredAbsent.push({ ...row, _inferredAbsent: true });
  });
  const absent = [...explicitAbsent, ...inferredAbsent];
+
+ // v1.4.55: Field-work-only employees (approved fieldwork + no scan) — reclassified from absent
+ const fieldWorkPresent = activeEmps.filter(e => fieldWorkIds.has(e.id) && !presentIds.has(e.id));
+ // v1.4.55: Exempt employees on working days → treated as มาตรงเวลา (Q13 C, Q14 B)
+ // Only include if the day is not a shift day-off. Approved leave already handled by leaveIds check.
+ const exemptPresent = exemptEmps.filter(e => {
+ if (leaveIds.has(e.id)) return false;
+ const shift = getShift(e.id, _attReportDate);
+ if (shift && shift.type === 'O') return false;
+ // Weekend/company holiday check when no explicit shift
+ if (!shift) {
+ const d = new Date(_attReportDate);
+ const dow = d.getDay();
+ if (dow === 0 || dow === 6) return false;
+ if ((settings.companyHolidays || []).includes(_attReportDate)) return false;
+ }
+ return true;
+ });
 
  if (!present.length && !absent.length && !leaveOnDate.length) {
  toast('ไม่มีข้อมูลในวันที่เลือก', 'error'); return;
@@ -6831,7 +7001,17 @@ function exportAttendanceXLSX() {
  getDeptForAttendance(r), r.checkIn, r.checkOut || '-', status, lateMin
  ]);
  });
- // Leave
+ // v1.4.55: Leave — status now uses specific type per Topic 2 point 4
+ // Maps to canonical values from resolveAttendanceStatus (ลากิจ / ลาป่วย / ลาพักร้อน / ลาสะสมวันหยุด / ลาอื่นๆ)
+ const _leaveTypeToStatus = (t) => {
+ switch (t) {
+ case 'personal': return 'ลากิจ';
+ case 'sick': case 'sick-cert': case 'sick-without-cert': return 'ลาป่วย';
+ case 'vacation': return 'ลาพักร้อน';
+ case 'comp-off': return 'ลาสะสมวันหยุด';
+ default: return 'ลาอื่นๆ';
+ }
+ };
  leaveOnDate.forEach(r => {
  const e = getEmployee(r.employeeId);
  if (!e) return;
@@ -6840,7 +7020,29 @@ function exportAttendanceXLSX() {
  e.nickname || '',
  getCompanyLabel(e.company) || '-',
  e.department || '',
- '', '', `ลา (${getLeaveTypeName(r.type)})`, ''
+ '', '', _leaveTypeToStatus(r.type), ''
+ ]);
+ });
+ // v1.4.55: Field Work (Topic 1 + Topic 2 point 5) — new status "ทำงานนอกสถานที่"
+ fieldWorkOnDate.forEach(f => {
+ const e = getEmployee(f.employeeId);
+ if (!e) return;
+ s1Data.push([
+ _attReportDate, e.id, `${e.firstName} ${e.lastName}`,
+ e.nickname || '',
+ getCompanyLabel(e.company) || '-',
+ e.department || '',
+ f.startTime || '', f.endTime || '-', 'ทำงานนอกสถานที่', ''
+ ]);
+ });
+ // v1.4.55: Exempt Present (Q13 C + Q14 B) — treated as มาตรงเวลา
+ exemptPresent.forEach(e => {
+ s1Data.push([
+ _attReportDate, e.id, `${e.firstName} ${e.lastName}`,
+ e.nickname || '',
+ getCompanyLabel(e.company) || '-',
+ e.department || '',
+ '(ละเว้น)', '-', 'มาตรงเวลา', 0
  ]);
  });
  // Absent
@@ -6879,10 +7081,10 @@ function exportAttendanceXLSX() {
  const addr = XLSX.utils.encode_cell({r, c});
  if (!ws1[addr]) ws1[addr] = { v: '', t: 's' };
  if (c === 8) {
- // สถานะ column — red for สาย/ขาดงาน
+ // v1.4.55: สถานะ column — red for สาย/ขาดงาน/ลาป่วย/ลาอื่นๆ
  const v = ws1[addr].v;
- ws1[addr].s = (v === 'มาสาย' || v === 'ขาดงาน' || (typeof v === 'string' && v.startsWith('ลา ')))
- ? S.dataCellRed : S.dataCellCenter;
+ const redStatuses = ['มาสาย', 'ขาดงาน', 'ลาป่วย', 'ลาอื่นๆ', 'ลากิจ', 'ลาพักร้อน', 'ลาสะสมวันหยุด'];
+ ws1[addr].s = redStatuses.includes(v) ? S.dataCellRed : S.dataCellCenter;
  } else if (c === 9) {
  const v = ws1[addr].v;
  ws1[addr].s = (typeof v === 'number' && v > 0) ? S.dataCellRed : S.dataCellCenter;
@@ -6897,114 +7099,128 @@ function exportAttendanceXLSX() {
  XLSX.utils.book_append_sheet(wb, ws1, 'ภาพรวม');
 
  // ============================================================
- // Sheet 2: สรุป
+ // Sheet 2+: สรุป (v1.4.55 — split per company per Topic 3)
+ // สรุป-ทั้งหมด + สรุป-Crochet / Masterpiece / ConceptOne / Habita + optional สรุป-ไม่ระบุ
  // ============================================================
+ // v1.4.55: Count exempt as มาตรงเวลา (Q13 C + Q14 B)
+ // Present buckets from Tigersoft scans:
  const onTime = present.filter(r => r.checkIn < workStart).length;
  const afterStart = present.filter(r => r.checkIn >= workStart && r.checkIn < lateThreshold).length;
  const lateAfterTh = present.filter(r => r.checkIn >= lateThreshold).length;
+ // + Exempt Present bucket → onTime
+ const onTimeIncExempt = onTime + exemptPresent.length;
+ // + Field Work — separate bucket (not "มาทำงาน" in the traditional sense but present)
+ const fieldWorkTotal = fieldWorkOnDate.length + fieldWorkPresent.length; // approved records + missing scan emps
+ // Leave breakdown by type (Topic 2 point 4)
+ const _leaveByType = { 'ลากิจ':0, 'ลาป่วย':0, 'ลาพักร้อน':0, 'ลาสะสมวันหยุด':0, 'ลาอื่นๆ':0 };
+ leaveOnDate.forEach(l => { _leaveByType[_leaveTypeToStatus(l.type)]++; });
+ // Effective headcount (includes exempt per Q14 B)
+ const effectiveHeadcount = activeEmps.length + exemptEmps.length;
 
- const s2Data = [
- ['สรุปรายงานการเข้างาน'],
+ // Helper: build summary data for a subset of employees (all or one company)
+ const _buildSummaryRows = (label, subsetEmpIds) => {
+ // Filter each bucket to the subset
+ const _in = (id) => subsetEmpIds.has(id);
+ const sub_present = present.filter(r => _in(r.employeeCode || r.employeeId));
+ const sub_onTime = sub_present.filter(r => r.checkIn < workStart).length;
+ const sub_afterStart = sub_present.filter(r => r.checkIn >= workStart && r.checkIn < lateThreshold).length;
+ const sub_late = sub_present.filter(r => r.checkIn >= lateThreshold).length;
+ const sub_exemptPresent = exemptPresent.filter(e => _in(e.id));
+ const sub_fw = fieldWorkOnDate.filter(f => _in(f.employeeId));
+ const sub_leave = leaveOnDate.filter(l => _in(l.employeeId));
+ const sub_leaveBT = { 'ลากิจ':0, 'ลาป่วย':0, 'ลาพักร้อน':0, 'ลาสะสมวันหยุด':0, 'ลาอื่นๆ':0 };
+ sub_leave.forEach(l => { sub_leaveBT[_leaveTypeToStatus(l.type)]++; });
+ const sub_dayOff = dayOff.filter(r => _in(r.employeeCode || r.employeeId));
+ const sub_absent = absent.filter(r => _in(r.employeeCode || r.employeeId));
+ const sub_scanned = sub_present.length;
+ const sub_totalPresent = sub_scanned + sub_exemptPresent.length;
+ const sub_headcount = subsetEmpIds.size;
+ return [
+ [label],
  [],
  ['วันที่', formatDate(_attReportDate)],
- ['จำนวนพนักงานที่คิดเวลาทำงาน (ไม่รวม Admin + ผู้ไม่ต้องสแกน)', activeEmps.length],
- ['มาทำงาน', present.length],
- [' - มาตรงเวลา (ก่อน ' + workStart + ')', onTime],
- [' - มาหลังเวลา (' + workStart + ' - ' + lateThreshold + ')', afterStart],
- [' - มาสาย (หลัง ' + lateThreshold + ')', lateAfterTh],
- ['ลาหยุด', leaveOnDate.length],
- ['วันหยุด (ตามตารางกะ)', dayOff.length],
- ['ไม่มา / ขาดงาน', absent.length],
+ ['จำนวนพนักงานที่คิดเวลาทำงาน (ไม่รวม Admin ยกเว้นที่ตั้ง countInAttendance=true)', sub_headcount],
+ ['มาทำงาน (รวมละเว้นการพิจารณา)', sub_totalPresent],
+ [' - มาตรงเวลา (ก่อน ' + workStart + ')', sub_onTime + sub_exemptPresent.length],
+ [' - มาหลังเวลา (' + workStart + ' - ' + lateThreshold + ')', sub_afterStart],
+ [' - มาสาย (หลัง ' + lateThreshold + ')', sub_late],
+ ['ทำงานนอกสถานที่', sub_fw.length],
+ ['ลาหยุด (รวม)', sub_leave.length],
+ [' - ลากิจ', sub_leaveBT['ลากิจ']],
+ [' - ลาป่วย', sub_leaveBT['ลาป่วย']],
+ [' - ลาพักร้อน', sub_leaveBT['ลาพักร้อน']],
+ [' - ลาสะสมวันหยุด', sub_leaveBT['ลาสะสมวันหยุด']],
+ [' - ลาอื่นๆ (คลอด / บวช / ไม่รับค่าจ้าง)', sub_leaveBT['ลาอื่นๆ']],
+ ['วันหยุด (ตามตารางกะ)', sub_dayOff.length],
+ ['ไม่มา / ขาดงาน', sub_absent.length],
  [],
- ['ตรวจสอบยอด (มา + ลา + วันหยุด + ขาด)', present.length + leaveOnDate.length + dayOff.length + absent.length]
+ ['ตรวจสอบยอด (มา + นอกสถานที่ + ลา + วันหยุด + ขาด)',
+ sub_totalPresent + sub_fw.length + sub_leave.length + sub_dayOff.length + sub_absent.length]
  ];
-
- // v1.4.41: per-company breakdown (derived from same data as Sheet 1 ภาพรวม)
- // Build company → { present, leave, dayOff, absent, total } map
- const companyBreakdown = new Map();
- const bumpCompany = (companyId, key) => {
- const id = companyId || 'unknown';
- if (!companyBreakdown.has(id)) companyBreakdown.set(id, { present:0, leave:0, dayOff:0, absent:0 });
- companyBreakdown.get(id)[key]++;
  };
- present.forEach(r => {
- const e = getEmployee(r.employeeCode || r.employeeId);
- bumpCompany(e ? e.company : 'unknown', 'present');
- });
- leaveOnDate.forEach(r => {
- const e = getEmployee(r.employeeId);
- bumpCompany(e ? e.company : 'unknown', 'leave');
- });
- dayOff.forEach(r => {
- const e = getEmployee(r.employeeCode || r.employeeId);
- bumpCompany(e ? e.company : 'unknown', 'dayOff');
- });
- absent.forEach(r => {
- const e = getEmployee(r.employeeCode || r.employeeId);
- bumpCompany(e ? e.company : 'unknown', 'absent');
- });
 
- // Blank rows + section header
- s2Data.push([]);
- s2Data.push(['สรุปแยกตามบริษัท']);
- s2Data.push(['บริษัท','มาทำงาน','ลาหยุด','วันหยุด','ขาดงาน','รวม']);
- // Order by companies list (fallback to alphabetical for 'unknown')
- const companyOrder = (settings.companies || []).map(c => c.id);
- const seenIds = new Set();
- const orderedIds = [];
- companyOrder.forEach(id => { if (companyBreakdown.has(id)) { orderedIds.push(id); seenIds.add(id); } });
- [...companyBreakdown.keys()].filter(id => !seenIds.has(id)).sort().forEach(id => orderedIds.push(id));
- let totalP = 0, totalL = 0, totalD = 0, totalA = 0;
- orderedIds.forEach(cid => {
- const bd = companyBreakdown.get(cid);
- const label = cid === 'unknown' ? '(ไม่ระบุ)' : (getCompanyLabel(cid) || cid);
- const sum = bd.present + bd.leave + bd.dayOff + bd.absent;
- totalP += bd.present; totalL += bd.leave; totalD += bd.dayOff; totalA += bd.absent;
- s2Data.push([label, bd.present, bd.leave, bd.dayOff, bd.absent, sum]);
- });
- s2Data.push(['รวมทั้งหมด', totalP, totalL, totalD, totalA, totalP + totalL + totalD + totalA]);
+ // Build one "สรุป-ทั้งหมด" first, then split per-company
+ const s2Data = _buildSummaryRows(
+ 'สรุปรายงานการเข้างาน (ทั้งหมด)',
+ new Set([...activeEmps, ...exemptEmps].map(e => e.id))
+ );
 
- const ws2 = XLSX.utils.aoa_to_sheet(s2Data);
- ws2['!cols'] = [{wch:40},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];
- ws2['!merges'] = [{s:{r:0,c:0},e:{r:0,c:5}}];
- // Merge "สรุปแยกตามบริษัท" section header across whole width
- const companyHdrRow = s2Data.findIndex(row => row[0] === 'สรุปแยกตามบริษัท');
- if (companyHdrRow >= 0) {
- ws2['!merges'].push({s:{r:companyHdrRow, c:0}, e:{r:companyHdrRow, c:5}});
- }
- if (ws2['A1']) ws2['A1'].s = S.titleBig;
- // Style the top summary block (rows 2 .. companyHdrRow-1)
- const s2Top = companyHdrRow >= 0 ? companyHdrRow : s2Data.length;
- for (let r = 2; r < s2Top; r++) {
+ // v1.4.55 (Topic 3): per-company summary — now each company gets its own sheet.
+ // Build the master "สรุป-ทั้งหมด" sheet (s2), then loop and append per-company sheets.
+ // v1.4.55: helper to style a summary sheet built by _buildSummaryRows
+ const _styleSummarySheet = (ws, data) => {
+ for (let r = 2; r < data.length; r++) {
  const a = XLSX.utils.encode_cell({r, c:0});
  const b = XLSX.utils.encode_cell({r, c:1});
- if (!ws2[a]) ws2[a] = { v: '', t: 's' };
- if (!ws2[b]) ws2[b] = { v: '', t: 's' };
- ws2[a].s = S.summaryLabel;
- ws2[b].s = S.summaryVal;
+ if (!ws[a]) ws[a] = { v: '', t: 's' };
+ if (!ws[b]) ws[b] = { v: '', t: 's' };
+ ws[a].s = S.summaryLabel;
+ ws[b].s = S.summaryVal;
  }
- // Style the company breakdown section (header + rows)
- if (companyHdrRow >= 0) {
- // section title row
- const hdrAddr = XLSX.utils.encode_cell({r: companyHdrRow, c:0});
- if (ws2[hdrAddr]) ws2[hdrAddr].s = S.titleMd;
- // column headers
- for (let c = 0; c <= 5; c++) {
- const a = XLSX.utils.encode_cell({r: companyHdrRow + 1, c});
- if (ws2[a]) ws2[a].s = S.headerCell;
- }
- // data rows
- for (let r = companyHdrRow + 2; r < s2Data.length; r++) {
- for (let c = 0; c <= 5; c++) {
- const addr = XLSX.utils.encode_cell({r, c});
- if (!ws2[addr]) ws2[addr] = { v: '', t: 's' };
- if (c === 0) ws2[addr].s = S.summaryLabel;
- else ws2[addr].s = S.summaryVal;
- }
- }
- }
+ };
+ _styleSummarySheet(ws2, s2Data);
  ws2['!rows'] = [{ hpt: 24 }, undefined];
- XLSX.utils.book_append_sheet(wb, ws2, 'สรุป');
+ XLSX.utils.book_append_sheet(wb, ws2, 'สรุป-ทั้งหมด');
+
+ // v1.4.55 (Topic 3): Per-company sheets — สรุป-Crochet / สรุป-Masterpiece / etc.
+ // Group employees (activeEmps + exemptEmps) by emp.company
+ const _byCompany = new Map(); // companyId → Set(empId)
+ const _appendToCompany = (companyId, empId) => {
+ const id = companyId || '__unknown__';
+ if (!_byCompany.has(id)) _byCompany.set(id, new Set());
+ _byCompany.get(id).add(empId);
+ };
+ activeEmps.forEach(e => _appendToCompany(e.company, e.id));
+ exemptEmps.forEach(e => _appendToCompany(e.company, e.id));
+ // Emit sheet per configured company (in the order from Settings.companies)
+ const _configuredCompanies = settings.companies || [];
+ _configuredCompanies.forEach(c => {
+ if (!_byCompany.has(c.id)) return; // skip if no employees in this company
+ const subsetIds = _byCompany.get(c.id);
+ const dataC = _buildSummaryRows(`สรุปรายงานการเข้างาน — ${c.label}`, subsetIds);
+ const wsC = XLSX.utils.aoa_to_sheet(dataC);
+ wsC['!cols'] = [{wch:52},{wch:12}];
+ wsC['!merges'] = [{s:{r:0,c:0},e:{r:0,c:1}}];
+ if (wsC['A1']) wsC['A1'].s = S.titleBig;
+ _styleSummarySheet(wsC, dataC);
+ wsC['!rows'] = [{ hpt: 24 }, undefined];
+ // Sheet name: "สรุป-{label}" — clamp to 31 chars (Excel limit)
+ let sheetName = `สรุป-${c.label}`;
+ if (sheetName.length > 31) sheetName = sheetName.slice(0, 31);
+ XLSX.utils.book_append_sheet(wb, wsC, sheetName);
+ });
+ // v1.4.55 Q11 A: "สรุป-ไม่ระบุ" sheet only if any employee has empty/undefined company
+ if (_byCompany.has('__unknown__')) {
+ const subsetIds = _byCompany.get('__unknown__');
+ const dataU = _buildSummaryRows('สรุปรายงานการเข้างาน — ไม่ระบุบริษัท', subsetIds);
+ const wsU = XLSX.utils.aoa_to_sheet(dataU);
+ wsU['!cols'] = [{wch:52},{wch:12}];
+ wsU['!merges'] = [{s:{r:0,c:0},e:{r:0,c:1}}];
+ if (wsU['A1']) wsU['A1'].s = S.titleBig;
+ _styleSummarySheet(wsU, dataU);
+ wsU['!rows'] = [{ hpt: 24 }, undefined];
+ XLSX.utils.book_append_sheet(wb, wsU, 'สรุป-ไม่ระบุ');
+ }
 
  // ============================================================
  // Sheet 3: สรุปชื่อพนักงาน ลา / มาสาย (letter format with borders)
@@ -7293,31 +7509,54 @@ function calculatePaySlip(employeeId, year, month) {
  // - CUTOFF cycle (22 prev - 21 current): used for OT filter, late, absent, diligence gate
  // - CALENDAR month (1 - end of month): used for workDays display only
  //
- // Attendance for CUTOFF CYCLE (adjustments) — merge approved time certifications
+ // v1.4.55 (ADR-0002): Merge approved Field Work into both scopes.
+ // Field Work protects the day from late/absent detection (Q3 B).
+ //
+ // Attendance for CUTOFF CYCLE (adjustments)
  const rawAttendanceCycle = DB.load('attendanceRecords').filter(r =>
  r.employeeId === employeeId && getPayrollMonth(r.date) === monthStr
  );
- const attendance = mergeApprovedTimeCertForMonth(rawAttendanceCycle, monthStr);
- // Attendance for CALENDAR MONTH (display only) — used to compute workDays shown on slip
+ const attendanceWithCert = mergeApprovedTimeCertForMonth(rawAttendanceCycle, monthStr);
+ const cycleFwResult = mergeApprovedFieldWorkForMonth(attendanceWithCert, employeeId, monthStr);
+ const attendance = cycleFwResult.attendance;
+ const cycleFieldWorkDates = cycleFwResult.fieldWorkDates;
+ // Attendance for CALENDAR MONTH (display only)
  const rawAttendanceCalendar = DB.load('attendanceRecords').filter(r =>
  r.employeeId === employeeId && r.date && r.date.startsWith(monthStr)
  );
+ // v1.4.55: also merge field work for calendar scope so workDays display includes fieldwork days
+ const calendarFwList = DB.load('fieldWorkRequests', []).filter(f =>
+ f.status === 'approved' && f.employeeId === employeeId && f.date && f.date.startsWith(monthStr)
+ );
+ const calendarExistingDates = new Set(rawAttendanceCalendar.map(r => r.date));
+ const rawAttendanceCalendarWithFW = [...rawAttendanceCalendar];
+ const calendarFieldWorkDates = new Set();
+ calendarFwList.forEach(f => {
+ calendarFieldWorkDates.add(f.date);
+ if (!calendarExistingDates.has(f.date)) {
+ rawAttendanceCalendarWithFW.push({ date: f.date, employeeId, employeeCode: employeeId, checkIn: '08:00', checkOut: null, _fieldWork: true });
+ }
+ });
  // Auto-absent: anyone with checkIn >= cutoff is excluded from workDays + lateRecords
+ // v1.4.55: field work days are NEVER auto-absent (protected)
  const autoAbsentCutoff = computeAutoAbsentCutoff(settings);
  const presentInMonth = autoAbsentCutoff
- ? attendance.filter(r => r.checkIn && r.checkIn < autoAbsentCutoff)
- : attendance.filter(r => r.checkIn);
+ ? attendance.filter(r => r._fieldWork || cycleFieldWorkDates.has(r.date) || (r.checkIn && r.checkIn < autoAbsentCutoff))
+ : attendance.filter(r => r._fieldWork || cycleFieldWorkDates.has(r.date) || r.checkIn);
  const autoAbsentDays = autoAbsentCutoff
- ? attendance.filter(r => r.checkIn && r.checkIn >= autoAbsentCutoff).length
+ ? attendance.filter(r => !r._fieldWork && !cycleFieldWorkDates.has(r.date) && r.checkIn && r.checkIn >= autoAbsentCutoff).length
  : 0;
  // v1.4.54 Q4 answer B: workDays DISPLAYED = calendar count (matches base salary period)
  const presentInCalendar = autoAbsentCutoff
- ? rawAttendanceCalendar.filter(r => r.checkIn && r.checkIn < autoAbsentCutoff)
- : rawAttendanceCalendar.filter(r => r.checkIn);
+ ? rawAttendanceCalendarWithFW.filter(r => r._fieldWork || calendarFieldWorkDates.has(r.date) || (r.checkIn && r.checkIn < autoAbsentCutoff))
+ : rawAttendanceCalendarWithFW.filter(r => r._fieldWork || calendarFieldWorkDates.has(r.date) || r.checkIn);
  const workDays = presentInCalendar.length; // v1.4.54: calendar-scoped for display
  // v1.4.54 Q4.2 answer B: internal cycle-scoped workDays used for diligence gate
  const _workDaysCycle = presentInMonth.length;
- const lateRecords = presentInMonth.filter(r => r.checkIn >= lateThreshold);
+ // v1.4.55 Q3 B: Field Work days EXCLUDED from late (protects from late deduction)
+ const lateRecords = presentInMonth.filter(r =>
+ !r._fieldWork && !cycleFieldWorkDates.has(r.date) && r.checkIn >= lateThreshold
+ );
  const lateDays = lateRecords.length;
 
  // Calculate total late minutes (for minute/hour mode)
@@ -11006,6 +11245,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  migrateSettings_v1_4_10();
  migrateLeaveQuota_v1_4_14();
  migratePayrollFields_v1_4_54();
+ migrateAttendanceCountability_v1_4_55();
  migrateAttendanceExempt_v1_4_20();
  (function checkVersionForceSync() {
  const lastVer = localStorage.getItem('hr__lastVersion');

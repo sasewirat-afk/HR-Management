@@ -6,6 +6,115 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.55] — 2026-07-06 (afternoon)
+
+**ATTENDANCE STATUS RESOLUTION — Field Work + Company sheets + Admin exception (per ADR-0002)**
+
+### Context
+Bug report: employee 661218001 (จิราภรณ์ เชียงราย) submitted approved off-site work for 7 Jul 09:00-11:00 but attendance report classified her as "ไม่มาทำงาน (ไม่พบใน TIGERSOFT)". Investigation revealed the attendance status logic was implicit and scattered — multiple signals (Tigersoft scan, leave, field work, day-off, `exemptFromAttendance`) never resolved by a single documented priority ladder.
+
+Grill-with-docs session (afternoon, 6 Jul 2569) covered 16 questions across 4 topics: field work handling, status categories, per-company sheet split, and admin/exempt treatment. See `docs/adr/0002-attendance-status-resolution.md` for full decision record + alternatives.
+
+### Files Changed
+- `index.html` — ~15 patches
+- `CONTEXT.md` — Attendance Domain section added (5 new terms)
+- `docs/adr/0002-attendance-status-resolution.md` — NEW (decision record)
+- `CHANGELOG.md`
+
+### New Helpers
+- `resolveAttendanceStatus(emp, dateStr, ctx?)` — central resolver, returns one of 11 canonical status values via strict Priority Ladder
+- `mergeApprovedFieldWorkForMonth(records, empId, monthStr)` — analogous to `mergeApprovedTimeCertForMonth`; returns `{attendance, fieldWorkDates}`
+- `isCountedInAttendance(emp)` — respects `emp.countInAttendance` override (true/false), falls back to `role === 'admin' → exclude`
+
+### Status Priority Ladder (fixed order per ADR-0002)
+1. **Day Off** — shift type='O' OR weekend/company holiday when no shift
+2. **Leave** — ลากิจ / ลาป่วย / ลาพักร้อน / ลาสะสมวันหยุด / ลาอื่นๆ (maternity+ordination+unpaid grouped per Q6 A)
+3. **ทำงานนอกสถานที่** — approved field work; **overrides late scan** per Q3 B
+4. **Present from scan** — มาตรงเวลา (< workStart) / มาหลังเวลา (workStart–lateThreshold) / มาสาย (>= lateThreshold)
+5. **Exempt Present** — `exemptFromAttendance=true` on working days → counted as มาตรงเวลา
+6. **ขาดงาน** — fallback
+
+### calculatePaySlip Changes
+Attendance now loaded and merged in both scopes (CUTOFF cycle + CALENDAR month, per v1.4.54) with field work injected:
+```js
+// v1.4.55: field-work days are counted as present AND excluded from late/absent detection
+const { attendance, fieldWorkDates } = mergeApprovedFieldWorkForMonth(...)
+const presentInMonth = attendance.filter(r =>
+  r._fieldWork || fieldWorkDates.has(r.date) || (r.checkIn && r.checkIn < autoAbsentCutoff)
+)
+const lateRecords = presentInMonth.filter(r =>
+  !r._fieldWork && !fieldWorkDates.has(r.date) && r.checkIn >= lateThreshold
+)
+```
+Net effect: employees with approved field work no longer lose diligence bonus + base pay for legitimate off-site work.
+
+### Excel Export Changes
+**ภาพรวม sheet** — status column expanded:
+- Leave broken out into 5 specific types (was generic `ลา (Xxx)`)
+- New status `ทำงานนอกสถานที่` inserted between Field Work rows
+- Exempt employees added as separate rows with `มาตรงเวลา` and `(ละเว้น)` marker in check-in column
+
+**สรุป sheet** — SPLIT into per-company sheets (Q9 A + Q10 A + Q11 A):
+- `สรุป-ทั้งหมด` — company-agnostic totals (kept as first summary sheet)
+- `สรุป-Crochet` / `สรุป-Masterpiece` / `สรุป-ConceptOne` / `สรุป-Habita` — one per configured company that has employees
+- `สรุป-ไม่ระบุ` — appended only if any employee has empty `company` field
+- New line items in each: `ทำงานนอกสถานที่`, leave broken out by 5 types, headcount includes exempt employees
+
+Each summary sheet now shows:
+- จำนวนพนักงานที่คิดเวลาทำงาน (respects `countInAttendance` override for admins who scan)
+- มาทำงาน (รวมละเว้นการพิจารณา) — Q14 B: exempt included as มาตรงเวลา
+- ทำงานนอกสถานที่
+- ลาหยุด (broken out into 5 sub-lines)
+- วันหยุด / ขาดงาน
+- Verify-total row
+
+### Admin Exception
+New employee field `countInAttendance: boolean`:
+- `false` → excluded from attendance headcount (unusual)
+- `true` → included regardless of role (**this is how admin 430806001 opts in**)
+- `undefined` → role-based fallback (admin excluded per Q12 A)
+
+Migration `migrateAttendanceCountability_v1_4_55()` runs once, sets `430806001.countInAttendance = true`. Idempotent via `settings._migrationsRun`.
+
+### Exempt Present Treatment (Q13 C + Q14 B)
+Employees flagged `exemptFromAttendance=true` are treated as `มาตรงเวลา` on days where **both** conditions hold:
+- Not a scheduled Day Off (per shift schedule)
+- Not on approved leave
+
+Weekend/company holiday default to Day Off when no explicit shift record exists.
+
+### Data Migration Analysis
+| Layer | Impact | Migration Required |
+|---|---|---|
+| attendanceRecords / leaveRequests / fieldWorkRequests | No modification | **None** |
+| employees | 1 field added (`countInAttendance: true`) on employee 430806001 only | Idempotent migration on load |
+| paySlips | Not touched; existing 10 test slips retain old semantics until regenerated | Manual regenerate via 🗑️ ลบสลิปทั้งหมด button (v1.4.54) |
+| Cross-device sync | New field is additive | Backward-compat |
+
+**Zero destructive DB operations. Rollback via Vercel promote v1.4.54.**
+
+### Post-Deploy Verification
+1. Version 1.4.55 in Console + sidebar
+2. Console: `[migrate v1.4.55] Set 430806001.countInAttendance = true` OR migration already ran
+3. Console: `resolveAttendanceStatus(DB.load('employees').find(e => e.id === '661218001'), '2026-07-07')` = `"ทำงานนอกสถานที่"`
+4. Console: `isCountedInAttendance(DB.load('employees').find(e => e.id === '430806001'))` = `true`
+5. Console: `isCountedInAttendance(DB.load('employees').find(e => e.id === 'ADMIN001'))` = `false`
+6. Attendance report for 7 Jul 2569: 661218001 shows `ทำงานนอกสถานที่` (not ขาดงาน)
+7. Excel export: multiple summary sheets (สรุป-ทั้งหมด + one per company)
+8. ภาพรวม sheet: leave broken out (ลากิจ / ลาป่วย / etc.) + ทำงานนอกสถานที่ present
+9. Data integrity: emps=99, hashed=99 (unchanged)
+
+### Rollback
+- Git tag v1.4.54
+- Vercel promote v1.4.54 (10 sec)
+- Migration wrote 1 additive field on 1 employee — trivial to leave in place after rollback
+
+### ⚠️ Still Postponed
+- v1.4.50 (Physical certs + OT no-attach) — scheduled reminder Wed 8 Jul 2569 09:30
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.54] — 2026-07-06
 
 **PAYROLL SEMANTIC CORRECTION — labels + workDays split (per ADR-0001)**

@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.57</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.58</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.57';
+const APP_VERSION = '1.4.58';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -4074,6 +4074,29 @@ async function shareOrgImage() {
 // SHIFT SCHEDULE (Manager/Admin)
 // ============================================================
 let _shiftMonth = `${new Date().getFullYear()}-${String(new Date().getMonth()+1).padStart(2,'0')}`;
+
+// v1.4.58: Shift schedule search filter (Q1 B contains + Q2 A + Q3 A as-you-type + Q4 B highlight)
+// Called on input event from the search box in renderShiftSchedule.
+// Q5 A: state is intentionally NOT persisted — resets on any renderShiftSchedule() call (month change).
+function filterShiftScheduleRows(query) {
+ const q = (query || '').trim().toLowerCase();
+ const rows = document.querySelectorAll('#shiftTable tbody tr');
+ if (!q) {
+ // Empty query — remove all highlight + dim
+ rows.forEach(tr => { tr.classList.remove('shift-row-match', 'shift-row-dim'); });
+ return;
+ }
+ rows.forEach(tr => {
+ const hay = tr.getAttribute('data-search') || '';
+ if (hay.includes(q)) {
+ tr.classList.add('shift-row-match');
+ tr.classList.remove('shift-row-dim');
+ } else {
+ tr.classList.remove('shift-row-match');
+ tr.classList.add('shift-row-dim');
+ }
+ });
+}
 const SHIFT_TYPES = {
  'M': { label: 'เช้า', emoji: 'M', color: '#3b82f6', bg: '#dbeafe' },
  'A': { label: 'บ่าย', emoji: 'A', color: '#f59e0b', bg: '#fef3c7' },
@@ -4159,6 +4182,7 @@ function renderShiftSchedule() {
  <h1> ตารางลงกะงาน</h1>
  <div class="flex" style="gap:8px;flex-wrap:wrap;">
  <input type="month" value="${_shiftMonth}" onchange="_shiftMonth=this.value; renderShiftSchedule()" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
+ <input type="text" id="shiftSearchInput" placeholder="🔍 ค้นหาชื่อหรือรหัส..." oninput="filterShiftScheduleRows(this.value)" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;min-width:200px;" title="v1.4.58: ค้นหาแบบ contains (ชื่อ + รหัส) — highlight matches; ไม่ซ่อน rows อื่น">
  <button class="btn btn-success btn-sm" onclick="exportShiftScheduleXLSX()">⬇ Export Excel (Template)</button>
  <label class="btn btn-warning btn-sm" style="margin:0;cursor:pointer;">⬆ Import Excel
  <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="importShiftScheduleXLSX(this.files[0]); this.value='';">
@@ -4171,6 +4195,12 @@ function renderShiftSchedule() {
  ${team.length === 0 ? `
  <div class="alert alert-info">ℹ คุณยังไม่มีลูกทีม — ผังตารางกะใช้สำหรับ Manager ที่มีพนักงานในสาย</div>
  ` : `
+ <style>
+ /* v1.4.58: Shift schedule search highlight (Q4 B — highlight matches, dim non-matches) */
+ #shiftTable tbody tr.shift-row-match { background: rgba(250, 204, 21, 0.15); }
+ #shiftTable tbody tr.shift-row-match td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
+ #shiftTable tbody tr.shift-row-dim { opacity: 0.35; }
+ </style>
  <div class="stats-grid">
  <div class="stat-card"><div class="label"> ลูกทีม</div><div class="value">${team.length} <small>คน</small></div></div>
  <div class="stat-card green"><div class="label">วันทำงาน (รวม)</div><div class="value">${workSlots}</div></div>
@@ -4246,7 +4276,7 @@ function renderShiftSchedule() {
  return `<td onclick="cycleShift('${emp.id}','${ds}')" style="padding:0;text-align:center;border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;background:${bg};cursor:pointer;height:34px;width:34px;min-width:34px;" title="${title}">${content}</td>`;
  }).join('');
 
- return `<tr>
+ return `<tr data-search="${esc((emp.firstName + ' ' + emp.lastName + ' ' + emp.id).toLowerCase())}">
  <td style="padding:8px 10px;position:sticky;left:0;background:white;border-right:3px solid #f59e0b;border-bottom:1px solid #e5e7eb;font-size:12px;width:180px;min-width:180px;z-index:2;">
  <strong>${esc(emp.firstName)} ${esc(emp.lastName)}</strong><br>
  <small style="color:#999;">${emp.id}</small>
@@ -7225,6 +7255,25 @@ function exportAttendanceXLSX() {
  _styleSummarySheet(wsU, dataU);
  wsU['!rows'] = [{ hpt: 24 }, undefined];
  XLSX.utils.book_append_sheet(wb, wsU, 'สรุป-ไม่ระบุ');
+ }
+
+ // v1.4.58 (Topic 2 Q6 A + Q7 A + Q9 A): Combined "สรุป MTPxCrochet" sheet — Masterpiece + Crochet
+ // Appended LAST (after all per-company sheets and สรุป-ไม่ระบุ), reuses _buildSummaryRows structure.
+ // Only appended if both companies exist AND at least one has employees.
+ const _mtp = _byCompany.get('masterpiece');
+ const _crochet = _byCompany.get('crochet');
+ if ((_mtp && _mtp.size) || (_crochet && _crochet.size)) {
+ const combinedIds = new Set();
+ if (_mtp) _mtp.forEach(id => combinedIds.add(id));
+ if (_crochet) _crochet.forEach(id => combinedIds.add(id));
+ const dataMx = _buildSummaryRows('สรุปรายงานการเข้างาน — Masterpiece + Crochet', combinedIds);
+ const wsMx = XLSX.utils.aoa_to_sheet(dataMx);
+ wsMx['!cols'] = [{wch:52},{wch:12}];
+ wsMx['!merges'] = [{s:{r:0,c:0},e:{r:0,c:1}}];
+ if (wsMx['A1']) wsMx['A1'].s = S.titleBig;
+ _styleSummarySheet(wsMx, dataMx);
+ wsMx['!rows'] = [{ hpt: 24 }, undefined];
+ XLSX.utils.book_append_sheet(wb, wsMx, 'สรุป MTPxCrochet'); // Q6 A: with space, no dash
  }
 
  // ============================================================

@@ -6,6 +6,60 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.58] — 2026-07-08
+
+**FEATURE — Shift schedule search + combined MTPxCrochet Excel sheet**
+
+### Scope
+Two additive UI improvements from a grill session (Q1-Q9):
+1. **Search bar in ตารางลงกะงาน page** — as-you-type filter by name + ID
+2. **New Excel sheet "สรุป MTPxCrochet"** — combines Masterpiece + Crochet employees
+
+### Grill Decisions
+| # | Choice | Applied |
+|---|---|---|
+| Q1 B | Search by ชื่อ + รหัสพนักงาน | `data-search` attribute on `<tr>` combines firstName, lastName, id (lowercased) |
+| Q2 A | Contains match | `hay.includes(q)` |
+| Q3 A | As-you-type | `oninput` handler |
+| Q4 B | Highlight matches (not hide) | `.shift-row-match` (yellow tint + left border) + `.shift-row-dim` (opacity 0.35) |
+| Q5 A | Reset on each render | State not persisted — cleared on any `renderShiftSchedule()` call |
+| Q6 A | Sheet name with space | `'สรุป MTPxCrochet'` (no dash, per user preference) |
+| Q7 A | Last sheet | Appended after `สรุป-ไม่ระบุ` |
+| Q8 A | Hardcode | No configurable combination system yet |
+| Q9 A | Same structure as สรุป-Crochet | Reuses `_buildSummaryRows()` + `_styleSummarySheet()` |
+
+### Files Changed
+- `index.html` — 6 patches:
+ 1. Version bump 1.4.57 → 1.4.58
+ 2. Sidebar version marker
+ 3. Global `filterShiftScheduleRows(query)` function
+ 4. Search input in shift schedule page header
+ 5. CSS for `.shift-row-match` / `.shift-row-dim` + `data-search` attribute on `<tr>`
+ 6. Combined sheet appended in `exportAttendanceXLSX` after per-company loop
+
+### Post-Deploy Verification
+1. Version 1.4.58 in Console + sidebar
+2. **Shift Schedule page**: search box appears next to month picker
+3. Type "สม" → rows with "สมชาย/สมศรี" highlighted yellow, others dimmed
+4. Type employee id "3901" → matching rows highlighted
+5. Change month → search box clears (Q5 A)
+6. **Attendance Report → Export Excel** → open file:
+ - Sheets: `ภาพรวม`, `สรุป-ทั้งหมด`, `สรุป-Masterpiece`, `สรุป-Crochet`, `สรุป-ConceptOne`, `สรุปลา-สาย`, **`สรุป MTPxCrochet`** (new, last)
+ - Structure of MTPxCrochet sheet identical to สรุป-Crochet
+ - Headcount = Masterpiece emps + Crochet emps
+ - Numbers = sum of both companies for each row
+
+### Rollback
+- Git tag v1.4.57
+- Vercel promote v1.4.57 (10 sec)
+- Non-destructive changes — no DB touched
+
+### ⚠️ Still Postponed
+- v1.4.50 (physical cert workflow) — same day priority
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.57] — 2026-07-07 (emergency hotfix)
 
 **EMERGENCY — otRequests exceeded Supabase row limit (3.73 MB), cloud sync failing**

@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.58</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.59</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.58';
+const APP_VERSION = '1.4.59';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -5912,7 +5912,9 @@ function parseTxtAttendanceLine(line) {
  const dateMatch = line.match(/(\d{2}\/\d{2}\/\d{4})/);
  const timeMatch = line.match(/(\d{2}:\d{2})/);
  if (!dateMatch || !timeMatch) return null;
- const codes = [...line.matchAll(/(?:^|\s)(\d{9})(?:\s|$)/g)];
+ // v1.4.59: accept 9-10 digit employee codes (Hotel/Habita uses 10-digit IDs like 9601120001)
+ // Boundary \s...\s ensures we don't accidentally split a longer number. Greedy match prefers 10 when available.
+ const codes = [...line.matchAll(/(?:^|\s)(\d{9,10})(?:\s|$)/g)];
  if (codes.length === 0) return null;
  const empCode = codes[0][1];
  let firstName = '', lastName = '', company = '', department = '';

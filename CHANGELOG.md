@@ -6,6 +6,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.59] — 2026-07-08 (afternoon hotfix)
+
+**BUG FIX — Tigersoft parser silently drops Hotel employees (10-digit codes)**
+
+### Bug Report
+User noticed "มาสเตอร์พีช โฮเต็ล" employees never appear in attendance report despite being registered in the system. 22 Hotel employees exist (all correctly assigned to `habita` company), but their scans are missing.
+
+### Root Cause (confirmed via 3 diagnostic tests per debug-mantra)
+`parseTxtAttendanceLine` at line 5915 used regex:
+```js
+/(?:^|\s)(\d{9})(?:\s|$)/g
+```
+
+The `\d{9}` with strict `\s...\s` boundary matches exactly 9 digits between whitespace. Hotel employee IDs are 10 digits (e.g. `9601120001`) — the boundary check fails, and `matchAll` returns empty, causing `parseTxtAttendanceLine` to return `null`. The entire scan line is silently discarded.
+
+**Diagnostic evidence**:
+- Test A: `parseTxtAttendanceLine(" 15/07/2026 05:48 01 9601120001 ...")` → `null` ← **BUG**
+- Test B: 22 Hotel emps exist in system, all `company=habita`
+- Test C: Company `habita` registered (label: "The Habita Hatyai", formal name: "บริษัท มาสเตอร์พีซ โฮเต็ล กรุ๊ป จำกัด")
+
+Both Hotel employees and company are correctly set up — the parser is the only failure point.
+
+### Fix
+Widened the regex to accept both 9 and 10 digit codes:
+```js
+// v1.4.59
+const codes = [...line.matchAll(/(?:^|\s)(\d{9,10})(?:\s|$)/g)];
+```
+
+`{9,10}` is greedy — prefers 10 digits when available, falls back to 9. Whitespace boundary still enforced to prevent accidental splits of longer numeric strings.
+
+### Files Changed
+- `index.html` — 3 patches (2 version markers + 1 regex line)
+
+### Post-Deploy Action Required
+1. Hard reload
+2. **Re-upload today's Tigersoft file** (Attendance Upload page) — parser will now capture Hotel scans previously dropped
+3. Verify: Attendance report shows Hotel employees under "The Habita Hatyai" company sheet + ภาพรวม status
+
+### Rollback
+- Git tag v1.4.58
+- Vercel promote v1.4.58 (10 sec)
+- Non-destructive change — no data touched
+
+### Design Notes (informational, not part of this fix)
+- Company `habita` currently labeled "The Habita Hatyai" but formal name is "บริษัท มาสเตอร์พีซ โฮเต็ล กรุ๊ป จำกัด" (Hotel entity). Per user decision (Q2 A), keep label as-is. If a future split is desired (Habita Cafe vs Hotel Group as separate companies), that would require a new company entry + employee re-assignment migration.
+
+### ⚠️ Still Postponed
+- v1.4.50 (physical cert workflow)
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.58] — 2026-07-08
 
 **FEATURE — Shift schedule search + combined MTPxCrochet Excel sheet**

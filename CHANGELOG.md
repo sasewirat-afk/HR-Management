@@ -6,6 +6,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.60] — 2026-07-08 (display fix)
+
+**BUG FIX — OT type badge showed hardcoded ×3 / ×1.5 regardless of settings**
+
+### Bug Report
+User changed `settings.otMultiplierHoliday` from 3 to 1.5, but the "ลางาน & OT" dashboard still displayed some OT records as "วันหยุด ×3". Payslip calculation was correct (uses current setting), but the badge label was wrong.
+
+### Root Cause (debug-mantra 4 steps confirmed)
+Line 4919-4920 hardcoded the multiplier values in the badge display:
+```js
+? `<span ...>วันหยุด ×3</span>`
+: `<span ...>วันธรรมดา ×1.5</span>`
+```
+
+Also, the holiday detection at line 4916-4917 only checked weekend (day-of-week 0/6), missing company holidays that `calculatePaySlip`'s `isHolidayDate` helper (line 7551) includes.
+
+### Fix
+1. Read `otMultiplier` and `otMultiplierHoliday` from settings via `DB.load('settings')`
+2. Include company holidays (`settings.companyHolidays`) in holiday detection — matches `calculatePaySlip` logic
+3. Badge now shows: `วันหยุด ×${otMultH}` and `วันธรรมดา ×${otMult}` reading current settings
+
+### Files Changed
+- `index.html` — 3 patches (2 version markers + 1 badge block)
+
+### Design Note (out of scope — future v1.5.x)
+User reported some employees work Sundays as regular workdays (per shift schedule) but current logic treats all Sundays as holidays company-wide. Proper fix would be per-employee shift-based holiday detection — where `shift.type === 'O'` means holiday for THAT person, not just calendar day-of-week. This applies to both display AND `calculatePaySlip`. Deferred to v1.5.x. User's current workaround (`otMultiplierHoliday = 1.5`) neutralizes the impact until then.
+
+### Data Impact
+🟢 **Zero** — pure display change. Payslip calculation uses current settings correctly (verified via grep of otMultiplierHoliday usage — line 7549, 7668).
+
+### Verification
+1. Hard reload → Console `v1.4.60`
+2. เมนู "ลางาน & OT" → **คำขอ OT ล่าสุด** card
+3. OT วันธรรมดา → badge "วันธรรมดา ×1.5" (matches settings)
+4. OT วันเสาร์/อาทิตย์/วันหยุดบริษัท → badge "วันหยุด ×1.5" (also matches — user's setting)
+5. Change setting to otMultiplierHoliday = 2 → reload → badge updates to "×2"
+
+### Rollback
+- Git tag v1.4.59
+- Vercel promote v1.4.59 (10 sec)
+
+### ⚠️ Still Postponed
+- v1.4.50 (physical cert workflow)
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.59] — 2026-07-08 (afternoon hotfix)
 
 **BUG FIX — Tigersoft parser silently drops Hotel employees (10-digit codes)**

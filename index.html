@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.59</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.60</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.59';
+const APP_VERSION = '1.4.60';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -4908,16 +4908,28 @@ function renderActivityCalendar() {
   <div class="card">
    <div class="card-header"><h3>คำขอ OT ล่าสุด</h3></div>
    <div class="card-body" style="padding:0;">
+    ${(() => {
+      // v1.4.60: read multipliers from settings (was hardcoded ×3 / ×1.5)
+      // Also match isHolidayDate logic from calculatePaySlip (line 7551) — include company holidays.
+      const _s = DB.load('settings');
+      const _otMult = _s.otMultiplier ?? 1.5;
+      const _otMultH = _s.otMultiplierHoliday ?? 3;
+      const _companyHolidays = new Set(_s.companyHolidays || []);
+      window._otBadgeCtx = { otMult: _otMult, otMultH: _otMultH, companyHolidays: _companyHolidays };
+      return '';
+    })()}
     ${recentOTs.length ? `<table>
      <thead><tr><th>วันที่</th><th>ชม.</th><th>ประเภท</th><th>สถานะ</th></tr></thead>
      <tbody>${recentOTs.map(r => {
       const empName = (() => { const e = getEmployee(r.employeeId); return e ? esc(e.firstName) : ''; })();
-      // Determine if OT date is on weekend/holiday
+      // v1.4.60: determine holiday status matching calculatePaySlip's isHolidayDate (weekend + company holiday)
+      const _ctx = window._otBadgeCtx || { otMult: 1.5, otMultH: 3, companyHolidays: new Set() };
       const dow = r.date ? new Date(r.date).getDay() : -1;
-      const isWeekend = dow === 0 || dow === 6;
-      const otTypeChip = isWeekend
-       ? `<span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;background:#dbeafe;color:#1e40af;font-weight:600;">วันหยุด ×3</span>`
-       : `<span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;background:#f3f4f6;color:#374151;font-weight:600;">วันธรรมดา ×1.5</span>`;
+      const isCompanyHoliday = r.date && _ctx.companyHolidays.has(r.date);
+      const isHoliday = (dow === 0 || dow === 6) || isCompanyHoliday;
+      const otTypeChip = isHoliday
+       ? `<span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;background:#dbeafe;color:#1e40af;font-weight:600;">วันหยุด ×${_ctx.otMultH}</span>`
+       : `<span style="display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;background:#f3f4f6;color:#374151;font-weight:600;">วันธรรมดา ×${_ctx.otMult}</span>`;
       return `<tr>
        <td>${formatDayShort(r.date)}${empName ? `<div class="text-sm">${empName}</div>` : ''}</td>
        <td>${r.hours} ชม.</td>

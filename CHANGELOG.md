@@ -6,6 +6,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.66] — 2026-07-16 (OT half-hour intervals)
+
+**UX — OT request form snaps to 30-minute intervals + live duration preview**
+
+### Context
+Users needed clearer way to request OT in typical 30-min or 1-hour blocks. Before: `<input type="time">` allowed any minute value (09:07, 10:13 etc.) — easy to fat-finger. No visual confirmation of computed hours until submission.
+
+### Changed
+- `showOTForm()` — `otStart` + `otEnd` inputs: added `step="1800"` (30-minute snap) + `oninput="updateOTDurationPreview()"`
+- Added live preview box below time pickers: shows `"X ชั่วโมง Y นาที (= Z.Z ชม.)"` as user picks times
+- New function `updateOTDurationPreview()` — computes duration, formats human-friendly, handles cross-midnight
+
+### Not changed
+- `submitOT()` — hours computation unchanged (still `Math.round(hours * 10) / 10`)
+- Existing OT records — untouched, orphan fractional hours (1.3, 2.7 etc.) preserved
+- Data schema, DB fields, payslip math — all identical
+- Existing approved/pending OT requests — no impact, kept as-is per user requirement
+
+### DB Impact
+🟢 **Zero** — UI-only change. No migration, no field additions, no data touches.
+
+### Verification
+1. Console: `v1.4.66`
+2. Open "ขอทำ OT" form → time inputs now snap to :00 / :30
+3. Pick 09:00 → 10:30 → preview shows "1 ชั่วโมง 30 นาที (= 1.5 ชม.)"
+4. Pick 14:00 → 14:30 → preview shows "30 นาที (= 0.5 ชม.)"
+5. Existing approved OT requests unchanged in list
+
+### Rollback
+Vercel promote v1.4.65 (~10 sec). Zero data risk.
+
+---
+
 ## [1.4.65] — 2026-07-08 (per-employee late threshold)
 
 **FEATURE — Custom start time per employee + configurable grace period (per ADR-0003)**

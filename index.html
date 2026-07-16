@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.65</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.66</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.65';
+const APP_VERSION = '1.4.66';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -3192,12 +3192,16 @@ function showOTForm(editId) {
  <div class="form-row">
  <div class="form-group">
  <label>เวลาเริ่ม *</label>
- <input type="time" id="otStart" required value="${editReq?.startTime || ''}">
+ <input type="time" id="otStart" required value="${editReq?.startTime || ''}" step="1800" oninput="updateOTDurationPreview()">
  </div>
  <div class="form-group">
  <label>เวลาสิ้นสุด *</label>
- <input type="time" id="otEnd" required value="${editReq?.endTime || ''}">
+ <input type="time" id="otEnd" required value="${editReq?.endTime || ''}" step="1800" oninput="updateOTDurationPreview()">
  </div>
+ </div>
+ <div id="otDurationPreview" style="padding:10px 14px;background:var(--gray-100);border-radius:8px;font-size:13px;color:var(--gray-700);margin-bottom:12px;">
+ <span style="color:var(--gray-500);">ระยะเวลา:</span> <strong id="otDurationText">— เลือกเวลาเริ่ม + สิ้นสุด</strong>
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">💡 คลิกเลือกทีละ 30 นาที (v1.4.66) — เช่น 09:00, 09:30, 10:00</div>
  </div>
  <div class="form-group">
  <label>เหตุผลการทำ OT *</label>
@@ -3216,6 +3220,29 @@ function showOTForm(editId) {
  <button class="btn btn-primary" onclick="document.getElementById('otForm').requestSubmit()">${editReq ? ' บันทึกการแก้ไข' : 'ส่งคำขอ'}</button>
  `;
  showModal(editReq ? 'แก้ไขคำขอ OT' : 'ขอทำ OT', body, footer);
+ setTimeout(updateOTDurationPreview, 50);
+}
+
+function updateOTDurationPreview() {
+ const startEl = document.getElementById('otStart');
+ const endEl = document.getElementById('otEnd');
+ const outEl = document.getElementById('otDurationText');
+ if (!startEl || !endEl || !outEl) return;
+ const s = startEl.value, e = endEl.value;
+ if (!s || !e) { outEl.textContent = '— เลือกเวลาเริ่ม + สิ้นสุด'; outEl.style.color = 'var(--gray-500)'; return; }
+ const [sh, sm] = s.split(':').map(Number);
+ const [eh, em] = e.split(':').map(Number);
+ let mins = (eh * 60 + em) - (sh * 60 + sm);
+ if (mins < 0) mins += 24 * 60;
+ if (mins === 0) { outEl.textContent = '⚠️ เวลาเริ่ม = เวลาสิ้นสุด'; outEl.style.color = 'var(--danger, #dc2626)'; return; }
+ const hours = mins / 60;
+ const hh = Math.floor(mins / 60);
+ const mm = mins % 60;
+ const humanParts = [];
+ if (hh > 0) humanParts.push(`${hh} ชั่วโมง`);
+ if (mm > 0) humanParts.push(`${mm} นาที`);
+ outEl.textContent = `${humanParts.join(' ')} (= ${hours.toFixed(1)} ชม.)`;
+ outEl.style.color = 'var(--gray-800)';
 }
 
 async function submitOT(e, editId) {

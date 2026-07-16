@@ -6,6 +6,47 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.62] — 2026-07-08 (UI fix)
+
+**BUG FIX — Policy Acknowledgement card not clickable to view content**
+
+### Bug Report
+User reported that in ประกาศ & นโยบาย page, the POLICY ACKNOWLEDGEMENT card ("ระเบียบการขอ OT") cannot be clicked to view content. Only the title + "ครบ" badge shows.
+
+### Root Cause
+Line 11146 policy card `<div>` had no `onclick` handler — unlike the news card (line 11135) which had `onclick="showAnnouncementDetail(...)"`. Users could:
+- ✅ Click "รับทราบ" button (if not yet acked)
+- ❌ **No way to view content** after acknowledgement
+
+### Fix
+Added `onclick="showAnnouncementDetail('${p.id}')"` + `cursor:pointer` + `title` tooltip to the card wrapper. Also added `event.stopPropagation()` on the "รับทราบ" button so clicking it doesn't also open the detail modal.
+
+`showAnnouncementDetail()` (line 11194) already exists and shows content in modal — reused as-is.
+
+### Files Changed
+- `index.html` — 3 patches (2 version markers + 1 policy card block)
+
+### Data Impact
+🟢 **Zero** — pure UI click handler addition. `announcements`, `ackTracking` untouched.
+
+### Verification
+1. Hard reload → Console `v1.4.62`
+2. เมนู "ประกาศ & นโยบาย"
+3. คลิก card POLICY ACKNOWLEDGEMENT (เช่น "ระเบียบการขอ OT")
+4. ✅ Modal เปิด → เห็นเนื้อหาเต็ม
+5. คลิกปุ่ม "รับทราบ" (ถ้ายังไม่ ack) → ack ทำงาน + modal ไม่เปิด (stopPropagation)
+
+### Rollback
+- Git tag v1.4.61
+- Vercel promote v1.4.61 (10 sec)
+
+### ⚠️ Still Postponed
+- v1.4.50 (physical cert workflow)
+- Day 4 (H1 RLS Lockdown)
+- v1.5.x per-employee shift-based OT holiday detection
+
+---
+
 ## [1.4.61] — 2026-07-08 (CSV export polish)
 
 **FEATURE — OT report CSV: data-driven export with corrected columns**

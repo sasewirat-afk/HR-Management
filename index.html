@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.63</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.64</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.63';
+const APP_VERSION = '1.4.64';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -4233,7 +4233,8 @@ function renderShiftSchedule() {
  const isWeekend = dow === 0 || dow === 6;
  const isHoliday = holidays.has(ds);
  const dayNames = ['อา','จ','อ','พ','พฤ','ศ','ส'];
- return `<th style="padding:4px 2px;text-align:center;width:34px;min-width:34px;background:${isHoliday ? '#dc2626' : isWeekend ? '#475569' : '#1F4E79'};color:white;font-size:11px;border-bottom:1px solid rgba(255,255,255,0.2);">
+ // v1.4.64: clickable date header opens bulkSetColumnShift modal (Q4 B)
+ return `<th onclick="bulkSetColumnShift('${ds}')" title="คลิกเพื่อตั้งกะทั้งคอลัมน์ (${d})" style="padding:4px 2px;text-align:center;width:34px;min-width:34px;background:${isHoliday ? '#dc2626' : isWeekend ? '#475569' : '#1F4E79'};color:white;font-size:11px;border-bottom:1px solid rgba(255,255,255,0.2);cursor:pointer;">
  <div>${d}</div>
  <div style="font-size:9px;opacity:0.8;">${dayNames[dow]}</div>
  </th>`;
@@ -4690,6 +4691,79 @@ function fillAllShifts(type) {
  });
  DB.save('shifts', shifts);
  toast(`ตั้งกะให้ทีม ${team.length} คนสำเร็จ`);
+ renderShiftSchedule();
+}
+
+// v1.4.64: Column bulk edit — click date header → set all team for that date (Q4 B)
+// Reuses same DB pattern as fillWeekends: iterate team, upsert shift record, single DB.save.
+function bulkSetColumnShift(dateStr) {
+ const role = currentUser.role;
+ const emps = DB.load('employees').filter(e => e.active);
+ const team = role === 'admin' ? emps : emps.filter(e => e.managerId === currentUser.id);
+ if (team.length === 0) { toast('ไม่มีลูกทีม', 'error'); return; }
+ const shifts = DB.load('shifts', []);
+ const teamIds = new Set(team.map(t => t.id));
+ const existingCount = shifts.filter(s => s.date === dateStr && teamIds.has(s.employeeId)).length;
+
+ const body = `
+ <div style="margin-bottom:14px;font-size:14px;line-height:1.6;">
+ <div><strong>วันที่:</strong> ${formatDate(dateStr)}</div>
+ <div><strong>ทีม:</strong> ${team.length} คน${existingCount > 0 ? ` <span style="color:var(--warning);">(มีกะอยู่แล้ว ${existingCount} คน — จะถูกทับ)</span>` : ''}</div>
+ </div>
+ <div style="margin-bottom:12px;font-size:13px;color:var(--gray-600);">เลือกกะที่ต้องการตั้งให้ทุกคนในทีม:</div>
+ <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:14px;">
+ ${Object.entries(SHIFT_TYPES).map(([k,v]) => `
+ <button class="btn" style="background:${v.bg};color:${v.color};font-weight:700;padding:14px 12px;border:1px solid ${v.color}55;font-size:13px;" onclick="applyColumnShift('${dateStr}','${k}')">${v.emoji} ${v.label}</button>
+ `).join('')}
+ </div>
+ <hr style="margin:12px 0;border:none;border-top:1px solid var(--gray-200);">
+ <div style="display:flex;justify-content:flex-end;">
+ <button class="btn btn-danger btn-sm" onclick="clearColumnShift('${dateStr}')">🗑️ ลบกะทั้งคอลัมน์วันนี้</button>
+ </div>
+ `;
+ showModal(`ตั้งกะทั้งคอลัมน์ — ${formatDate(dateStr)}`, body, `<button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button>`);
+}
+
+function applyColumnShift(dateStr, type) {
+ const role = currentUser.role;
+ const emps = DB.load('employees').filter(e => e.active);
+ const team = role === 'admin' ? emps : emps.filter(e => e.managerId === currentUser.id);
+ const label = SHIFT_TYPES[type]?.label || type;
+ if (!confirm(`ยืนยันตั้ง "${label}" สำหรับ ${team.length} คน วันที่ ${formatDate(dateStr)}?`)) return;
+
+ const shifts = DB.load('shifts', []);
+ let count = 0;
+ team.forEach(emp => {
+ const idx = shifts.findIndex(s => s.employeeId === emp.id && s.date === dateStr);
+ const data = {
+ id: idx >= 0 ? shifts[idx].id : uid('SH'),
+ employeeId: emp.id, date: dateStr, type,
+ updatedBy: currentUser.id,
+ updatedAt: new Date().toISOString()
+ };
+ if (idx >= 0) shifts[idx] = data;
+ else shifts.push(data);
+ count++;
+ });
+ DB.save('shifts', shifts);
+ toast(`ตั้ง "${label}" ${count} คนสำเร็จ`);
+ closeModal();
+ renderShiftSchedule();
+}
+
+function clearColumnShift(dateStr) {
+ const role = currentUser.role;
+ const emps = DB.load('employees').filter(e => e.active);
+ const team = role === 'admin' ? emps : emps.filter(e => e.managerId === currentUser.id);
+ if (!confirm(`ยืนยันลบกะทั้งหมดของ ${team.length} คน วันที่ ${formatDate(dateStr)}?`)) return;
+
+ const shifts = DB.load('shifts', []);
+ const teamIds = new Set(team.map(t => t.id));
+ const filtered = shifts.filter(s => !(s.date === dateStr && teamIds.has(s.employeeId)));
+ const removed = shifts.length - filtered.length;
+ DB.save('shifts', filtered);
+ toast(`ลบกะ ${removed} รายการสำเร็จ`);
+ closeModal();
  renderShiftSchedule();
 }
 

@@ -6,6 +6,68 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.64] — 2026-07-08 (shift bulk edit)
+
+**FEATURE — Column bulk shift edit (click date header)**
+
+### Scope (grill Q4 B)
+Setting shifts one cell at a time was tedious for 131 employees × 31 days. Added column-level bulk edit: click any date header → modal appears with shift type picker + option to clear that column.
+
+### Behavior
+- Click date header (e.g., "8 พ") → modal opens
+- Modal shows: date, team size, existing shift count warning
+- Shift picker: 7 buttons (M/A/N/W/O/L/C) with their colors + emojis
+- "🗑️ ลบกะทั้งคอลัมน์" button at bottom
+- Click a shift type → confirm dialog → applies to all team members for that date
+- Single `DB.save('shifts', shifts)` per action (efficient)
+
+### New Functions
+- `bulkSetColumnShift(dateStr)` — opens modal
+- `applyColumnShift(dateStr, type)` — writes shifts for team
+- `clearColumnShift(dateStr)` — removes all team shifts for that date
+
+### Team Scope
+Same as existing bulk ops (`fillWeekends`, `fillAllShifts`, `clearAllShifts`):
+- **Admin** → all active employees
+- **Manager** → direct reports (`emp.managerId === currentUser.id`)
+
+### Files Changed
+- `index.html` — 4 patches (2 version markers + 3 new functions + 1 header onclick)
+- `CHANGELOG.md`
+
+### Data Impact
+🟢 **Same DB pattern as existing bulk ops** — proven safe:
+- Writes only to `shifts` key
+- Same fields (`id`, `employeeId`, `date`, `type`, `updatedBy`, `updatedAt`)
+- Upsert semantics (preserves ID if row exists)
+- Team-scoped filter (never touches other teams)
+- User-triggered only (modal → confirm → save)
+- No schema changes, no new keys
+
+### Verification
+1. Hard reload → Console `v1.4.64`
+2. Navigate to ตารางลงกะงาน
+3. Click any date header (e.g., "15 อ")
+4. ✅ Modal opens showing date + team count + shift picker
+5. Click "หยุด (O)" → confirm dialog → all team members set to O for that date
+6. ✅ Grid updates, toast confirms count
+7. Re-open modal → click "🗑️ ลบกะทั้งคอลัมน์วันนี้" → confirm → all shifts for that date removed
+8. Manager role: only affects their direct reports
+
+### Rollback
+- Git tag v1.4.63
+- Vercel promote v1.4.63 (10 sec)
+- Non-destructive — same DB semantics as existing bulk ops
+
+### Backlog (still)
+- v1.4.65: Custom start times + per-employee grace (needs ADR-0003)
+- v1.4.50: Physical cert workflow
+
+### ⚠️ Still Postponed
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.63] — 2026-07-08 (approval UX)
 
 **FEATURE — Approval Center: bulk actions + larger buttons + sticky bar**

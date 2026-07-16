@@ -6,6 +6,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.61] — 2026-07-08 (CSV export polish)
+
+**FEATURE — OT report CSV: data-driven export with corrected columns**
+
+### Request
+User asked to fix the OT report CSV export:
+1. `วันที่ขอ` currently shows garbled text like "15 ก.ค. 2569 1 ครั้ง" (date concatenated with edit-count display)
+2. Missing `รหัสพนักงาน` column
+3. Missing `แผนก` column
+4. `การจัดการ` column (with edit/delete buttons) shouldn't be in CSV
+
+### Root Cause
+`exportCSV(type)` scraped `document.getElementById('reportTable')` DOM directly — so any concatenated cells (date + `<br><small>edit count`) and any button labels became CSV cells. Fine as a generic fallback but wrong for structured reports.
+
+### Fix
+Added `exportOTReportCSV()` — dedicated data-driven exporter for OT report. Pulls from `otRequests` respecting the same scope + payroll month filter as the rendered view.
+
+**Column order** (per user):
+| # | Column | Source |
+|---|---|---|
+| 1 | วันที่ขอ | `formatDate(r.requestDate)` |
+| 2 | วันที่ทำ OT | `formatDate(r.date)` |
+| 3 | รหัสพนักงาน | `emp.id` |
+| 4 | ชื่อพนักงาน | `emp.firstName + emp.lastName` |
+| 5 | แผนก | `emp.department` |
+| 6 | เวลา | `startTime-endTime` |
+| 7 | ชม. | `r.hours` |
+| 8 | เหตุผล | `r.reason` |
+| 9 | สถานะ | Thai label mapping |
+
+Filename: `report_ot_${monthStr}_${today()}.csv` (includes payroll month for clarity).
+
+`exportCSV(type)` still handles other report types (leave, late, etc.) via DOM scrape — only `type === 'ot-report'` routes to the new function.
+
+### Files Changed
+- `index.html` — 3 patches (2 version markers + 1 exportCSV branch + new function)
+
+### Data Impact
+🟢 **Zero** — pure read/export change. `otRequests`, `employees`, settings all untouched.
+
+### Verification
+1. Hard reload → Console `v1.4.61`
+2. รายงาน → รายงาน OT → Export CSV
+3. Open CSV → verify 9 columns match spec
+4. `วันที่ขอ` = clean Thai date (no "N ครั้ง" tail)
+5. `รหัสพนักงาน` + `แผนก` present
+6. No "การจัดการ" / "แก้ไข ลบ" text
+7. Row count matches filter (`otMonthOptions` currently selected)
+
+### Rollback
+- Git tag v1.4.60
+- Vercel promote v1.4.60 (10 sec)
+
+### ⚠️ Still Postponed
+- v1.4.50 (physical cert workflow)
+- Day 4 (H1 RLS Lockdown)
+- v1.5.x per-employee shift-based OT holiday detection
+
+---
+
 ## [1.4.60] — 2026-07-08 (display fix)
 
 **BUG FIX — OT type badge showed hardcoded ×3 / ×1.5 regardless of settings**

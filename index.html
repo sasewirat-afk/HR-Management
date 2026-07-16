@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.60</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.61</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.60';
+const APP_VERSION = '1.4.61';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -9460,6 +9460,8 @@ function exportLateSummaryXLSX() {
 }
 
 function exportCSV(type) {
+ // v1.4.61: type-specific data-driven exporters for cleaner output
+ if (type === 'ot-report') return exportOTReportCSV();
  const table = document.getElementById('reportTable');
  if (!table) return;
  let csv = '﻿'; // BOM for Thai
@@ -9473,6 +9475,47 @@ function exportCSV(type) {
  a.download = `report_${type}_${today()}.csv`;
  a.click();
  toast('Export สำเร็จ!');
+}
+
+// v1.4.61: Dedicated OT report CSV — data-driven (no DOM scraping)
+// Columns: วันที่ขอ | วันที่ทำ OT | รหัสพนักงาน | ชื่อพนักงาน | แผนก | เวลา | ชม. | เหตุผล | สถานะ
+// (removed "การจัดการ" per user request — action buttons don't belong in CSV)
+function exportOTReportCSV() {
+ // Match the same scope as the OT report render (line 8454+): scope + payroll month
+ const scopeIds = _reportScopeEmpIds();
+ const monthStr = _otReportMonth || getPayrollMonth(today());
+ const rows = DB.load('otRequests', [])
+ .filter(r => scopeIds.has(r.employeeId))
+ .filter(r => getPayrollMonth(r.date) === monthStr)
+ .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+ const statusMap = { pending: 'รออนุมัติ', approved: 'อนุมัติแล้ว', rejected: 'ไม่อนุมัติ' };
+ const header = ['วันที่ขอ','วันที่ทำ OT','รหัสพนักงาน','ชื่อพนักงาน','แผนก','เวลา','ชม.','เหตุผล','สถานะ'];
+ const _csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""').trim()}"`;
+ let csv = '﻿'; // BOM for Thai/Excel
+ csv += header.map(_csvCell).join(',') + '\n';
+ rows.forEach(r => {
+ const e = getEmployee(r.employeeId);
+ const row = [
+ formatDate(r.requestDate), // 1. วันที่ขอ (formatted)
+ formatDate(r.date), // 2. วันที่ทำ OT (formatted)
+ e ? e.id : (r.employeeId || ''), // 3. รหัสพนักงาน
+ e ? `${e.firstName || ''} ${e.lastName || ''}`.trim() : '', // 4. ชื่อพนักงาน
+ e ? (e.department || '') : '', // 5. แผนก
+ `${r.startTime || ''}-${r.endTime || ''}`, // 6. เวลา
+ r.hours ?? '', // 7. ชม.
+ r.reason || '', // 8. เหตุผล
+ statusMap[r.status] || r.status || '', // 9. สถานะ (Thai label)
+ ];
+ csv += row.map(_csvCell).join(',') + '\n';
+ });
+
+ const blob = new Blob([csv], {type: 'text/csv;charset=utf-8'});
+ const a = document.createElement('a');
+ a.href = URL.createObjectURL(blob);
+ a.download = `report_ot_${monthStr}_${today()}.csv`;
+ a.click();
+ toast(`Export ${rows.length} รายการสำเร็จ`);
 }
 
 // v1.4.25: Admin delete OT request

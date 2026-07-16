@@ -6,6 +6,86 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.65] — 2026-07-08 (per-employee late threshold)
+
+**FEATURE — Custom start time per employee + configurable grace period (per ADR-0003)**
+
+### Context
+Employees like บอย (Habita Kitchen, starts 10:00) were permanently marked late under the single company-wide `lateThreshold: 09:01`. This under-paid them despite legitimate schedules. Two prior workarounds (setting `otMultiplierHoliday=1.5`, marking as `exemptFromAttendance`) masked but didn't solve the root cause.
+
+Grill session on 8 Jul evening (Q2.1/Q2.2/Q3.1) landed on:
+- Q2.1 A: One default start time per employee (per-shift override deferred)
+- Q2.2 C: Set in the Employee edit modal (not per-cell)
+- Q3.1 A: Single global grace period (not per-employee)
+
+Full decision in `docs/adr/0003-per-employee-late-threshold.md`.
+
+### Data Model — ADDITIVE ONLY
+- `employee.customStartTime` — optional `HH:MM`. When set, this emp's late threshold shifts.
+- `settings.defaultGracePeriodMinutes` — number, default `16` (matches current 08:45→09:01 gap so existing behavior is preserved exactly).
+
+### New Helpers
+- `getLateThresholdForEmployee(emp, settings)` — returns HH:MM. If `emp.customStartTime` set → adds grace; else → returns `settings.lateThreshold`.
+- `migrateGracePeriod_v1_4_65()` — idempotent via `_migrationsRun`. Adds `defaultGracePeriodMinutes: 16` to settings if missing. **Does not touch any employee record** — `customStartTime` is opt-in per emp.
+
+### Consumers Updated
+- `calculatePaySlip` (line ~7549): reads `getLateThresholdForEmployee(emp, settings)` instead of `settings.lateThreshold`
+- `resolveAttendanceStatus` (ADR-0002): same replacement — status buckets (มาตรงเวลา / มาหลังเวลา / มาสาย) now respect per-emp threshold
+- Employee edit modal: added "เวลาเริ่มงาน (custom)" input with explanation
+- Settings page: added "ระยะเวลาผ่อนผัน (นาที)" input alongside existing time settings
+
+### Files Changed
+- `index.html` — ~10 patches (2 version markers + helper + migration + call site updates × 2 + UI × 2 + save handler × 2 + seed)
+- `CHANGELOG.md`
+- `CONTEXT.md` — added Custom Start Time / Grace Period / Late Threshold to Attendance Domain
+- **NEW** `docs/adr/0003-per-employee-late-threshold.md`
+
+### Behavioral Impact
+| Case | Before | After |
+|---|---|---|
+| Emp WITHOUT customStartTime | Uses `lateThreshold: 09:01` | **Unchanged — same threshold, same payslip** |
+| Emp WITH customStartTime='10:00' | Marked late at 09:01 (wrong) | Marked late at 10:16 (correct) |
+
+Zero regression risk on existing ~131 employees — none has `customStartTime` yet.
+
+### DB Safety Analysis
+| Check | Result |
+|---|---|
+| Destructive ops | ❌ None (only append fields) |
+| Backward compat | ✅ Old records + old versions work as before |
+| Migration idempotent | ✅ Guarded by `_migrationsRun.includes('v1.4.65-grace')` |
+| Cross-device sync | ✅ Additive field — old versions ignore |
+| Rollback safe | ✅ Vercel promote v1.4.64; new fields become dormant |
+| Payroll unchanged for existing setup | ✅ No emp has customStartTime yet |
+
+**Total DB risk: 🟢 LOW — same pattern as v1.4.54 payrollCutoffDay migration**
+
+### Verification
+1. Hard reload → Console `v1.4.65`
+2. Console: `[migrate v1.4.65] Added settings.defaultGracePeriodMinutes = 16` (first time only)
+3. Console: `DB.load('settings').defaultGracePeriodMinutes` = `16`
+4. Console: `getLateThresholdForEmployee({customStartTime: '10:00'}, {defaultGracePeriodMinutes: 16})` = `"10:16"`
+5. Console: `getLateThresholdForEmployee({}, {lateThreshold: '09:01'})` = `"09:01"` (fallback)
+6. Settings → เวลาทำงาน section shows new "ระยะเวลาผ่อนผัน (นาที)" input = 16
+7. Edit any employee → new "⏰ ตารางเวลาส่วนตัว" section with time input
+8. Sample: set บอย's `customStartTime = '10:00'` → save → next payslip late detection uses 10:16
+9. Data integrity: emp count unchanged, hashed count unchanged
+
+### Rollback
+- Git tag v1.4.64
+- Vercel promote v1.4.64 (10 sec)
+- Non-destructive — new fields become orphans (ignored by old code)
+
+### Backlog Cleared
+- v1.4.60 workaround (otMultiplierHoliday=1.5) can be reverted after Admin sets customStartTime on affected employees
+- Per-employee grace (deferred by Q3.1 A) can be added later without ADR change
+
+### ⚠️ Still Postponed
+- v1.4.50 (physical cert workflow)
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.64] — 2026-07-08 (shift bulk edit)
 
 **FEATURE — Column bulk shift edit (click date header)**

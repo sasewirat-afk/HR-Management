@@ -204,6 +204,32 @@ The `ภาพรวม` sheet is **not** split (Q9 A) — the daily overview st
 
 ---
 
+## Custom Start Time
+
+An optional per-employee working-day start time (`emp.customStartTime`, string `HH:MM`). When present, this employee is on a non-default schedule (e.g. Habita Kitchen at 10:00, Cafe at 14:00). Absent field = employee uses `settings.workStartTime` (default 08:45).
+
+Set via the Employee edit modal by Admin. Not settable in the shift grid — the grid uses `emp.customStartTime` as the base but per-shift override is deferred to a future ADR.
+
+---
+
+## Grace Period
+
+The number of minutes after the working-day start before a scan is considered late. Stored as `settings.defaultGracePeriodMinutes` (default `16`, matching the existing `workStart=08:45 / lateThreshold=09:01` gap).
+
+Company-wide — not per-employee. Change once, applies to all employees who use `customStartTime`. Employees without `customStartTime` continue to use `settings.lateThreshold` directly (backward compat).
+
+---
+
+## Late Threshold
+
+The `HH:MM` at or after which a scan is counted as late. Derived by `getLateThresholdForEmployee(emp, settings)`:
+- If `emp.customStartTime` is set → `addMinutes(emp.customStartTime, settings.defaultGracePeriodMinutes)`
+- Else → `settings.lateThreshold`
+
+All late detection (payroll, attendance report, resolveAttendanceStatus) MUST route through this helper. Direct reads of `settings.lateThreshold` from calculation code are a bug — they miss the per-employee case.
+
+---
+
 ## Field Work Retroactive Rules
 
 - **Q15 (Reject)**: If a previously-approved field work is rejected after the date has passed, subsequent report renders re-classify the day. If the day already contributed to a saved paySlip, that paySlip is not silently mutated; Admin must regenerate.

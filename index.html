@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.64</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.65</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.64';
+const APP_VERSION = '1.4.65';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1534,6 +1534,44 @@ function migrateLeaveQuota_v1_4_14() {
 }
 
 
+// v1.4.65 (ADR-0003): Add settings.defaultGracePeriodMinutes (default 16 = current 08:45→09:01 gap)
+// Idempotent — runs once per install, tracked in settings._migrationsRun.
+// Does NOT touch existing lateThreshold/workStart (backward compat).
+function migrateGracePeriod_v1_4_65() {
+ const s = DB.load('settings', null);
+ if (!s) return;
+ if (s._migrationsRun && s._migrationsRun.includes('v1.4.65-grace')) return;
+ let changed = false;
+ if (s.defaultGracePeriodMinutes === undefined) {
+ s.defaultGracePeriodMinutes = 16;
+ changed = true;
+ console.log('[migrate v1.4.65] Added settings.defaultGracePeriodMinutes = 16 (matches current 08:45→09:01 gap)');
+ }
+ s._migrationsRun = [...(s._migrationsRun || []), 'v1.4.65-grace'];
+ DB.save('settings', s);
+ if (changed) console.log('[migrate v1.4.65] Grace period settings applied');
+}
+
+// v1.4.65 (ADR-0003): Derive the effective late threshold for a given employee.
+// Employees with customStartTime → custom late threshold based on grace period.
+// Employees without → falls back to global settings.lateThreshold (existing behavior).
+// ALL late-detection code paths MUST call this helper. Direct reads of settings.lateThreshold are a bug.
+function getLateThresholdForEmployee(emp, settings) {
+ settings = settings || DB.load('settings');
+ const globalLate = settings.lateThreshold || '09:01';
+ if (!emp || !emp.customStartTime) return globalLate;
+ // Parse HH:MM
+ const m = /^(\d{1,2}):(\d{2})$/.exec(emp.customStartTime);
+ if (!m) return globalLate; // invalid format → safe fallback
+ const grace = (typeof settings.defaultGracePeriodMinutes === 'number' && settings.defaultGracePeriodMinutes >= 0)
+ ? settings.defaultGracePeriodMinutes
+ : 16;
+ const totalMin = (Number(m[1]) * 60) + Number(m[2]) + grace;
+ const h = Math.floor(totalMin / 60) % 24;
+ const mm = totalMin % 60;
+ return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
 // v1.4.55: Set countInAttendance=true for admin employee 430806001
 // (per Q12 A + exception: role='admin' excluded by default, EXCEPT this user who scans)
 // Idempotent — runs once per install, tracked in settings._migrationsRun.
@@ -1762,6 +1800,7 @@ function seedData() {
  backDatedLeaveMaxDays: 7, // ห้ามยื่นลาย้อนหลังเกิน (วัน)
  payrollCutoffDay: 21, // v1.4.48: วันตัดรอบเงินเดือน — events วันที่ > cutoff → คิดในรอบเดือนถัดไป (leave quota ยังนับปีปฏิทิน)
  slipMonthDefault: 'calendar', // v1.4.54: 'calendar' or 'payroll' — how _slipMonth is defaulted on render
+ defaultGracePeriodMinutes: 16, // v1.4.65: grace period after emp.customStartTime for late detection (default 16 = 08:45→09:01 gap)
  autoAbsentLateMinutes: 240, // มาสายเกิน X นาที จาก lateThreshold → นับเป็นขาดงานอัตโนมัติ
  timeCertEnabled: true, // เปิดใช้งานฟังก์ชั่นรับรองเวลา (Time Certification)
  // v1.4.34: Report letter defaults (แก้ผ่าน Settings > Console: DB.save('settings', {...s, reportRecipientName:'...',...}))
@@ -1979,8 +2018,9 @@ function formatSlipMonth(slipMonth) {
 function resolveAttendanceStatus(emp, dateStr, ctx) {
  if (!emp || !dateStr) return 'ขาดงาน';
  const settings = ctx?.settings || DB.load('settings');
- const workStart = settings.workStartTime || '08:45';
- const lateThreshold = settings.lateThreshold || '09:01';
+ const workStart = emp.customStartTime || settings.workStartTime || '08:45';
+ // v1.4.65 (ADR-0003): per-employee late threshold when customStartTime is set
+ const lateThreshold = getLateThresholdForEmployee(emp, settings);
  const companyHolidays = ctx?.companyHolidays || new Set(settings.companyHolidays || []);
 
  // 1. Day Off — shift schedule OR weekend/holiday
@@ -5716,6 +5756,17 @@ function showEmployeeForm(id) {
  <label class="ios-toggle"><input type="checkbox" id="empExemptAttendance" ${emp?.exemptFromAttendance ? 'checked' : ''}><span>ละเว้นการพิจารณาเวลาเข้า-ออก (ไม่ต้องสแกน · ไม่ขึ้นในรายงานเข้างาน) <small style="color:var(--gray-500);">— สำหรับ CEO/คนสวน/แม่บ้าน ฯลฯ</small></span></label>
  </div>
  <hr style="margin:12px 0;border:none;border-top:1px dashed var(--gray-300);">
+ <div style="font-size:12px;color:var(--gray-500);margin-bottom:6px;">⏰ ตารางเวลาส่วนตัว (v1.4.65 · ADR-0003)</div>
+ <div class="form-group" style="margin-top:6px;">
+ <label>เวลาเริ่มงาน (custom) — ปล่อยว่างถ้าใช้เวลามาตรฐาน</label>
+ <input type="time" id="empCustomStartTime" value="${emp?.customStartTime || ''}" placeholder="เช่น 10:00">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
+ ถ้าตั้งเวลา → พนักงานคนนี้จะเริ่มงานตามเวลานี้ + grace period<br>
+ ตัวอย่าง: ตั้ง 10:00 + grace 16 นาที → มาสายที่ 10:16 (แทน 09:01 มาตรฐาน)<br>
+ <span style="color:var(--gray-500);">📌 grace period ตั้งใน หน้า "ตั้งค่า → เวลาทำงาน"</span>
+ </div>
+ </div>
+ <hr style="margin:12px 0;border:none;border-top:1px dashed var(--gray-300);">
  <div style="font-size:12px;color:var(--gray-500);margin-bottom:6px;">🔐 สิทธิ์พิเศษ (Attendance Module)</div>
  <div style="margin-top:6px;">
  <label class="ios-toggle"><input type="checkbox" id="empCanUploadAttendance" ${emp?.canUploadAttendance ? 'checked' : ''}><span>อัปโหลดเวลาเข้างานได้ (สิทธิ์เหมือน Admin)</span></label>
@@ -5795,6 +5846,8 @@ async function submitEmployee(e, editId) {
  isMaintenance: document.getElementById('empMaintenance')?.checked || false,
  isStationeryAdmin: document.getElementById('empStationeryAdmin')?.checked || false,
  exemptFromLateDeduction: document.getElementById('empExemptLate')?.checked || false,
+ // v1.4.65: optional custom start time (empty string → undefined, deletes field)
+ customStartTime: (document.getElementById('empCustomStartTime')?.value || '').trim() || undefined,
  exemptFromAttendance: document.getElementById('empExemptAttendance')?.checked || false,
  canUploadAttendance: document.getElementById('empCanUploadAttendance')?.checked || false,
  canViewAttendanceReport: document.getElementById('empCanViewAttendanceReport')?.checked || false,
@@ -7735,7 +7788,8 @@ function calculatePaySlip(employeeId, year, month) {
 
  const settings = DB.load('settings');
  const monthStr = `${year}-${String(month).padStart(2,'0')}`;
- const lateThreshold = settings.lateThreshold || '09:01';
+ // v1.4.65 (ADR-0003): use per-employee threshold when emp.customStartTime is set
+ const lateThreshold = getLateThresholdForEmployee(emp, settings);
  const otMultiplier = settings.otMultiplier || 1.5;
  const otMultiplierHoliday = settings.otMultiplierHoliday || 3;
  const companyHolidays = new Set(settings.companyHolidays || []);
@@ -10021,6 +10075,7 @@ function renderSettings() {
  <div class="form-row">
  <div class="form-group"><label>เวลาเริ่มงาน (เกินถือว่าหลังเวลา)</label><input type="time" id="qWorkStart" value="${s.workStartTime || '08:45'}"></div>
  <div class="form-group"><label>เวลาที่ถือว่ามาสาย</label><input type="time" id="qLateThreshold" value="${s.lateThreshold || '09:01'}"></div>
+ <div class="form-group"><label>ระยะเวลาผ่อนผัน — Grace Period (นาที) <small style="color:var(--gray-500);">(v1.4.65)</small></label><input type="number" id="qGraceMinutes" min="0" max="120" step="1" value="${s.defaultGracePeriodMinutes ?? 16}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใช้กับพนักงานที่มี custom start time (เช่น บอย 10:00) → ปล่อยผ่านได้ X นาที ก่อนนับสาย · Default 16 นาที (= 08:45→09:01)</div></div>
  </div>
  <div class="form-row">
  <div class="form-group"><label>OT Multiplier — วันทำการปกติ (เท่า)</label><input type="number" step="0.1" min="1" id="qOtMult" value="${s.otMultiplier ?? 1.5}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">มาตรฐานกฎหมายแรงงานไทย: 1.5× ของค่าจ้างต่อชั่วโมง</div></div>
@@ -10320,6 +10375,9 @@ function saveSettings() {
  };
  s.workStartTime = document.getElementById('qWorkStart').value;
  s.lateThreshold = document.getElementById('qLateThreshold').value;
+ // v1.4.65 (ADR-0003): defaultGracePeriodMinutes for per-employee customStartTime
+ const graceInput = parseInt(document.getElementById('qGraceMinutes')?.value);
+ s.defaultGracePeriodMinutes = (Number.isFinite(graceInput) && graceInput >= 0 && graceInput <= 120) ? graceInput : 16;
  s.diligenceLateThreshold = s.lateThreshold;
  s.otMultiplier = parseFloat(document.getElementById('qOtMult').value);
  s.otMultiplierHoliday = parseFloat(document.getElementById('qOtMultHoliday').value);
@@ -11620,6 +11678,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  migrateLeaveQuota_v1_4_14();
  migratePayrollFields_v1_4_54();
  migrateAttendanceCountability_v1_4_55();
+ migrateGracePeriod_v1_4_65();
  migrateAttendanceExempt_v1_4_20();
  (function checkVersionForceSync() {
  const lastVer = localStorage.getItem('hr__lastVersion');

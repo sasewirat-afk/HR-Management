@@ -6,6 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.68] — 2026-07-16 (OT half-hour — hard-locked dropdown)
+
+**UX — Replace time input with select dropdown (only 30-min values)**
+
+### Problem
+v1.4.67's `Math.round` snap approach felt jarring — user picks 01:32, sees value auto-change to 01:30 via toast. User wanted zero ambiguity: only 30-min options should be available in the first place.
+
+### Fix
+Replaced `<input type="time">` with `<select>` populated by `renderHalfHourOptions()`:
+- 48 options: `00:00, 00:30, 01:00, 01:30, ..., 23:30`
+- Impossible to pick arbitrary values — dropdown enforces
+- Removed `snapTimeToHalfHour()` — no longer needed
+
+### Backward compat
+Old OT records with non-30-min times (e.g. `09:17`) are preserved. When editing such a record, the original value is prepended to the option list as `"09:17 (record เดิม)"` so the form doesn't silently lose data. New OT requests can only use 30-min slots.
+
+### DB Impact
+🟢 **Zero** — UI-only, existing records untouched.
+
+### Verification
+1. Console: `v1.4.68`
+2. Open OT form → time fields are dropdowns, not time pickers
+3. Dropdown shows only :00 and :30 minutes (48 options total)
+4. Edit existing OT record with 09:17 → dropdown shows "09:17 (record เดิม)" as first option
+
+---
+
 ## [1.4.67] — 2026-07-16 (OT half-hour hotfix — JS snap)
 
 **HOTFIX — v1.4.66's `step="1800"` doesn't enforce snap in Chrome desktop picker**

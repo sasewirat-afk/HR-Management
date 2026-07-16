@@ -6,6 +6,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.63] — 2026-07-08 (approval UX)
+
+**FEATURE — Approval Center: bulk actions + larger buttons + sticky bar**
+
+### Scope (grill Q6+Q7+Q8 answered 8 Jul afternoon)
+User complained approve/reject buttons were tiny, cramped, and there was no way to bulk-approve. Applied 9-question grill; user's decisions locked in ADR-worthy detail:
+| Q | Choice | Applied |
+|---|---|---|
+| Q6 | A + checkbox bulk | Larger buttons + icons, plus checkbox column |
+| Q6.1 | A | Sticky top bar above tabs content |
+| Q6.2 | **B** | Bar always visible, disabled+dimmed when 0 selected |
+| Q6.3 | A | Keep both bulk bar AND per-row buttons |
+| Q6.4 | A | Select-all scope = current tab only |
+| Q7 | A | Keep table layout, widen action column (min 200px) |
+| Q8 | A | Bulk approve — batched DB writes, single toast |
+
+### Changes
+- New global `_selectedApprovalIds = new Set()` — cleared on tab change
+- Helpers: `_apvCheckbox(id)`, `_apvActionButtons(type, id)`, `toggleApprovalSelect`, `toggleSelectAllApprovals`, `_updateApprovalBulkBar`, `bulkApproveApprovals`
+- All 5 approval tables refactored: added checkbox column + used new button helper (larger 6-14 padding, 13px font, 600 weight, ✅/❌ icons)
+- Sticky bar: `position:sticky;top:0;z-index:10` — shows count + 2 bulk buttons
+- Bulk operations save DB once per call, iterate + notify per item, cascade comp-off accumulated holidays same as single-approve
+
+### Files Changed
+- `index.html` — 5 patches (2 version markers + 1 helper block + 1 renderApprovals refactor + 1 drawApprovalList tables update)
+- `CHANGELOG.md`
+
+### Data Impact
+🟢 Additive UI + reuses existing `approveRequest` semantics. No schema change. Bulk approve writes same fields as single (status, approverNote, approvedDate) — cloud sync unaffected.
+
+### Verification
+1. Hard reload → Console `v1.4.63`
+2. Navigate to ศูนย์อนุมัติ (Approval Center)
+3. ✅ Sticky top bar visible (dimmed) — reads "ยังไม่ได้เลือกรายการ"
+4. ✅ Checkbox column on left of each table
+5. Click checkbox on 2-3 rows → bar brightens, count updates
+6. Click "อนุมัติทั้งหมด" → confirm dialog → all selected approved in one save
+7. Reject bulk asks for reason once, applies to all
+8. Switch tab → selection cleared, count resets
+9. Per-row buttons still work (✅ อนุมัติ / ❌ ปฏิเสธ) with larger padding
+
+### Rollback
+- Git tag v1.4.62
+- Vercel promote v1.4.62 (10 sec)
+
+### Backlog (from grill session)
+- v1.4.64: Bulk shift edit (Q4 B — column bulk)
+- v1.4.65: Custom start times (Q2.1 A + Q3.1 A) — needs ADR-0003 + settings.defaultGracePeriodMinutes
+
+### ⚠️ Still Postponed
+- v1.4.50 (physical cert workflow)
+- Day 4 (H1 RLS Lockdown)
+
+---
+
 ## [1.4.62] — 2026-07-08 (UI fix)
 
 **BUG FIX — Policy Acknowledgement card not clickable to view content**

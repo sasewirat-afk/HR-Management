@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.66</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.67</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.66';
+const APP_VERSION = '1.4.67';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -3192,16 +3192,16 @@ function showOTForm(editId) {
  <div class="form-row">
  <div class="form-group">
  <label>เวลาเริ่ม *</label>
- <input type="time" id="otStart" required value="${editReq?.startTime || ''}" step="1800" oninput="updateOTDurationPreview()">
+ <input type="time" id="otStart" required value="${editReq?.startTime || ''}" step="1800" onchange="snapTimeToHalfHour(this)" oninput="updateOTDurationPreview()">
  </div>
  <div class="form-group">
  <label>เวลาสิ้นสุด *</label>
- <input type="time" id="otEnd" required value="${editReq?.endTime || ''}" step="1800" oninput="updateOTDurationPreview()">
+ <input type="time" id="otEnd" required value="${editReq?.endTime || ''}" step="1800" onchange="snapTimeToHalfHour(this)" oninput="updateOTDurationPreview()">
  </div>
  </div>
  <div id="otDurationPreview" style="padding:10px 14px;background:var(--gray-100);border-radius:8px;font-size:13px;color:var(--gray-700);margin-bottom:12px;">
  <span style="color:var(--gray-500);">ระยะเวลา:</span> <strong id="otDurationText">— เลือกเวลาเริ่ม + สิ้นสุด</strong>
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">💡 คลิกเลือกทีละ 30 นาที (v1.4.66) — เช่น 09:00, 09:30, 10:00</div>
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">💡 ระบบจะปัดเป็นทีละ 30 นาที (v1.4.67) — เช่น เลือก 09:17 → ปัดเป็น 09:30</div>
  </div>
  <div class="form-group">
  <label>เหตุผลการทำ OT *</label>
@@ -3221,6 +3221,23 @@ function showOTForm(editId) {
  `;
  showModal(editReq ? 'แก้ไขคำขอ OT' : 'ขอทำ OT', body, footer);
  setTimeout(updateOTDurationPreview, 50);
+}
+
+function snapTimeToHalfHour(input) {
+ if (!input || !input.value) return;
+ const [h, m] = input.value.split(':').map(Number);
+ if (isNaN(h) || isNaN(m)) return;
+ const totalMin = h * 60 + m;
+ const snapped = Math.round(totalMin / 30) * 30;
+ const newH = Math.floor(snapped / 60) % 24;
+ const newM = snapped % 60;
+ const val = `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+ if (input.value !== val) {
+ const original = input.value;
+ input.value = val;
+ if (typeof toast === 'function') toast(`ปัด ${original} → ${val} (ทีละ 30 นาที)`, 'info');
+ updateOTDurationPreview();
+ }
 }
 
 function updateOTDurationPreview() {

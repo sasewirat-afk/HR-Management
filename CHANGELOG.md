@@ -6,6 +6,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.4.67] — 2026-07-16 (OT half-hour hotfix — JS snap)
+
+**HOTFIX — v1.4.66's `step="1800"` doesn't enforce snap in Chrome desktop picker**
+
+### Problem
+Chrome desktop time picker showed all minute values (01:32, 01:33...) even with `step="1800"`. Users could still pick non-30-min values, defeating v1.4.66's intent.
+
+### Fix
+Added `snapTimeToHalfHour()` function attached to `onchange` on both `otStart` and `otEnd`. Snaps value to nearest 30-min boundary on change, shows toast notification.
+
+- `01:32` → `01:30`
+- `01:47` → `02:00` (rounds nearest)
+- `09:15` → `09:30` (or 09:00 depending on rounding — currently `Math.round` = nearest)
+
+### Cross-browser
+- Chrome desktop: ✅ works (step only enforces validation, JS enforces UI)
+- Safari desktop: ✅ works
+- Mobile browsers: ✅ works (step also works natively, JS is redundant safety net)
+
+### DB Impact
+🟢 **Zero** — UI-only.
+
+### Verification
+1. Console: `v1.4.67`
+2. Open OT form → pick `01:32` → value snaps to `01:30` + toast shown
+3. Pick `01:47` → snaps to `02:00`
+4. Existing OT records preserved
+
+---
+
 ## [1.4.66] — 2026-07-16 (OT half-hour intervals)
 
 **UX — OT request form snaps to 30-minute intervals + live duration preview**

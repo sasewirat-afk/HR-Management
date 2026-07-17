@@ -6,6 +6,124 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.0] — 2026-07-17 (numeric per-day shift + per-day late detection)
+
+**MAJOR — Grid cell = start hour directly · replaces M/A/N/W codes · per-day late threshold (ADR-0004)**
+
+### Context
+User has employees with wildly varying schedules within a month (Kitchen บอย: 06:00 บางวัน, 10:00 บางวัน, 08:00 บางวัน). Previous v1.4.65 `emp.customStartTime` could hold only ONE default per employee → under-payment on days with different actual schedule. Grill session (11 rounds, 90 min) resulted in radical simplification per user proposal: **type the start hour as a number**, no shift library, no setup.
+
+### Changed — Data model (SEMANTIC MIGRATION)
+`shift.type` string reinterpreted:
+- `'0'`-`'23'` = start hour (integer, e.g. `'9'` = 09:00)
+- `'0.5'`-`'23.5'` = half-hour start (e.g. `'6.5'` = 06:30)
+- `'O'` = day off (no late check)
+- `''` (empty) = unset (fallback chain)
+
+Migration `migrateShiftsToNumeric_v1_5_0()` runs once (idempotent via `_migrationsRun`):
+- `'M'` → `'9'` (default morning)
+- `'A'` → `'13'` (default afternoon)
+- `'N'` → `'22'` (default night)
+- `'W'` → `''` (unset — use emp default)
+- `'O'` → `'O'` (unchanged)
+- Backup saved to `settings._preMigrationShiftBackup_v1_5_0` BEFORE mutation.
+
+### Changed — Late Threshold Resolution (3-tier)
+`getLateThresholdForEmployee(emp, date, settings)` — NEW date argument:
+1. `shift[emp, date].type` numeric → `HH:MM + graceMinutes`
+2. `shift[emp, date].type = 'O'` → `null` (day off)
+3. `emp.customStartTime` (v1.4.65 fallback) → `customStartTime + grace`
+4. `settings.lateThreshold` (global fallback)
+
+Consumers updated:
+- `resolveAttendanceStatus(emp, dateStr, ctx)` — passes `dateStr`
+- `calculatePaySlip` — per-record threshold (was single monthly value)
+- `totalLateMinutes` — per-record computation
+- Diligence bonus check — uses day-agnostic fallback (v1.4.65 semantics)
+
+### Changed — Grid UI
+- **Inline text input** (Q7 A): click cell → `<input>` appears in cell → type value → Enter to save
+- **Color-coded background** (Q11.1 C): Blue (5-8), Green (9-12), Orange (13-16), Purple (17-20), Dark (21-04), Gray (O)
+- **Legend rewritten**: shows examples + typing guide + color chart
+- **`editShiftInline(cell, empId, date)`** function replaces `cycleShift` cycle-through picker
+- **`cycleShift` kept as backward-compat shim** — redirects to inline edit
+- **Hide rows** (Q9.2 B) where `emp.countInAttendance === false` (ADMIN emps)
+
+### Changed — Bulk Edit (Q9.1 A)
+- **`fillAllShifts()`** — prompts for numeric value instead of using SHIFT_TYPES picker
+- **`bulkSetColumnShift(dateStr)`** — modal with text input + quick preset chips (6/9/10/13/17/22/O)
+- **`applyColumnShift`** — validates via `parseShiftValue()`, stores normalized value
+- **`fillWeekends`** — hardcoded to `'O'` (only day-off makes sense for weekends)
+- **"ตั้งทุกคน W ทั้งเดือน" button** — replaced with "📝 ตั้งกะทั้งทีมทั้งเดือน (พิมพ์ค่าเดียว)"
+
+### Changed — Export/Import (backward compat with pre-v1.5.0 files)
+- **Export legend text** — reflects new numeric semantic
+- **Sheet 2/3 summary columns** — replaced M/A/N/W counters with generic "ทำงาน (มีเวลา)"
+- **Import parser** — accepts numeric values, still converts legacy M/A/N codes for old file compat
+- **`W` in old imports** — treated as unset (preserve, no upsert)
+- **Existing OT records** — untouched
+
+### Added
+- **`parseShiftValue(raw)`** helper — returns `{ kind, hour?, raw }`
+- **`hourToTimeString(hour)`** — `9` → `"09:00"`, `6.5` → `"06:30"`
+- **`addMinutesToTimeStr(timeStr, minutes)`** — wrap at 24h
+- **`getShiftDisplayStyle(parsed)`** — color/bg/label for numeric shift
+- **`editShiftInline(cell, empId, date)`** — Excel-like inline edit
+- **`migrateShiftsToNumeric_v1_5_0()`** — data migration with backup
+
+### DB Impact
+🟡 **Semantic migration** (idempotent, reversible):
+- `shifts` table: `type` values converted M→9, A→13, N→22, W→'', O unchanged
+- `settings._preMigrationShiftBackup_v1_5_0` — deep-copy backup added
+- `settings._preMigrationShiftBackupDate_v1_5_0` — timestamp
+- `settings._migrationsRun` — appended `'v1.5.0-numeric-shift'`
+- No schema change, no field additions to shift records
+- All existing OT, leaves, attendance records untouched
+
+### Safety Layers (8-tier)
+1. Guard — `_migrationsRun` prevents re-run
+2. Backup — deep-clone saved BEFORE mutation
+3. Defensive — unknown types left untouched
+4. Rollback — 1-line console command restores backup
+5. Version detection — old code reads new types as unknown, safe fallback
+6. Cloud sync compat — LWW works, schema unchanged
+7. Realtime — other devices auto-migrate on load
+8. Vercel promote v1.4.68 → 10-sec rollback
+
+### Verification
+1. Console: `v1.5.0`
+2. Console: `[migrate v1.5.0] Numeric shift migration: X converted, Y preserved`
+3. Console: `DB.load('settings')._preMigrationShiftBackup_v1_5_0.length` → same as before migration
+4. Grid: click cell → text input appears → type `10` → Enter → cell shows `10` with green background
+5. Type invalid (`abc`, `24`) → red toast, cell reverts to original
+6. Type `O` → cell turns gray with `O`
+7. Late detection: emp with shift `10` on date X → `getLateThresholdForEmployee(emp, 'X', settings)` returns `10:16`
+8. Late detection: emp with shift `O` → returns `null` (no late)
+9. Late detection: emp with no shift + customStartTime `10:00` → returns `10:16` (fallback)
+10. Import old-format Excel (with M/A/N) → auto-converts to 9/13/22
+11. Payslip calculation: kitchen emp with per-day shifts → lateDays reflects per-day threshold
+
+### Rollback
+Level 1 — Vercel promote v1.4.68 (~10 sec). Old code reads new values as unknown, uses `settings.lateThreshold`.
+Level 2 — Data restore console:
+```javascript
+const backup = DB.load('settings')._preMigrationShiftBackup_v1_5_0;
+if (backup) { DB.save('shifts', backup); location.reload(); }
+```
+
+### Deferred to v1.5.1
+- Tab-to-next-cell navigation (Excel-like)
+- Dry-run preview before Import (Q8.3 C)
+- Report labels showing per-emp late threshold (currently show global)
+- Copy Previous Week button (Q9.1 D)
+
+### Docs
+- ADR-0004: Numeric per-day shift + revised late threshold resolution
+- CONTEXT.md: Late Threshold v2 chain + Numeric Shift Value + Grid Cell Display sections
+- Supersedes ADR-0003 partially — `emp.customStartTime` demoted to fallback
+
+---
+
 ## [1.4.68] — 2026-07-16 (OT half-hour — hard-locked dropdown)
 
 **UX — Replace time input with select dropdown (only 30-min values)**

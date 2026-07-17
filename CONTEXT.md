@@ -222,11 +222,57 @@ Company-wide — not per-employee. Change once, applies to all employees who use
 
 ## Late Threshold
 
-The `HH:MM` at or after which a scan is counted as late. Derived by `getLateThresholdForEmployee(emp, settings)`:
-- If `emp.customStartTime` is set → `addMinutes(emp.customStartTime, settings.defaultGracePeriodMinutes)`
-- Else → `settings.lateThreshold`
+The `HH:MM` at or after which a scan is counted as late. Derived by `getLateThresholdForEmployee(emp, date, settings)` — **3-tier resolution chain** per ADR-0004:
 
-All late detection (payroll, attendance report, resolveAttendanceStatus) MUST route through this helper. Direct reads of `settings.lateThreshold` from calculation code are a bug — they miss the per-employee case.
+1. **Per-day shift** (`shift[emp, date].type`):
+   - Numeric (`'9'`, `'6.5'`) → `HH:MM + defaultGracePeriodMinutes`
+   - `'O'` → `null` (day off, no late check)
+   - Empty/invalid → fall through to step 2
+2. **Employee default** (`emp.customStartTime` from ADR-0003):
+   - If set → `customStartTime + defaultGracePeriodMinutes`
+3. **Global fallback** (`settings.lateThreshold`, default `'09:01'`)
+
+All late detection (payroll, attendance report, resolveAttendanceStatus) MUST route through this helper. Direct reads of `settings.lateThreshold` from calculation code are a bug — they miss both per-day AND per-employee cases.
+
+---
+
+## Numeric Shift Value (ADR-0004, v1.5.0)
+
+Grid cell stores `shift.type` as a string with three interpretations:
+
+| Value | Meaning | Effect on Late Detection |
+|---|---|---|
+| `'0'` – `'23'` | Start hour (integer) | Threshold = `HH:00 + grace` |
+| `'0.5'` – `'23.5'` | Start half-hour | Threshold = `HH:30 + grace` |
+| `'O'` | Day off | No late check (null threshold) |
+| `''` (empty) | Unset — fallback to emp/global | See Late Threshold chain |
+
+**Superseded by ADR-0004**: The old `'W'` / `'M'` / `'A'` / `'N'` codes (from pre-v1.5.0) are migrated as:
+- `'M'` → `'9'` (default morning 09:00)
+- `'A'` → `'13'` (default afternoon 13:00)
+- `'N'` → `'22'` (default night 22:00)
+- `'W'` → `''` (unset — most flexible fallback)
+- `'O'` → `'O'` (unchanged)
+
+Migration is idempotent (guarded by `settings._migrationsRun`) and reversible (original shifts saved to `settings._preMigrationShiftBackup_v1_5_0`).
+
+---
+
+## Grid Cell Display (v1.5.0)
+
+Cell background color reflects the start hour range for pattern-recognition at a glance:
+
+| Hour range | Color |
+|---|---|
+| 05:00 – 08:59 | Blue (early morning) |
+| 09:00 – 12:59 | Green (standard) |
+| 13:00 – 16:59 | Orange (afternoon) |
+| 17:00 – 20:59 | Purple (evening) |
+| 21:00 – 04:59 | Dark purple (night) |
+| `'O'` | Gray (day off) |
+| Empty | White (unset) |
+
+Cell text = the raw value (`9`, `6.5`, `O`, blank).
 
 ---
 

@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.4.68</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.0</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.4.68';
+const APP_VERSION = '1.5.0';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1552,24 +1552,129 @@ function migrateGracePeriod_v1_4_65() {
  if (changed) console.log('[migrate v1.4.65] Grace period settings applied');
 }
 
-// v1.4.65 (ADR-0003): Derive the effective late threshold for a given employee.
-// Employees with customStartTime → custom late threshold based on grace period.
-// Employees without → falls back to global settings.lateThreshold (existing behavior).
-// ALL late-detection code paths MUST call this helper. Direct reads of settings.lateThreshold are a bug.
-function getLateThresholdForEmployee(emp, settings) {
+// v1.5.0 (ADR-0004): Migrate legacy M/A/N/W shift codes to numeric hours.
+// Idempotent — guarded by settings._migrationsRun. Reversible via _preMigrationShiftBackup_v1_5_0.
+// Mapping (Q6 Case 5 A): M→'9', A→'13', N→'22', W→'' (unset, fallback to emp default), O→'O' (unchanged).
+// Unknown types are preserved untouched (defensive — allows partial pre-migration state).
+function migrateShiftsToNumeric_v1_5_0() {
+ const s = DB.load('settings', null);
+ if (!s) return;
+ if (s._migrationsRun && s._migrationsRun.includes('v1.5.0-numeric-shift')) return;
+ const shifts = DB.load('shifts', []);
+ if (!Array.isArray(shifts)) return;
+
+ // Layer 2: Backup BEFORE any mutation
+ s._preMigrationShiftBackup_v1_5_0 = JSON.parse(JSON.stringify(shifts));
+ s._preMigrationShiftBackupDate_v1_5_0 = new Date().toISOString();
+
+ const map = { 'M': '9', 'A': '13', 'N': '22', 'W': '', 'O': 'O' };
+ let migrated = 0, preserved = 0;
+ const converted = shifts.map(sh => {
+ if (!sh || typeof sh.type !== 'string') { preserved++; return sh; }
+ if (map.hasOwnProperty(sh.type)) {
+ migrated++;
+ return { ...sh, type: map[sh.type] };
+ }
+ preserved++;
+ return sh;
+ });
+
+ DB.save('shifts', converted);
+ s._migrationsRun = [...(s._migrationsRun || []), 'v1.5.0-numeric-shift'];
+ DB.save('settings', s);
+ console.log(`[migrate v1.5.0] Numeric shift migration: ${migrated} converted, ${preserved} preserved. Backup saved to settings._preMigrationShiftBackup_v1_5_0.`);
+ console.log('[migrate v1.5.0] To rollback: DB.save("shifts", DB.load("settings")._preMigrationShiftBackup_v1_5_0); location.reload();');
+}
+
+// v1.5.0 (ADR-0004): Parse a shift.type string into an interpretation.
+// Returns: { kind: 'hour' | 'off' | 'unset', hour?: number, raw: string }
+// - 'hour': numeric shift with start hour (integer or .5)
+// - 'off': explicit day off (raw = 'O' or 'o')
+// - 'unset': empty, unknown, or legacy code that didn't migrate
+function parseShiftValue(raw) {
+ if (raw == null || raw === '') return { kind: 'unset', raw: '' };
+ const trimmed = String(raw).trim();
+ if (trimmed === '') return { kind: 'unset', raw: '' };
+ if (/^[Oo]$/.test(trimmed)) return { kind: 'off', raw: 'O' };
+ // Accept "9", "9.5", "9:30" (lenient — v1.5.0 Q11.2)
+ const hhmm = /^(\d{1,2}):(\d{2})$/.exec(trimmed);
+ if (hhmm) {
+ const h = Number(hhmm[1]);
+ const m = Number(hhmm[2]);
+ if (h >= 0 && h <= 23 && (m === 0 || m === 30)) {
+ return { kind: 'hour', hour: h + (m === 30 ? 0.5 : 0), raw: trimmed };
+ }
+ return { kind: 'unset', raw: trimmed };
+ }
+ const num = Number(trimmed);
+ if (!Number.isFinite(num)) return { kind: 'unset', raw: trimmed };
+ if (num < 0 || num > 23) return { kind: 'unset', raw: trimmed };
+ // Only .0 or .5 allowed
+ const frac = num - Math.floor(num);
+ if (frac !== 0 && frac !== 0.5) return { kind: 'unset', raw: trimmed };
+ return { kind: 'hour', hour: num, raw: trimmed };
+}
+
+// v1.5.0 (ADR-0004): Convert a numeric shift hour to HH:MM string.
+// Example: 9 → "09:00", 6.5 → "06:30"
+function hourToTimeString(hour) {
+ const h = Math.floor(hour);
+ const m = (hour - h) === 0.5 ? 30 : 0;
+ return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+// v1.5.0 (ADR-0004): Add minutes to HH:MM, wrap at 24h.
+function addMinutesToTimeStr(timeStr, minutes) {
+ const m = /^(\d{1,2}):(\d{2})$/.exec(timeStr);
+ if (!m) return timeStr;
+ const total = (Number(m[1]) * 60) + Number(m[2]) + minutes;
+ const h = Math.floor(total / 60) % 24;
+ const mm = ((total % 60) + 60) % 60;
+ return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+// v1.5.0 (ADR-0004, supersedes v1.4.65): Derive the effective late threshold.
+// 3-tier resolution chain (Q4 D):
+//   1. shift[emp, date].type numeric → HH:00/30 + graceMinutes
+//   2. shift[emp, date].type = 'O' → null (day off, no late check)
+//   3. shift missing/empty → fallback to emp.customStartTime + grace (ADR-0003)
+//   4. emp.customStartTime missing → global settings.lateThreshold
+// Returns HH:MM string OR null (day off).
+// ALL late-detection code paths MUST call this helper.
+function getLateThresholdForEmployee(emp, date, settings) {
+ // Backward-compat: allow old 2-arg call (emp, settings) — will use no shift lookup
+ if (date && typeof date === 'object' && date.lateThreshold !== undefined) {
+ settings = date;
+ date = null;
+ }
  settings = settings || DB.load('settings');
  const globalLate = settings.lateThreshold || '09:01';
- if (!emp || !emp.customStartTime) return globalLate;
- // Parse HH:MM
- const m = /^(\d{1,2}):(\d{2})$/.exec(emp.customStartTime);
- if (!m) return globalLate; // invalid format → safe fallback
  const grace = (typeof settings.defaultGracePeriodMinutes === 'number' && settings.defaultGracePeriodMinutes >= 0)
  ? settings.defaultGracePeriodMinutes
  : 16;
- const totalMin = (Number(m[1]) * 60) + Number(m[2]) + grace;
- const h = Math.floor(totalMin / 60) % 24;
- const mm = totalMin % 60;
- return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+
+ // Tier 1: per-day shift (v1.5.0)
+ if (emp && date) {
+ const shifts = DB.load('shifts', []);
+ const sh = shifts.find(s => s.employeeId === emp.id && s.date === date);
+ if (sh) {
+ const parsed = parseShiftValue(sh.type);
+ if (parsed.kind === 'off') return null; // day off — no late check
+ if (parsed.kind === 'hour') {
+ return addMinutesToTimeStr(hourToTimeString(parsed.hour), grace);
+ }
+ // 'unset' → fall through to tier 2
+ }
+ }
+
+ // Tier 2: emp.customStartTime (v1.4.65)
+ if (emp && emp.customStartTime) {
+ const m = /^(\d{1,2}):(\d{2})$/.exec(emp.customStartTime);
+ if (m) return addMinutesToTimeStr(emp.customStartTime, grace);
+ }
+
+ // Tier 3: global fallback
+ return globalLate;
 }
 
 // v1.4.55: Set countInAttendance=true for admin employee 430806001
@@ -2018,9 +2123,15 @@ function formatSlipMonth(slipMonth) {
 function resolveAttendanceStatus(emp, dateStr, ctx) {
  if (!emp || !dateStr) return 'ขาดงาน';
  const settings = ctx?.settings || DB.load('settings');
- const workStart = emp.customStartTime || settings.workStartTime || '08:45';
- // v1.4.65 (ADR-0003): per-employee late threshold when customStartTime is set
- const lateThreshold = getLateThresholdForEmployee(emp, settings);
+ // v1.5.0 (ADR-0004): 3-tier late threshold — per-day shift → emp default → global
+ const lateThreshold = getLateThresholdForEmployee(emp, dateStr, settings);
+ // v1.5.0: workStart derived from same chain (per-day shift takes priority over emp.customStartTime)
+ let workStart = emp.customStartTime || settings.workStartTime || '08:45';
+ const _sh = (ctx?.shifts || DB.load('shifts', [])).find(s => s.employeeId === emp.id && s.date === dateStr);
+ if (_sh) {
+ const _parsed = parseShiftValue(_sh.type);
+ if (_parsed.kind === 'hour') workStart = hourToTimeString(_parsed.hour);
+ }
  const companyHolidays = ctx?.companyHolidays || new Set(settings.companyHolidays || []);
 
  // 1. Day Off — shift schedule OR weekend/holiday
@@ -4187,15 +4298,29 @@ function filterShiftScheduleRows(query) {
  }
  });
 }
+// v1.5.0 (ADR-0004): SHIFT_TYPES simplified — legacy M/A/N/W removed, replaced by numeric shift values.
+// Only auto-computed states (from leaves) + explicit day-off remain as named types.
+// Numeric shifts render via getShiftDisplayStyle() based on hour range.
 const SHIFT_TYPES = {
- 'M': { label: 'เช้า', emoji: 'M', color: '#3b82f6', bg: '#dbeafe' },
- 'A': { label: 'บ่าย', emoji: 'A', color: '#f59e0b', bg: '#fef3c7' },
- 'N': { label: 'ดึก', emoji: 'N', color: '#8b5cf6', bg: '#ede9fe' },
- 'W': { label: 'ทำงาน', emoji: '', color: '#16a34a', bg: '#dcfce7' },
  'O': { label: 'หยุด', emoji: 'O', color: '#94a3b8', bg: '#f1f5f9' },
  'L': { label: 'ลา', emoji: 'L', color: '#dc2626', bg: '#fecaca' },
  'C': { label: 'ลาสะสมวันหยุด', emoji: 'C', color: '#065f46', bg: '#d1fae5' }
 };
+
+// v1.5.0 (Q11.1 C): Color-coded background by hour range.
+// Returns { color, bg, label } for a parsed shift value.
+function getShiftDisplayStyle(parsed) {
+ if (!parsed || parsed.kind === 'unset') return { color: '#94a3b8', bg: 'white', label: '(ไม่ระบุ)' };
+ if (parsed.kind === 'off') return { color: '#64748b', bg: '#f1f5f9', label: 'หยุด' };
+ const h = Math.floor(parsed.hour);
+ // Blue = early (05-08), Green = std (09-12), Orange = afternoon (13-16), Purple = evening (17-20), Dark = night (21-04)
+ if (h >= 5 && h <= 8) return { color: '#1e40af', bg: '#dbeafe', label: `เข้า ${hourToTimeString(parsed.hour)}` };
+ if (h >= 9 && h <= 12) return { color: '#166534', bg: '#dcfce7', label: `เข้า ${hourToTimeString(parsed.hour)}` };
+ if (h >= 13 && h <= 16) return { color: '#c2410c', bg: '#ffedd5', label: `เข้า ${hourToTimeString(parsed.hour)}` };
+ if (h >= 17 && h <= 20) return { color: '#6b21a8', bg: '#f3e8ff', label: `เข้า ${hourToTimeString(parsed.hour)}` };
+ // 21-04 (night, wraps)
+ return { color: '#e0e7ff', bg: '#312e81', label: `เข้า ${hourToTimeString(parsed.hour)}` };
+}
 
 function getShift(employeeId, date) {
  const shifts = DB.load('shifts', []);
@@ -4229,6 +4354,8 @@ function renderShiftSchedule() {
  let team;
  if (role === 'admin') team = emps;
  else team = emps.filter(e => e.managerId === me.id);
+ // v1.5.0 (Q9.2 B): Hide employees with countInAttendance === false (e.g., ADMIN roles that don't scan)
+ team = team.filter(e => e.countInAttendance !== false);
 
  const [y, mo] = _shiftMonth.split('-').map(Number);
  const daysInMonth = new Date(y, mo, 0).getDate();
@@ -4300,10 +4427,20 @@ function renderShiftSchedule() {
 
  <div class="card">
  <div class="card-body" style="padding:12px;">
- <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:12px;">
- <strong>เปลี่ยนกะ (คลิกที่ช่อง):</strong>
- ${Object.entries(SHIFT_TYPES).map(([k,v]) => `<span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:22px;height:22px;background:${v.bg};color:${v.color};border-radius:4px;font-weight:700;font-size:11px;text-align:center;line-height:22px;border:1px solid ${v.color}40;">${v.emoji}</span> ${v.label}</span>`).join('')}
- <span style="color:#999;">(ไม่ระบุ = ว่าง)</span>
+ <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:12px;align-items:center;">
+ <strong>วิธีลงกะ (v1.5.0):</strong>
+ <span style="color:#374151;">คลิก cell → พิมพ์ <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">9</code> = เข้า 09:00 · <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">6.5</code> = 06:30 · <code style="background:#f3f4f6;padding:2px 6px;border-radius:4px;">O</code> = หยุด · Enter = save + คนถัดไป · Tab = วันถัดไป · Esc = ยกเลิก</span>
+ </div>
+ <div style="display:flex;flex-wrap:wrap;gap:10px;font-size:11px;margin-top:8px;padding-top:8px;border-top:1px solid #e5e7eb;">
+ <strong style="align-self:center;">สีตามช่วงเวลา:</strong>
+ <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:20px;height:20px;background:#dbeafe;color:#1e40af;border-radius:4px;text-align:center;line-height:20px;font-weight:700;">6</span> เช้าตรู่ (5-8)</span>
+ <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:20px;height:20px;background:#dcfce7;color:#166534;border-radius:4px;text-align:center;line-height:20px;font-weight:700;">10</span> ปกติ (9-12)</span>
+ <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:20px;height:20px;background:#ffedd5;color:#c2410c;border-radius:4px;text-align:center;line-height:20px;font-weight:700;">14</span> บ่าย (13-16)</span>
+ <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:20px;height:20px;background:#f3e8ff;color:#6b21a8;border-radius:4px;text-align:center;line-height:20px;font-weight:700;">18</span> เย็น (17-20)</span>
+ <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:20px;height:20px;background:#312e81;color:#e0e7ff;border-radius:4px;text-align:center;line-height:20px;font-weight:700;">22</span> ดึก (21-04)</span>
+ <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:20px;height:20px;background:#f1f5f9;color:#64748b;border-radius:4px;text-align:center;line-height:20px;font-weight:700;">O</span> หยุด</span>
+ <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:20px;height:20px;background:#fecaca;color:#dc2626;border-radius:4px;text-align:center;line-height:20px;font-weight:700;">L</span> ลา (auto)</span>
+ <span style="display:inline-flex;align-items:center;gap:4px;"><span style="display:inline-block;width:20px;height:20px;background:#d1fae5;color:#065f46;border-radius:4px;text-align:center;line-height:20px;font-weight:700;">C</span> สะสมหยุด (auto)</span>
  </div>
  </div>
  </div>
@@ -4355,16 +4492,18 @@ function renderShiftSchedule() {
  content = `<span style="color:${t.color};font-weight:700;" title="${t.label} (${getLeaveTypeName(leaveType)})">${code}</span>`;
  title += ` — ${t.label}: ${getLeaveTypeName(leaveType)}`;
  } else if (sh) {
- const t = SHIFT_TYPES[sh.type];
- if (t) {
- bg = t.bg;
- content = `<span style="color:${t.color};font-weight:700;" title="${t.label}">${t.emoji}</span>`;
- if (sh.type !== 'O') workCount++;
- else offCount++;
- title += ` — ${t.label}`;
+ // v1.5.0 (ADR-0004): parse numeric shift value + apply color-coded style
+ const parsed = parseShiftValue(sh.type);
+ const style = getShiftDisplayStyle(parsed);
+ if (parsed.kind !== 'unset') {
+ bg = style.bg;
+ content = `<span style="color:${style.color};font-weight:700;" title="${style.label}">${sh.type}</span>`;
+ if (parsed.kind === 'off') offCount++;
+ else workCount++;
+ title += ` — ${style.label}`;
  }
  }
- return `<td onclick="cycleShift('${emp.id}','${ds}')" style="padding:0;text-align:center;border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;background:${bg};cursor:pointer;height:34px;width:34px;min-width:34px;" title="${title}">${content}</td>`;
+ return `<td onclick="editShiftInline(this,'${emp.id}','${ds}')" style="padding:0;text-align:center;border-right:1px solid #e5e7eb;border-bottom:1px solid #e5e7eb;background:${bg};cursor:pointer;height:34px;width:34px;min-width:34px;" title="${title} — คลิกเพื่อพิมพ์">${content}</td>`;
  }).join('');
 
  return `<tr data-search="${esc((emp.firstName + ' ' + emp.lastName + ' ' + emp.id).toLowerCase())}">
@@ -4385,12 +4524,15 @@ function renderShiftSchedule() {
  </div>
 
  <div class="card">
- <div class="card-header"><h3> การจัดการเร็ว</h3></div>
+ <div class="card-header"><h3> การจัดการเร็ว (v1.5.0)</h3></div>
  <div class="card-body">
  <div class="flex" style="gap:8px;flex-wrap:wrap;">
- <button class="btn btn-secondary btn-sm" onclick="fillAllShifts('W')">ตั้งทุกคน "ทำงาน" ทั้งเดือน</button>
+ <button class="btn btn-primary btn-sm" onclick="fillAllShifts()">📝 ตั้งกะทั้งทีมทั้งเดือน (พิมพ์ค่าเดียว)</button>
  <button class="btn btn-secondary btn-sm" onclick="fillWeekends('O')">ตั้งทุกคน "หยุด" เฉพาะ เสาร์-อาทิตย์</button>
  <button class="btn btn-danger btn-sm" onclick="clearAllShifts()"> ลบกะทั้งหมดในเดือน</button>
+ </div>
+ <div style="margin-top:10px;padding:10px;background:#eff6ff;border-radius:8px;font-size:12px;color:#1e40af;">
+ 💡 <strong>ทำงานประจำวัน:</strong> คลิก cell แล้วพิมพ์ตัวเลข (Enter save) — เร็วกว่าใช้ bulk
  </div>
  </div>
  </div>
@@ -4398,14 +4540,63 @@ function renderShiftSchedule() {
  `;
 }
 
-function cycleShift(empId, date) {
+// v1.5.0 (ADR-0004, Q7 A): Excel-like inline edit — click cell → text input → Enter to save.
+function editShiftInline(cell, empId, date) {
+ if (!cell || cell.querySelector('input')) return; // already editing
  const cur = getShift(empId, date);
- // Cycle: nothing → W → M → A → N → O → nothing
- const order = ['', 'W', 'M', 'A', 'N', 'O'];
- const idx = cur ? order.indexOf(cur.type) : 0;
- const next = order[(idx + 1) % order.length];
- setShift(empId, date, next);
+ const raw = cur ? String(cur.type || '') : '';
+ // Save original content for cancel
+ const origHTML = cell.innerHTML;
+ const origTitle = cell.title;
+ cell.innerHTML = `<input type="text" value="${raw}" maxlength="5" style="width:100%;height:100%;border:2px solid #3b82f6;background:white;text-align:center;font-weight:700;font-size:12px;padding:0;box-sizing:border-box;outline:none;">`;
+ const input = cell.querySelector('input');
+ input.focus();
+ input.select();
+
+ let handled = false;
+ const commit = (nextAction) => {
+ if (handled) return;
+ handled = true;
+ const val = input.value.trim();
+ const parsed = parseShiftValue(val);
+ if (val && parsed.kind === 'unset' && val.toUpperCase() !== '') {
+ // Invalid input — reject with toast, restore original
+ if (typeof toast === 'function') toast(`ค่าไม่ถูกต้อง: "${val}" — ใช้ 0-23, .5, O, หรือเว้นว่าง`, 'error');
+ cell.innerHTML = origHTML;
+ cell.title = origTitle;
+ return;
+ }
+ // Normalize value for storage
+ let storeVal = '';
+ if (parsed.kind === 'off') storeVal = 'O';
+ else if (parsed.kind === 'hour') {
+ // Normalize display: "9" (int) or "9.5" (half). Convert "9:30" → "9.5" for consistency.
+ storeVal = parsed.hour % 1 === 0 ? String(parsed.hour) : String(parsed.hour);
+ }
+ setShift(empId, date, storeVal);
  renderShiftSchedule();
+ // Move focus to next cell if requested (v1.5.1 polish — currently just re-render)
+ // TODO v1.5.1: Excel-like Tab/Enter navigation
+ };
+
+ input.addEventListener('keydown', e => {
+ if (e.key === 'Enter') { e.preventDefault(); commit('down'); }
+ else if (e.key === 'Tab') { e.preventDefault(); commit('right'); }
+ else if (e.key === 'Escape') { e.preventDefault(); handled = true; cell.innerHTML = origHTML; cell.title = origTitle; }
+ });
+ input.addEventListener('blur', () => commit('stay'));
+}
+
+// v1.5.0: kept for backward-compat (some code paths may still call cycleShift)
+function cycleShift(empId, date) {
+ // Redirect to inline edit UX
+ const cells = document.querySelectorAll(`#shiftTable td[title*="${date}"]`);
+ for (const c of cells) {
+ if (c.getAttribute('onclick')?.includes(empId)) {
+ editShiftInline(c, empId, date);
+ return;
+ }
+ }
 }
 
 // ============================================================
@@ -4452,7 +4643,7 @@ function exportShiftScheduleXLSX() {
  const sheet1 = [
  [`ตารางลงกะงาน — ${monthName}`],
  [`ขอบเขต: ${role === 'admin' ? 'ทุกพนักงาน Active' : 'ทีมของฉัน'} (${team.length} คน)`],
- [`* = วันหยุดบริษัท · M=เช้า A=บ่าย N=ดึก W=ทำงาน O=หยุด L=ลา C=ลาสะสมวันหยุด`],
+ [`* = วันหยุดบริษัท · ค่าในช่อง: ตัวเลข (v1.5.0) = เวลาเข้างาน เช่น 9 = 09:00, 6.5 = 06:30 · O = หยุด · L = ลา (auto) · C = ลาสะสมวันหยุด (auto) · ว่าง = ไม่ระบุ`],
  [],
  ['รหัส', 'ชื่อ-นามสกุล', 'แผนก', ...dayHeaders, 'ทำงานรวม', 'หยุดรวม', 'ลารวม', 'สะสมหยุดรวม']
  ];
@@ -4467,8 +4658,10 @@ function exportShiftScheduleXLSX() {
  if (leaveType) { leaveCount++; return 'L'; }
  const sh = shiftMap[`${emp.id}|${ds}`];
  if (!sh) return '';
- if (sh.type === 'O') { offCount++; return 'O'; }
- if (sh.type) { workCount++; return sh.type; }
+ // v1.5.0: parse using shared helper — accepts numeric + O
+ const parsed = parseShiftValue(sh.type);
+ if (parsed.kind === 'off') { offCount++; return 'O'; }
+ if (parsed.kind === 'hour') { workCount++; return sh.type; }
  return '';
  });
  sheet1.push([emp.id, `${esc(emp.firstName)} ${esc(emp.lastName)}`, emp.department || '-', ...cells, workCount, offCount, leaveCount, compOffCount]);
@@ -4485,13 +4678,14 @@ function exportShiftScheduleXLSX() {
  XLSX.utils.book_append_sheet(wb, ws1, 'ตารางกะ');
 
  // ============ Sheet 2: สรุปต่อคน ============
+ // v1.5.0: summary sheet counts numeric work + off + leave + blank (M/A/N/W columns removed)
  const sheet2 = [
  [`สรุปกะต่อพนักงาน — ${monthName}`],
  [],
- ['รหัส', 'ชื่อ-นามสกุล', 'แผนก', 'ตำแหน่ง', 'เช้า (M)', 'บ่าย (A)', 'ดึก (N)', 'ทำงาน (W)', 'หยุด (O)', 'ลา (L)', 'สะสมหยุด (C)', 'ยังไม่ระบุ', 'รวมทำงาน', 'รวมหยุด']
+ ['รหัส', 'ชื่อ-นามสกุล', 'แผนก', 'ตำแหน่ง', 'ทำงาน (มีเวลา)', 'หยุด (O)', 'ลา (L, auto)', 'สะสมหยุด (C, auto)', 'ไม่ระบุ (ว่าง)', 'รวมทำงาน', 'รวมหยุด']
  ];
  team.forEach(emp => {
- const counts = { M:0, A:0, N:0, W:0, O:0, L:0, C:0, blank:0 };
+ const counts = { work:0, O:0, L:0, C:0, blank:0 };
  for (let d = 1; d <= daysInMonth; d++) {
  const ds = `${_shiftMonth}-${String(d).padStart(2,'0')}`;
  const lv = leaveMap[`${emp.id}|${ds}`];
@@ -4499,58 +4693,64 @@ function exportShiftScheduleXLSX() {
  if (lv) { counts.L++; continue; }
  const sh = shiftMap[`${emp.id}|${ds}`];
  if (!sh) { counts.blank++; continue; }
- if (counts.hasOwnProperty(sh.type)) counts[sh.type]++;
+ const parsed = parseShiftValue(sh.type);
+ if (parsed.kind === 'off') counts.O++;
+ else if (parsed.kind === 'hour') counts.work++;
+ else counts.blank++;
  }
- const totalWork = counts.M + counts.A + counts.N + counts.W;
  sheet2.push([
  emp.id,
  `${esc(emp.firstName)} ${esc(emp.lastName)}`,
  emp.department || '-',
  emp.position || '-',
- counts.M, counts.A, counts.N, counts.W, counts.O, counts.L, counts.C, counts.blank,
- totalWork, counts.O
+ counts.work, counts.O, counts.L, counts.C, counts.blank,
+ counts.work, counts.O
  ]);
  });
  const ws2 = XLSX.utils.aoa_to_sheet(sheet2);
  ws2['!cols'] = [
  { wch: 12 }, { wch: 22 }, { wch: 16 }, { wch: 18 },
- { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 12 },
+ { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 16 }, { wch: 14 },
  { wch: 12 }, { wch: 10 }
  ];
  XLSX.utils.book_append_sheet(wb, ws2, 'สรุปต่อคน');
 
  // ============ Sheet 3: สรุปต่อวัน ============
+ // v1.5.0: per-day summary uses simplified counts
  const sheet3 = [
  [`สรุปกะต่อวัน — ${monthName}`],
  ['(แสดงจำนวนพนักงานที่อยู่กะแต่ละประเภทในแต่ละวัน)'],
  [],
- ['วันที่', 'ชื่อวัน', 'ประเภทวัน', 'เช้า (M)', 'บ่าย (A)', 'ดึก (N)', 'ทำงาน (W)', 'หยุด (O)', 'ลา (L)', 'สะสมหยุด (C)', 'ยังไม่ระบุ', 'รวม Active']
+ ['วันที่', 'ชื่อวัน', 'ประเภทวัน', 'ทำงาน (มีเวลา)', 'หยุด (O)', 'ลา (L)', 'สะสมหยุด (C)', 'ไม่ระบุ', 'รวม Active']
  ];
  for (let d = 1; d <= daysInMonth; d++) {
  const ds = `${_shiftMonth}-${String(d).padStart(2,'0')}`;
  const dow = new Date(y, mo-1, d).getDay();
  const isWeekend = dow === 0 || dow === 6;
  const isHoliday = holidays.has(ds);
- const counts = { M:0, A:0, N:0, W:0, O:0, L:0, C:0, blank:0 };
+ const counts = { work:0, O:0, L:0, C:0, blank:0 };
  team.forEach(emp => {
  const lv = leaveMap[`${emp.id}|${ds}`];
  if (lv === 'comp-off') { counts.C++; return; }
  if (lv) { counts.L++; return; }
  const sh = shiftMap[`${emp.id}|${ds}`];
  if (!sh) { counts.blank++; return; }
- if (counts.hasOwnProperty(sh.type)) counts[sh.type]++;
+ const parsed = parseShiftValue(sh.type);
+ if (parsed.kind === 'off') counts.O++;
+ else if (parsed.kind === 'hour') counts.work++;
+ else counts.blank++;
  });
  const dayType = isHoliday ? 'วันหยุดบริษัท' : isWeekend ? 'เสาร์-อาทิตย์' : 'ทำการ';
  sheet3.push([
  ds, dayNames[dow], dayType,
- counts.M, counts.A, counts.N, counts.W, counts.O, counts.L, counts.C, counts.blank,
+ counts.work, counts.O, counts.L, counts.C, counts.blank,
  team.length
  ]);
  }
  const ws3 = XLSX.utils.aoa_to_sheet(sheet3);
  ws3['!cols'] = [
  { wch: 12 }, { wch: 10 }, { wch: 18 },
- { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 10 }, { wch: 8 }, { wch: 12 }, { wch: 12 },
+ { wch: 14 }, { wch: 10 }, { wch: 12 }, { wch: 16 }, { wch: 12 },
  { wch: 12 }
  ];
  XLSX.utils.book_append_sheet(wb, ws3, 'สรุปต่อวัน');
@@ -4604,7 +4804,7 @@ function importShiftScheduleXLSX(file) {
  if (!confirm(`ไฟล์มี ${daysInMonth} วัน แต่เดือน ${monthStr} ควรมี ${expectedDays} วัน — Import ต่อหรือไม่?`)) return;
  }
 
- const validShifts = new Set(['W', 'M', 'A', 'N', 'O']); // L/C = auto from leave, ignore
+ // v1.5.0 (ADR-0004): validation now uses parseShiftValue() — accepts numeric + O
 
  // v1.4.13 CRITICAL: force-pull latest cloud BEFORE filter/save
  // Prevents stale-local race: Mgr A imports → cloud updated. Mgr B's local hasn't synced yet.
@@ -4658,17 +4858,30 @@ function importShiftScheduleXLSX(file) {
  if (!importerTeamIds.has(empId)) { notInTeam++; continue; }
  rowsInExcel.add(empId);
  for (let d = 1; d <= daysInMonth; d++) {
- const cell = String(row[2 + d] || '').trim().toUpperCase();
+ const rawCell = String(row[2 + d] || '').trim();
+ const cellUpper = rawCell.toUpperCase();
  const ds = `${monthStr}-${String(d).padStart(2,'0')}`;
  // Empty or '-' → preserve (no-op)
- if (!cell || cell === '-') { preservedEmptyCells++; continue; }
+ if (!rawCell || rawCell === '-') { preservedEmptyCells++; continue; }
  // Auto-derived from leave/comp-off → skip
- if (cell === 'L' || cell === 'C') continue;
+ if (cellUpper === 'L' || cellUpper === 'C') continue;
  // Explicit delete marker
- if (deleteMarkers.has(cell)) { toDelete.add(`${empId}|${ds}`); continue; }
- // Valid shift code → upsert
- if (!validShifts.has(cell)) { skipped++; continue; }
- toUpsert.push({ empId, date: ds, type: cell });
+ if (deleteMarkers.has(cellUpper)) { toDelete.add(`${empId}|${ds}`); continue; }
+ // v1.5.0: parse using shared helper — accepts numeric + O + backward-compat M/A/N/W
+ // Note: M/A/N/W are pre-v1.5.0 codes. If found, auto-convert using migration table.
+ let storeVal = rawCell;
+ if (cellUpper === 'M') storeVal = '9';
+ else if (cellUpper === 'A') storeVal = '13';
+ else if (cellUpper === 'N') storeVal = '22';
+ else if (cellUpper === 'W') { preservedEmptyCells++; continue; } // W → unset, treat as preserve
+ else if (cellUpper === 'O') storeVal = 'O';
+ else {
+ const parsed = parseShiftValue(rawCell);
+ if (parsed.kind === 'unset') { skipped++; continue; }
+ if (parsed.kind === 'off') storeVal = 'O';
+ else storeVal = String(parsed.hour);
+ }
+ toUpsert.push({ empId, date: ds, type: storeVal });
  }
  }
 
@@ -4755,15 +4968,28 @@ Semantic: MERGE — ช่องว่างใน Excel = "คงเดิม"
  reader.readAsArrayBuffer(file);
 }
 
-function fillAllShifts(type) {
+// v1.5.0 (ADR-0004, Q9.1 A): Adapt to numeric input — prompt for value, validate, apply.
+function fillAllShifts(rawInput) {
  const role = currentUser.role;
  const me = currentUser;
- const emps = DB.load('employees').filter(e => e.active);
+ const emps = DB.load('employees').filter(e => e.active && e.countInAttendance !== false);
  const team = role === 'admin' ? emps : emps.filter(e => e.managerId === me.id);
  const [y, mo] = _shiftMonth.split('-').map(Number);
  const daysInMonth = new Date(y, mo, 0).getDate();
 
- if (!confirm(`ตั้งกะ "${SHIFT_TYPES[type].label}" ให้ทุกคนในทีม ${team.length} คน ตลอด ${daysInMonth} วัน?\n\n(ข้อมูลเดิมจะถูกเขียนทับ)`)) return;
+ // v1.5.0: if called without value (legacy), prompt for numeric input
+ let type = rawInput;
+ if (!type || type === 'W' || type === 'M' || type === 'A' || type === 'N') {
+ const answer = prompt(`ตั้งกะทั้งทีมทั้งเดือน (${team.length} คน × ${daysInMonth} วัน)\n\nพิมพ์ค่า:\n· 9 = เข้า 09:00\n· 6.5 = เข้า 06:30\n· O = หยุด\n· (ว่าง = ยกเลิก)`);
+ if (!answer || answer.trim() === '') return;
+ type = answer.trim();
+ }
+ const parsed = parseShiftValue(type);
+ if (parsed.kind === 'unset') { toast(`ค่าไม่ถูกต้อง: "${type}"`, 'error'); return; }
+ const storeVal = parsed.kind === 'off' ? 'O' : String(parsed.hour);
+ const style = getShiftDisplayStyle(parsed);
+
+ if (!confirm(`ตั้งกะ "${style.label}" ให้ทุกคนในทีม ${team.length} คน ตลอด ${daysInMonth} วัน?\n\n(ข้อมูลเดิมจะถูกเขียนทับ)`)) return;
 
  const shifts = DB.load('shifts', []).filter(s => !s.date.startsWith(_shiftMonth) ||
  !team.find(t => t.id === s.employeeId));
@@ -4773,14 +4999,14 @@ function fillAllShifts(type) {
  const ds = `${_shiftMonth}-${String(d).padStart(2,'0')}`;
  shifts.push({
  id: uid('SH'),
- employeeId: emp.id, date: ds, type,
+ employeeId: emp.id, date: ds, type: storeVal,
  updatedBy: currentUser.id,
  updatedAt: new Date().toISOString()
  });
  }
  });
  DB.save('shifts', shifts);
- toast(`ตั้งกะให้ทีม ${team.length} คนสำเร็จ`);
+ toast(`ตั้งกะ "${style.label}" ให้ทีม ${team.length} คนสำเร็จ`);
  renderShiftSchedule();
 }
 
@@ -4800,12 +5026,24 @@ function bulkSetColumnShift(dateStr) {
  <div><strong>วันที่:</strong> ${formatDate(dateStr)}</div>
  <div><strong>ทีม:</strong> ${team.length} คน${existingCount > 0 ? ` <span style="color:var(--warning);">(มีกะอยู่แล้ว ${existingCount} คน — จะถูกทับ)</span>` : ''}</div>
  </div>
- <div style="margin-bottom:12px;font-size:13px;color:var(--gray-600);">เลือกกะที่ต้องการตั้งให้ทุกคนในทีม:</div>
- <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-bottom:14px;">
- ${Object.entries(SHIFT_TYPES).map(([k,v]) => `
- <button class="btn" style="background:${v.bg};color:${v.color};font-weight:700;padding:14px 12px;border:1px solid ${v.color}55;font-size:13px;" onclick="applyColumnShift('${dateStr}','${k}')">${v.emoji} ${v.label}</button>
- `).join('')}
+ <div style="margin-bottom:12px;font-size:13px;color:var(--gray-600);">ตั้งกะเข้างานให้ทุกคน (v1.5.0):</div>
+ <div style="margin-bottom:14px;">
+ <input type="text" id="bulkColShiftInput" placeholder="เช่น 9 หรือ 6.5 หรือ O" style="width:100%;padding:12px;font-size:16px;text-align:center;font-weight:700;border:2px solid var(--gray-300);border-radius:8px;" autofocus>
+ <div style="font-size:11px;color:var(--gray-500);margin-top:6px;">
+ พิมพ์: <code>9</code> = เข้า 09:00 · <code>6.5</code> = 06:30 · <code>O</code> = หยุด
  </div>
+ </div>
+ <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+ <strong style="align-self:center;font-size:12px;">Quick:</strong>
+ <button class="btn btn-sm" style="background:#dbeafe;color:#1e40af;font-weight:700;" onclick="document.getElementById('bulkColShiftInput').value='6';">6</button>
+ <button class="btn btn-sm" style="background:#dcfce7;color:#166534;font-weight:700;" onclick="document.getElementById('bulkColShiftInput').value='9';">9</button>
+ <button class="btn btn-sm" style="background:#dcfce7;color:#166534;font-weight:700;" onclick="document.getElementById('bulkColShiftInput').value='10';">10</button>
+ <button class="btn btn-sm" style="background:#ffedd5;color:#c2410c;font-weight:700;" onclick="document.getElementById('bulkColShiftInput').value='13';">13</button>
+ <button class="btn btn-sm" style="background:#f3e8ff;color:#6b21a8;font-weight:700;" onclick="document.getElementById('bulkColShiftInput').value='17';">17</button>
+ <button class="btn btn-sm" style="background:#312e81;color:#e0e7ff;font-weight:700;" onclick="document.getElementById('bulkColShiftInput').value='22';">22</button>
+ <button class="btn btn-sm" style="background:#f1f5f9;color:#64748b;font-weight:700;" onclick="document.getElementById('bulkColShiftInput').value='O';">O หยุด</button>
+ </div>
+ <button class="btn btn-primary" style="width:100%;padding:12px;font-weight:700;" onclick="applyColumnShift('${dateStr}', document.getElementById('bulkColShiftInput').value)">✓ ตั้งกะให้ ${team.length} คน</button>
  <hr style="margin:12px 0;border:none;border-top:1px solid var(--gray-200);">
  <div style="display:flex;justify-content:flex-end;">
  <button class="btn btn-danger btn-sm" onclick="clearColumnShift('${dateStr}')">🗑️ ลบกะทั้งคอลัมน์วันนี้</button>
@@ -4814,12 +5052,16 @@ function bulkSetColumnShift(dateStr) {
  showModal(`ตั้งกะทั้งคอลัมน์ — ${formatDate(dateStr)}`, body, `<button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button>`);
 }
 
-function applyColumnShift(dateStr, type) {
+function applyColumnShift(dateStr, rawType) {
  const role = currentUser.role;
- const emps = DB.load('employees').filter(e => e.active);
+ const emps = DB.load('employees').filter(e => e.active && e.countInAttendance !== false);
  const team = role === 'admin' ? emps : emps.filter(e => e.managerId === currentUser.id);
- const label = SHIFT_TYPES[type]?.label || type;
- if (!confirm(`ยืนยันตั้ง "${label}" สำหรับ ${team.length} คน วันที่ ${formatDate(dateStr)}?`)) return;
+ // v1.5.0: parse + validate numeric shift input
+ const parsed = parseShiftValue(rawType);
+ if (parsed.kind === 'unset') { toast(`ค่าไม่ถูกต้อง: "${rawType}"`, 'error'); return; }
+ const storeVal = parsed.kind === 'off' ? 'O' : String(parsed.hour);
+ const style = getShiftDisplayStyle(parsed);
+ if (!confirm(`ยืนยันตั้ง "${style.label}" สำหรับ ${team.length} คน วันที่ ${formatDate(dateStr)}?`)) return;
 
  const shifts = DB.load('shifts', []);
  let count = 0;
@@ -4827,7 +5069,7 @@ function applyColumnShift(dateStr, type) {
  const idx = shifts.findIndex(s => s.employeeId === emp.id && s.date === dateStr);
  const data = {
  id: idx >= 0 ? shifts[idx].id : uid('SH'),
- employeeId: emp.id, date: dateStr, type,
+ employeeId: emp.id, date: dateStr, type: storeVal,
  updatedBy: currentUser.id,
  updatedAt: new Date().toISOString()
  };
@@ -4836,7 +5078,7 @@ function applyColumnShift(dateStr, type) {
  count++;
  });
  DB.save('shifts', shifts);
- toast(`ตั้ง "${label}" ${count} คนสำเร็จ`);
+ toast(`ตั้ง "${style.label}" ${count} คนสำเร็จ`);
  closeModal();
  renderShiftSchedule();
 }
@@ -4857,15 +5099,17 @@ function clearColumnShift(dateStr) {
  renderShiftSchedule();
 }
 
+// v1.5.0: fillWeekends is called with 'O' always — hardcode to day off, no validation needed
 function fillWeekends(type) {
  const role = currentUser.role;
  const me = currentUser;
- const emps = DB.load('employees').filter(e => e.active);
+ const emps = DB.load('employees').filter(e => e.active && e.countInAttendance !== false);
  const team = role === 'admin' ? emps : emps.filter(e => e.managerId === me.id);
  const [y, mo] = _shiftMonth.split('-').map(Number);
  const daysInMonth = new Date(y, mo, 0).getDate();
-
- if (!confirm(`ตั้งทุกคน "${SHIFT_TYPES[type].label}" เฉพาะวัน เสาร์-อาทิตย์?`)) return;
+ // v1.5.0: only support 'O' for weekends (day off) — other values need explicit per-cell entry
+ const storeVal = 'O';
+ if (!confirm(`ตั้งทุกคน "หยุด (O)" เฉพาะวัน เสาร์-อาทิตย์?`)) return;
 
  const shifts = DB.load('shifts', []);
  let count = 0;
@@ -4877,7 +5121,7 @@ function fillWeekends(type) {
  const idx = shifts.findIndex(s => s.employeeId === emp.id && s.date === ds);
  const data = {
  id: idx >= 0 ? shifts[idx].id : uid('SH'),
- employeeId: emp.id, date: ds, type,
+ employeeId: emp.id, date: ds, type: storeVal,
  updatedBy: currentUser.id,
  updatedAt: new Date().toISOString()
  };
@@ -4887,7 +5131,7 @@ function fillWeekends(type) {
  }
  });
  DB.save('shifts', shifts);
- toast(`ตั้งกะเสาร์-อาทิตย์ ${count} วัน`);
+ toast(`ตั้งกะเสาร์-อาทิตย์ "O" ${count} วัน`);
  renderShiftSchedule();
 }
 
@@ -7838,8 +8082,10 @@ function calculatePaySlip(employeeId, year, month) {
 
  const settings = DB.load('settings');
  const monthStr = `${year}-${String(month).padStart(2,'0')}`;
- // v1.4.65 (ADR-0003): use per-employee threshold when emp.customStartTime is set
- const lateThreshold = getLateThresholdForEmployee(emp, settings);
+ // v1.5.0 (ADR-0004): per-day late threshold — resolved per attendance record.
+ // Legacy `lateThreshold` variable removed; use `getLateThresholdForEmployee(emp, r.date, settings)` per-record.
+ // Kept `_fallbackLateThreshold` for diligence bonus gate (day-agnostic — see below).
+ const _fallbackLateThreshold = getLateThresholdForEmployee(emp, null, settings); // v1.4.65 semantics (no date)
  const otMultiplier = settings.otMultiplier || 1.5;
  const otMultiplierHoliday = settings.otMultiplierHoliday || 3;
  const companyHolidays = new Set(settings.companyHolidays || []);
@@ -7854,7 +8100,8 @@ function calculatePaySlip(employeeId, year, month) {
  const workDaysPerMonth = settings.workDaysPerMonth || 22;
  const workHoursPerDay = settings.workHoursPerDay || 8;
  const diligenceBonus = settings.diligenceBonus || 500;
- const diligenceLateThreshold = settings.diligenceLateThreshold || lateThreshold;
+ // v1.5.0: diligence uses day-agnostic threshold (v1.4.65 semantics — per-day would over-complicate the "any late = no bonus" gate)
+ const diligenceLateThreshold = settings.diligenceLateThreshold || _fallbackLateThreshold;
 
  // v1.4.54: Split attendance into two scopes per ADR-0001
  // - CUTOFF cycle (22 prev - 21 current): used for OT filter, late, absent, diligence gate
@@ -7905,16 +8152,23 @@ function calculatePaySlip(employeeId, year, month) {
  // v1.4.54 Q4.2 answer B: internal cycle-scoped workDays used for diligence gate
  const _workDaysCycle = presentInMonth.length;
  // v1.4.55 Q3 B: Field Work days EXCLUDED from late (protects from late deduction)
- const lateRecords = presentInMonth.filter(r =>
- !r._fieldWork && !cycleFieldWorkDates.has(r.date) && r.checkIn >= lateThreshold
- );
+ // v1.5.0 (ADR-0004): per-day late threshold — filter uses per-record resolver
+ const lateRecords = presentInMonth.filter(r => {
+ if (r._fieldWork || cycleFieldWorkDates.has(r.date)) return false;
+ if (!r.checkIn) return false;
+ const th = getLateThresholdForEmployee(emp, r.date, settings);
+ if (th === null) return false; // day off — not counted as late
+ return r.checkIn >= th;
+ });
  const lateDays = lateRecords.length;
 
- // Calculate total late minutes (for minute/hour mode)
- const [lthH, lthM] = lateThreshold.split(':').map(Number);
- const thresholdMinutes = lthH * 60 + lthM;
+ // Calculate total late minutes (for minute/hour mode) — v1.5.0: per-record threshold
  let totalLateMinutes = 0;
  lateRecords.forEach(r => {
+ const th = getLateThresholdForEmployee(emp, r.date, settings);
+ if (!th) return;
+ const [lthH, lthM] = th.split(':').map(Number);
+ const thresholdMinutes = lthH * 60 + lthM;
  const [h, m] = r.checkIn.split(':').map(Number);
  totalLateMinutes += Math.max(0, (h * 60 + m) - thresholdMinutes);
  });
@@ -11729,6 +11983,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  migratePayrollFields_v1_4_54();
  migrateAttendanceCountability_v1_4_55();
  migrateGracePeriod_v1_4_65();
+ migrateShiftsToNumeric_v1_5_0();
  migrateAttendanceExempt_v1_4_20();
  (function checkVersionForceSync() {
  const lastVer = localStorage.getItem('hr__lastVersion');

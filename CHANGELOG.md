@@ -6,6 +6,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.1] — 2026-07-17 (HOTFIX: late reports now use per-day threshold)
+
+**HOTFIX — 3 late-report functions bypassed v1.5.0's per-day resolver**
+
+### Bug Report
+User: จรรยา พันธุเสน (9610906001), Kitchen. Shift on 16 ก.ค. = `10` (10:00 start, threshold 10:16). Checkin at 09:58. Report showed **57 min late** (incorrect — should be 0 late, before 10:16). Root cause found via debug-mantra 4-step discipline: report functions read `settings.lateThreshold` (global 09:01) directly, bypassing `getLateThresholdForEmployee(emp, date, settings)`.
+
+### Root Cause
+v1.5.0 CHANGELOG mentioned "Report labels" would be deferred to v1.5.1, but 3 report functions do NOT just label — they COMPUTE late records and minutes. Missing the per-day resolver in these caused:
+- **Inconsistency**: `calculatePaySlip` (correct, per-day) vs `late-summary` report (wrong, global)
+- **Admin confusion**: report says X late minutes → payroll doesn't deduct → mismatch
+- **Payroll risk before 21 ก.ค. cutoff** — Admin might over-deduct based on wrong report
+
+### Added — Shared Helpers
+- `isRecordLate_v1_5_1(record, empOrId, settings)` — returns true if record's checkIn ≥ per-day threshold. Handles day-off (returns false).
+- `computeLateMinutes_v1_5_1(record, empOrId, settings)` — returns late minutes using per-day threshold, 0 if not late.
+
+Both helpers accept emp object OR employeeId string, look up employee if needed.
+
+### Fixed
+1. **`showLateDetailModal(empCode, monthStr)`** — was: filter `r.checkIn >= settings.lateThreshold`, calc `(checkinMin - globalThresholdMin)`. Now: filter via `isRecordLate_v1_5_1`, calc via `computeLateMinutes_v1_5_1`. **Added "เกณฑ์สาย" column** so Admin sees the per-day threshold used.
+2. **`late-summary` report tab** — same bug/fix pattern. Records list + grouped totals now reflect per-day threshold.
+3. **`exportLateSummaryXLSX()`** — same bug/fix pattern for Excel export.
+
+### Not Changed (still uses global — lower priority, defer to v1.5.2)
+- Daily attendance report (line 7090) — shows global threshold in label; used for daily overview not payroll decisions
+- Legacy per-record display code in `renderReport` late section (line 7435) — same as above
+
+### DB Impact
+🟢 **Zero** — no schema/data changes, no migration. Pure computation logic fix.
+
+### Verification
+1. Console: `v1.5.1`
+2. Open "รายงานยอดพนักงานมาสาย" → click จรรยา
+3. Expected: 16 ก.ค. row should NOT appear (09:58 < 10:16 threshold)
+4. Expected: 11 ก.ค. row (14:46) may still appear IF shift for that day = something before 14:46, OR fallback (customStartTime/global) gives threshold < 14:46
+5. New "เกณฑ์สาย" column shows the actual threshold used per row
+
+### Rollback
+Vercel promote v1.5.0 (~10 sec) — reports revert to showing false-positives. No data impact.
+
+### Test Case
+```javascript
+// Verify จรรยา 16 ก.ค. NOT late
+const emp = DB.load('employees').find(e => e.id === '9610906001');
+const records = DB.load('attendanceRecords').filter(r =>
+ (r.employeeId === '9610906001' || r.employeeCode === '9610906001') && r.date === '2026-07-16'
+);
+records.forEach(r => {
+ console.log('checkin:', r.checkIn,
+   'threshold:', getLateThresholdForEmployee(emp, r.date, DB.load('settings')),
+   'late?:', isRecordLate_v1_5_1(r, emp, DB.load('settings')),
+   'lateMinutes:', computeLateMinutes_v1_5_1(r, emp, DB.load('settings'))
+ );
+});
+// Expected: checkin: 09:58, threshold: 10:16, late?: false, lateMinutes: 0
+```
+
+---
+
 ## [1.5.0] — 2026-07-17 (numeric per-day shift + per-day late detection)
 
 **MAJOR — Grid cell = start hour directly · replaces M/A/N/W codes · per-day late threshold (ADR-0004)**

@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.0</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.1</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.0';
+const APP_VERSION = '1.5.1';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1631,6 +1631,34 @@ function addMinutesToTimeStr(timeStr, minutes) {
  const h = Math.floor(total / 60) % 24;
  const mm = ((total % 60) + 60) % 60;
  return `${String(h).padStart(2, '0')}:${String(mm).padStart(2, '0')}`;
+}
+
+// v1.5.1 HOTFIX: Shared per-record late detection — use in ALL report functions.
+// Fixes bug where late-summary/detail-modal used global settings.lateThreshold, ignoring per-day shift.
+// Returns true if record's checkIn is at/after the resolved threshold for that employee+date.
+function isRecordLate_v1_5_1(record, empOrId, settings) {
+ if (!record?.checkIn) return false;
+ const emp = (typeof empOrId === 'object' && empOrId?.id)
+ ? empOrId
+ : (typeof empOrId === 'string' ? (typeof getEmployee === 'function' ? getEmployee(empOrId) : DB.load('employees').find(e => e.id === empOrId || e.id === record.employeeId)) : null);
+ // If emp not found, fall back to global (old behavior, safe)
+ const th = getLateThresholdForEmployee(emp, record.date, settings);
+ if (th === null) return false; // day off
+ return record.checkIn >= th;
+}
+
+// v1.5.1 HOTFIX: Compute late minutes for a record using per-day threshold.
+// Returns 0 if not late (including day off).
+function computeLateMinutes_v1_5_1(record, empOrId, settings) {
+ if (!isRecordLate_v1_5_1(record, empOrId, settings)) return 0;
+ const emp = (typeof empOrId === 'object' && empOrId?.id)
+ ? empOrId
+ : (typeof empOrId === 'string' ? (typeof getEmployee === 'function' ? getEmployee(empOrId) : DB.load('employees').find(e => e.id === empOrId || e.id === record.employeeId)) : null);
+ const th = getLateThresholdForEmployee(emp, record.date, settings);
+ if (!th) return 0;
+ const [h, m] = record.checkIn.split(':').map(Number);
+ const [thH, thM] = th.split(':').map(Number);
+ return Math.max(0, (h * 60 + m) - (thH * 60 + thM));
 }
 
 // v1.5.0 (ADR-0004, supersedes v1.4.65): Derive the effective late threshold.
@@ -9761,22 +9789,26 @@ function drawReport() {
 
  else if (reportTab === 'late-summary') {
  const settings = DB.load('settings');
- const lateThreshold = settings.lateThreshold || '09:01';
- const [lthH, lthM] = lateThreshold.split(':').map(Number);
- const thresholdMinutes = lthH * 60 + lthM;
  const monthStr = _lateReportMonth || getPayrollMonth(today()); // v1.4.51: default to current payroll month
+ // v1.5.1 HOTFIX (ADR-0004): per-day threshold — filter uses isRecordLate_v1_5_1
  // v1.4.17: team scope — filter attendance by either employeeId OR employeeCode (Tigersoft uses code)
  // v1.4.51: use payroll month (respects cutoffDay from Settings, was: r.date.startsWith(monthStr))
- const records = DB.load('attendanceRecords').filter(r =>
- r.checkIn && r.checkIn >= lateThreshold && getPayrollMonth(r.date) === monthStr &&
+ const rawRecords = DB.load('attendanceRecords').filter(r =>
+ r.checkIn && getPayrollMonth(r.date) === monthStr &&
  (scopeIds.has(r.employeeId) || scopeIds.has(r.employeeCode))
  );
+ // v1.5.1: emp lookup per record — needed for per-day threshold resolution
+ const empsById = new Map(DB.load('employees').map(e => [e.id, e]));
+ const records = rawRecords.filter(r => {
+ const emp = empsById.get(r.employeeId) || empsById.get(r.employeeCode);
+ return isRecordLate_v1_5_1(r, emp || r.employeeId, settings);
+ });
 
- // Group by employeeCode → sum late minutes + collect days
+ // Group by employeeCode → sum late minutes + collect days (v1.5.1: per-record threshold)
  const byEmp = {};
  records.forEach(r => {
- const [h, m] = r.checkIn.split(':').map(Number);
- const lateMin = Math.max(0, (h * 60 + m) - thresholdMinutes);
+ const emp = empsById.get(r.employeeId) || empsById.get(r.employeeCode);
+ const lateMin = computeLateMinutes_v1_5_1(r, emp || r.employeeId, settings);
  if (lateMin <= 0) return;
  const key = r.employeeId || r.employeeCode;
  if (!byEmp[key]) {
@@ -9864,26 +9896,25 @@ function drawReport() {
 }
 
 // Show detail modal: per-day late breakdown for an employee
+// v1.5.1 HOTFIX (ADR-0004): use per-day threshold via isRecordLate_v1_5_1 / computeLateMinutes_v1_5_1
 function showLateDetailModal(empCode, monthStr) {
  const settings = DB.load('settings');
- const lateThreshold = settings.lateThreshold || '09:01';
- const [lthH, lthM] = lateThreshold.split(':').map(Number);
- const thresholdMinutes = lthH * 60 + lthM;
- // v1.4.51: use payroll month (was: r.date.startsWith(monthStr))
- const records = DB.load('attendanceRecords').filter(r =>
+ // Resolve employee first (needed for per-day threshold lookup)
+ const emp = getEmployee(empCode) || DB.load('employees').find(e => e.id === empCode);
+ // v1.5.1: filter using per-day threshold — records where checkIn >= threshold FOR THAT DATE
+ const allRecords = DB.load('attendanceRecords').filter(r =>
  (r.employeeCode === empCode || r.employeeId === empCode) &&
- getPayrollMonth(r.date) === monthStr &&
- r.checkIn && r.checkIn >= lateThreshold
+ getPayrollMonth(r.date) === monthStr
  ).sort((a, b) => a.date.localeCompare(b.date));
+ const records = allRecords.filter(r => isRecordLate_v1_5_1(r, emp || empCode, settings));
 
- const emp = getEmployee(records[0]?.employeeId || empCode);
  const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : (records[0]?.employeeName || empCode);
  const empDept = emp ? emp.department : 'พนักงานใหม่';
 
  const days = records.map(r => {
- const [h, m] = r.checkIn.split(':').map(Number);
- const lateMin = Math.max(0, (h * 60 + m) - thresholdMinutes);
- return { ...r, lateMinutes: lateMin };
+ const lateMin = computeLateMinutes_v1_5_1(r, emp || empCode, settings);
+ const th = getLateThresholdForEmployee(emp, r.date, settings);
+ return { ...r, lateMinutes: lateMin, _threshold: th };
  });
  const totalMin = days.reduce((s, d) => s + d.lateMinutes, 0);
 
@@ -9901,6 +9932,7 @@ function showLateDetailModal(empCode, monthStr) {
  <th style="padding:8px;text-align:left;">วันที่</th>
  <th style="padding:8px;text-align:left;">เข้างาน</th>
  <th style="padding:8px;text-align:left;">ออกงาน</th>
+ <th style="padding:8px;text-align:center;" title="v1.5.1: เกณฑ์สายของวันนั้น (per-day ตามกะที่ตั้ง)">เกณฑ์สาย</th>
  <th style="padding:8px;text-align:right;">สายกี่นาที</th>
  </tr>
  </thead>
@@ -9910,10 +9942,11 @@ function showLateDetailModal(empCode, monthStr) {
  <td style="padding:8px;">${formatDate(d.date)}</td>
  <td style="padding:8px;"><strong>${d.checkIn}</strong></td>
  <td style="padding:8px;">${d.checkOut || '-'}</td>
+ <td style="padding:8px;text-align:center;color:var(--gray-600);font-size:12px;">${d._threshold || '-'}</td>
  <td style="padding:8px;text-align:right;color:var(--danger);font-weight:600;">${d.lateMinutes} นาที</td>
  </tr>`).join('')}
  <tr style="background:var(--gray-100);font-weight:700;">
- <td colspan="4" style="padding:10px;text-align:right;">รวม:</td>
+ <td colspan="5" style="padding:10px;text-align:right;">รวม:</td>
  <td style="padding:10px;text-align:right;color:var(--danger);">${totalMin.toLocaleString()} นาที</td>
  </tr>
  </tbody>
@@ -9923,22 +9956,25 @@ function showLateDetailModal(empCode, monthStr) {
 }
 
 // Excel export for late summary
+// v1.5.1 HOTFIX (ADR-0004): per-day threshold via shared helpers
 function exportLateSummaryXLSX() {
  if (!_xlsxCheck()) return;
  const settings = DB.load('settings');
- const lateThreshold = settings.lateThreshold || '09:01';
- const [lthH, lthM] = lateThreshold.split(':').map(Number);
- const thresholdMinutes = lthH * 60 + lthM;
  const monthStr = _lateReportMonth || getPayrollMonth(today()); // v1.4.51: default to current payroll month
- // v1.4.51: use payroll month (was: r.date.startsWith(monthStr))
- const records = DB.load('attendanceRecords').filter(r =>
- r.checkIn && r.checkIn >= lateThreshold && getPayrollMonth(r.date) === monthStr
+ // v1.5.1: per-day threshold — filter + calc via shared helpers
+ const empsById = new Map(DB.load('employees').map(e => [e.id, e]));
+ const rawRecords = DB.load('attendanceRecords').filter(r =>
+ r.checkIn && getPayrollMonth(r.date) === monthStr
  );
+ const records = rawRecords.filter(r => {
+ const emp = empsById.get(r.employeeId) || empsById.get(r.employeeCode);
+ return isRecordLate_v1_5_1(r, emp || r.employeeId, settings);
+ });
 
  const byEmp = {};
  records.forEach(r => {
- const [h, m] = r.checkIn.split(':').map(Number);
- const lateMin = Math.max(0, (h * 60 + m) - thresholdMinutes);
+ const emp = empsById.get(r.employeeId) || empsById.get(r.employeeCode);
+ const lateMin = computeLateMinutes_v1_5_1(r, emp || r.employeeId, settings);
  if (lateMin <= 0) return;
  const key = r.employeeId || r.employeeCode;
  if (!byEmp[key]) {

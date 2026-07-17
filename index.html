@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.1</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.2</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.1';
+const APP_VERSION = '1.5.2';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -9846,8 +9846,8 @@ function drawReport() {
  </div>
  <div class="card-body">
  <div class="alert alert-info mb-3" style="font-size:13px;">
- <strong>เกณฑ์มาสาย:</strong> เข้างานหลัง <code>${lateThreshold}</code> (ตามตั้งค่า)<br>
- <small>คำนวณนาทีที่สาย = (เวลาเข้างาน − ${lateThreshold}) · sort จากมากไปน้อย</small>
+ <strong>เกณฑ์มาสาย (v1.5.1):</strong> คำนวณต่อวัน ตามกะที่ตั้งของแต่ละคน (ADR-0004)<br>
+ <small>Fallback ไล่ตาม: กะรายวัน → <code>emp.customStartTime</code> → global <code>${settings.lateThreshold || '09:01'}</code></small>
  </div>
  <div class="stats-grid" style="margin-bottom:14px;">
  <div class="stat-card"><div class="label">พนักงานมาสาย</div><div class="value">${summary.length} <small>คน</small></div></div>
@@ -9990,7 +9990,7 @@ function exportLateSummaryXLSX() {
  // Sheet 1: Summary
  const sheet1 = [
  ['รายงานมาสายสะสม — เดือน ' + new Date(monthStr+'-01').toLocaleDateString('th-TH', {year:'numeric', month:'long'})],
- [`เกณฑ์มาสาย: หลัง ${lateThreshold}`],
+ [`เกณฑ์มาสาย (v1.5.1): คำนวณต่อวัน — กะรายวัน → customStartTime → global ${settings.lateThreshold || '09:01'} (ADR-0004)`],
  [],
  ['อันดับ', 'รหัส', 'ชื่อ-นามสกุล', 'แผนก', 'จำนวนวันมาสาย', 'รวมเวลาสาย (นาที)', 'เฉลี่ย (นาที/ครั้ง)']
  ];

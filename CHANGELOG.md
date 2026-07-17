@@ -6,6 +6,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.2] — 2026-07-17 (HOTFIX²: fix v1.5.1's ReferenceError in late-summary template)
+
+**HOTFIX — v1.5.1 template literals crashed because they referenced removed `lateThreshold` variable**
+
+### Bug Report
+User: report page completely empty (no data, no error visible to user). Diagnostic revealed 142 late records should show, but page rendered nothing.
+
+### Root Cause
+v1.5.1 removed `const lateThreshold = settings.lateThreshold || '09:01';` from 2 functions but left template literals `${lateThreshold}` in the HTML strings. Templates threw `ReferenceError: lateThreshold is not defined` when rendered → whole report crashed silently → `document.getElementById('reportContent').innerHTML = html;` received undefined → user saw blank page.
+
+Bug traced via debug-mantra step 2 (source trace) after step 4 (breadcrumb) showed diagnostic gave 142 records but report showed 0. The gap = template render failed.
+
+### Fixed
+1. **`late-summary` report tab (line 9849)** — replaced `${lateThreshold}` in the info banner with per-day explanation text
+2. **`exportLateSummaryXLSX` (line 9993)** — replaced `${lateThreshold}` in Excel header with per-day explanation text
+
+Both now reference `settings.lateThreshold` directly (bounded scope) with fallback text explaining v1.5.1 semantics.
+
+### Not Changed
+- `isRecordLate_v1_5_1` / `computeLateMinutes_v1_5_1` helpers — working correctly (test proved)
+- Filter/calc logic — working correctly
+- `showLateDetailModal` — did NOT have this bug (I did remove template ref there)
+
+### DB Impact
+🟢 **Zero** — text-only fix in 2 template literals.
+
+### Verification
+1. Console: `v1.5.2`
+2. หน้ารายงาน → มาสายสะสม → ✅ ข้อมูล 142 records แสดงตามที่ diagnostic บอก
+3. Excel export: header text shows "เกณฑ์มาสาย (v1.5.1): คำนวณต่อวัน..."
+4. Late detail modal: `เกณฑ์สาย` column works (from v1.5.1)
+
+### Rollback
+Vercel promote v1.5.0 (v1.5.1 crashed anyway, v1.5.0 shows false-positives). ~10 sec.
+
+### Lesson Learned
+When refactoring functions that use template literals, grep the ENTIRE function body (not just the code region) for removed variable names. `${lateThreshold}` in a string doesn't syntax-error at parse time — only at runtime when rendered.
+
+---
+
 ## [1.5.1] — 2026-07-17 (HOTFIX: late reports now use per-day threshold)
 
 **HOTFIX — 3 late-report functions bypassed v1.5.0's per-day resolver**

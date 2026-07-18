@@ -6,6 +6,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.3] — 2026-07-18 (range date Excel export + Manager report tab)
+
+**FEATURE — Attendance Excel export over date range (Admin + Manager)**
+
+### Context
+Admin wanted date range picker for attendance Excel export (e.g., 1-18 ก.ค. → one file). Manager wanted the same capability scoped to their team. Design decided via grill session (Q1-Q13, 4 rounds).
+
+### Added
+- **`exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds)`** — shared export function
+  - Iterates through range dates (max 31 days)
+  - Aggregates all statuses: present, late, absent, leave, day-off, field work
+  - Uses `getLateThresholdForEmployee(emp, date, settings)` per-record (v1.5.1 per-day)
+- **`openRangeExportModal({scope})`** — modal with date pickers + quick presets
+  - Presets: วันนี้ / 7 วันล่าสุด / เดือนนี้ / Payroll cycle นี้
+  - Default range: current payroll cycle (from `settings.payrollCutoffDay`)
+- **`_doRangeExport(scope)`** — submits modal → calls exportAttendanceRangeXLSX
+
+### Changed — Admin (existing page)
+- **รายงานเข้างาน page** — added button "📅 Export ช่วงวันที่" next to existing "Export Excel"
+- Existing single-day Export Excel button — **unchanged** (backward compat)
+- Menu structure — **unchanged** (per user Q7 clarification)
+
+### Added — Manager (new tab)
+- **New tab "รายงานเข้างาน" in report page** — visible only when `currentUser.role === 'manager'`
+- Tab body: intro + big "⬇ เลือกช่วงวันที่ + Export Excel" button
+- Auto-scoped: `emp.managerId === currentUser.id` + self (Q6)
+- Sidebar menu — **unchanged** (no new menu item added)
+
+### Excel Output Format (per Q1-Q5)
+Same template as single-day but extended:
+
+**Sheet 1 "ภาพรวม"** — long format across all dates:
+- Columns: วันที่, รหัสพนักงาน, ชื่อ-สกุล, ชื่อเล่น, บริษัท, แผนก, เวลาเข้างาน, เวลาออกงาน, สถานะ, นาทีที่มาสาย
+- Rows: all statuses per emp per day (Q10 A — includes absent + day-off + field work)
+
+**Sheet 2 "สรุป-ทั้งหมด" + per-company sheets** (Q5 C — grand total + per-day breakdown):
+- Rows 1-17: Grand totals (match single-day template format)
+- Row 19: "— per-day breakdown —" section
+- Row 20+: per-day table (วันที่, พนักงาน, มา, ตรงเวลา, หลังเวลา, สาย, นอกสถานที่, ลา, วันหยุด, ขาด)
+
+**Sheet last "สรุปลา-สาย"** — memo format with all leave + late records across range (added วันที่ column, kept letter head)
+
+### Filename Convention (Q11 A)
+`รายงานเข้างาน-2026-07-01-ถึง-2026-07-18.xlsx`
+
+### Constraints
+- **Max range 31 days** (Q2 C) — validate + reject if exceeded
+- **Empty scope check** — Manager with no team sees warning (Q12 A — self still included)
+- **Cutoff-spanning ranges allowed** (Q13 A) — no warning
+
+### DB Impact
+🟢 **Zero** — pure computation + UI, no schema/data changes.
+
+### Verification
+1. Console: `v1.5.3`
+2. Admin: หน้ารายงานเข้างาน → เห็นปุ่ม "📅 Export ช่วงวันที่" → คลิก → modal เด้ง → เลือกช่วง → Export
+3. Manager: หน้ารายงาน → เห็นแท็บใหม่ "รายงานเข้างาน" → คลิก → หน้าอธิบาย + ปุ่ม export
+4. Manager export: file contains only team members (scope filter works)
+5. Range validation: enter >31 days → red toast + reject
+6. Payroll cycle preset: default range matches `settings.payrollCutoffDay`
+
+### Rollback
+Vercel promote v1.5.2 (~10 sec). Zero data risk.
+
+### Deferred to v1.5.4
+- Excel styling for range summaries (currently bare)
+- CSV export version of range report
+- Per-emp detail modal for range (like single-day)
+
+---
+
 ## [1.5.2] — 2026-07-17 (HOTFIX²: fix v1.5.1's ReferenceError in late-summary template)
 
 **HOTFIX — v1.5.1 template literals crashed because they referenced removed `lateThreshold` variable**

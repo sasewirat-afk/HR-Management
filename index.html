@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.2</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.3</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.2';
+const APP_VERSION = '1.5.3';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -7198,7 +7198,8 @@ function renderAttendanceReport() {
  ${dates.length ? dates.map(d => `<option value="${d}" ${d === _attReportDate ? 'selected' : ''}>${formatDate(d)}</option>`).join('') : '<option>-</option>'}
  </select>
  ${dates.length ? `
- <button class="btn btn-sm btn-success" onclick="exportAttendanceXLSX()" title="ดาวน์โหลดเป็น Excel">Export Excel</button>
+ <button class="btn btn-sm btn-success" onclick="exportAttendanceXLSX()" title="ดาวน์โหลดเป็น Excel (วันเดียว)">Export Excel</button>
+ <button class="btn btn-sm btn-success" onclick="openRangeExportModal({scope:'admin'})" title="v1.5.3: เลือกช่วงวันที่ export">📅 Export ช่วงวันที่</button>
  <button class="btn btn-sm btn-secondary" onclick="exportAttendanceReportPNG('download')" title="ดาวน์โหลดเป็นรูป PNG">ดาวน์โหลด PNG</button>
  <button class="btn btn-sm btn-primary" onclick="exportAttendanceReportPNG('share')" title="แชร์ไป Line / Messenger / Email">แชร์</button>
  ` : ''}
@@ -7966,6 +7967,520 @@ function exportAttendanceXLSX() {
 
  XLSX.writeFile(wb, `รายงานเข้างาน-${_attReportDate}.xlsx`);
  toast(`Export 3 sheets (${present.length} มา / ${leaveOnDate.length} ลา / ${absent.length} ขาด) สำเร็จ`);
+}
+
+// ============================================================
+// v1.5.3 (ADR-0004 continued): RANGE EXPORT — Excel over date range
+// Shared by Admin (รายงานเข้างาน page) and Manager (รายงาน tab).
+// scopeEmpIds: Set<string> or null. null = all active emps. Set = filter to these ids only.
+// Format matches single-day template but extended:
+//   - ภาพรวม sheet: long format, all rows across all dates
+//   - Per-company summaries: Grand total (rows 1-8) + Per-day breakdown table
+//   - สรุปลา-สาย: all leave/late records across range
+// ============================================================
+function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
+ if (!_xlsxCheck()) return;
+ // Validate range
+ if (!startDate || !endDate) { toast('เลือกช่วงวันที่ก่อน', 'error'); return; }
+ const start = new Date(startDate);
+ const end = new Date(endDate);
+ if (isNaN(start) || isNaN(end)) { toast('รูปแบบวันที่ไม่ถูกต้อง', 'error'); return; }
+ if (end < start) { toast('วันสิ้นสุดต้องไม่น้อยกว่าวันเริ่ม', 'error'); return; }
+ const daysDiff = Math.round((end - start) / (1000 * 60 * 60 * 24)) + 1;
+ if (daysDiff > 31) { toast(`ช่วงเกิน 31 วัน (${daysDiff} วัน) — โปรดเลือกใหม่`, 'error'); return; }
+
+ const settings = DB.load('settings');
+ const workStart = settings.workStartTime || '08:45';
+ const globalLateThreshold = settings.lateThreshold || '09:01';
+
+ // Generate list of dates (YYYY-MM-DD)
+ const dates = [];
+ for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+ dates.push(d.toISOString().split('T')[0]);
+ }
+
+ // Scope active employees
+ const allActive = DB.load('employees').filter(e => e.active);
+ const scopedActive = scopeEmpIds
+ ? allActive.filter(e => scopeEmpIds.has(e.id))
+ : allActive;
+ const activeEmps = scopedActive.filter(e => isCountedInAttendance(e) && !e.exemptFromAttendance);
+ const exemptEmps = scopedActive.filter(e => isCountedInAttendance(e) && e.exemptFromAttendance);
+ const scopedActiveIds = new Set([...activeEmps, ...exemptEmps].map(e => e.id));
+
+ if (scopedActiveIds.size === 0) { toast('ไม่มีพนักงานในขอบเขตที่เลือก', 'error'); return; }
+
+ // Preload data once
+ const allRecords = DB.load('attendanceRecords');
+ const allLeaves = DB.load('leaveRequests').filter(r => r.status === 'approved');
+ const allFieldWork = DB.load('fieldWorkRequests', []).filter(f => f.status === 'approved');
+ const empsById = new Map(allActive.map(e => [e.id, e]));
+
+ // Leave-type → status mapping (v1.4.55)
+ const _leaveTypeToStatus = (t) => {
+ switch (t) {
+ case 'personal': return 'ลากิจ';
+ case 'sick': case 'sick-cert': case 'sick-without-cert': return 'ลาป่วย';
+ case 'vacation': return 'ลาพักร้อน';
+ case 'comp-off': return 'ลาสะสมวันหยุด';
+ default: return 'ลาอื่นๆ';
+ }
+ };
+
+ // Per-day compute (mimics single-day exportAttendanceXLSX logic)
+ // Returns { present, exemptPresent, leaveOnDate, fieldWorkOnDate, absent, dayOff, s1Rows[] }
+ const dayData = {};
+ dates.forEach(dateStr => {
+ const dayRecordsRaw = allRecords.filter(r => r.date === dateStr &&
+ (scopedActiveIds.has(r.employeeId) || scopedActiveIds.has(r.employeeCode))
+ );
+ const dayRecords = mergeApprovedTimeCertForDate(dayRecordsRaw, dateStr);
+
+ // Unique per employee per day
+ const byEmp = new Map();
+ dayRecords.forEach(r => {
+ const key = r.employeeCode || r.employeeId || `_${r.id}`;
+ const existing = byEmp.get(key);
+ if (!existing) { byEmp.set(key, r); return; }
+ if (r.checkIn && (!existing.checkIn || r.checkIn < existing.checkIn)) byEmp.set(key, r);
+ });
+ const uniqueRecs = [...byEmp.values()];
+
+ const leaveOnDate = allLeaves.filter(r =>
+ scopedActiveIds.has(r.employeeId) &&
+ new Date(r.startDate) <= new Date(dateStr) &&
+ new Date(r.endDate) >= new Date(dateStr)
+ );
+ const present = uniqueRecs.filter(r => r.checkIn);
+ const explicitAbsent = uniqueRecs.filter(r => !r.checkIn);
+
+ const fieldWorkOnDate = allFieldWork.filter(f =>
+ f.date === dateStr && scopedActiveIds.has(f.employeeId)
+ );
+ const fieldWorkIds = new Set(fieldWorkOnDate.map(f => f.employeeId));
+
+ const presentIds = new Set(present.map(r => r.employeeCode || r.employeeId));
+ const leaveIds = new Set(leaveOnDate.map(r => r.employeeId));
+ const trackedIds = new Set(uniqueRecs.map(r => r.employeeCode || r.employeeId));
+
+ const absentCandidates = activeEmps.filter(e =>
+ !presentIds.has(e.id) && !leaveIds.has(e.id) && !trackedIds.has(e.id) && !fieldWorkIds.has(e.id)
+ );
+ const dayOff = [];
+ const inferredAbsent = [];
+ absentCandidates.forEach(e => {
+ const shift = getShift(e.id, dateStr);
+ const row = {
+ date: dateStr, employeeCode: e.id, employeeId: e.id,
+ employeeName: `${e.firstName} ${e.lastName}`,
+ checkIn: null, checkOut: null
+ };
+ if (shift && shift.type === 'O') dayOff.push({ ...row, _dayOff: true });
+ else inferredAbsent.push({ ...row, _inferredAbsent: true });
+ });
+ const absent = [...explicitAbsent, ...inferredAbsent];
+
+ const fieldWorkPresent = activeEmps.filter(e => fieldWorkIds.has(e.id) && !presentIds.has(e.id));
+ const exemptPresent = exemptEmps.filter(e => {
+ if (leaveIds.has(e.id)) return false;
+ const shift = getShift(e.id, dateStr);
+ if (shift && shift.type === 'O') return false;
+ if (!shift) {
+ const d = new Date(dateStr);
+ const dow = d.getDay();
+ if (dow === 0 || dow === 6) return false;
+ if ((settings.companyHolidays || []).includes(dateStr)) return false;
+ }
+ return true;
+ });
+
+ // Per-emp per-day late threshold — resolved once per record
+ const _thresholdCache = new Map(); // empId → threshold for this date
+ const _getThresholdFor = (emp) => {
+ if (_thresholdCache.has(emp.id)) return _thresholdCache.get(emp.id);
+ const th = getLateThresholdForEmployee(emp, dateStr, settings);
+ _thresholdCache.set(emp.id, th);
+ return th;
+ };
+
+ dayData[dateStr] = { present, exemptPresent, leaveOnDate, fieldWorkOnDate, fieldWorkPresent, absent, dayOff, _getThresholdFor };
+ });
+
+ // ============================================================
+ // Sheet 1: ภาพรวม — all rows across all dates
+ // ============================================================
+ const wb = XLSX.utils.book_new();
+ const rangeTitle = daysDiff === 1
+ ? `รายงานการเข้างาน วันที่ ${formatDate(startDate)}`
+ : `รายงานการเข้างาน วันที่ ${formatDate(startDate)} - ${formatDate(endDate)} (${daysDiff} วัน)`;
+
+ const s1Data = [
+ [rangeTitle],
+ [`v1.5.3: per-day late threshold applied (shift → customStartTime → global ${globalLateThreshold})`],
+ [],
+ ['วันที่','รหัสพนักงาน','ชื่อ-สกุล','ชื่อเล่น','บริษัท','แผนก','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่มาสาย']
+ ];
+
+ dates.forEach(dateStr => {
+ const d = dayData[dateStr];
+ // Present rows (sorted by checkIn)
+ [...d.present].sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||'')).forEach(r => {
+ const empObj = empsById.get(r.employeeCode) || empsById.get(r.employeeId);
+ const th = empObj ? d._getThresholdFor(empObj) : globalLateThreshold;
+ let status, lateMin = 0;
+ if (th === null) {
+ status = 'ทำงานในวันหยุด';
+ } else if (r.checkIn >= th) {
+ status = 'มาสาย';
+ const [h, m] = r.checkIn.split(':').map(Number);
+ const [thH, thM] = th.split(':').map(Number);
+ lateMin = Math.max(0, (h*60+m) - (thH*60+thM));
+ } else if (r.checkIn >= workStart) {
+ status = 'มาหลังเวลา';
+ } else {
+ status = 'มาตรงเวลา';
+ }
+ s1Data.push([
+ r.date, r.employeeCode, r.employeeName,
+ empObj ? (empObj.nickname || '') : '',
+ empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
+ getDeptForAttendance(r), r.checkIn, r.checkOut || '-', status, lateMin
+ ]);
+ });
+ // Leave rows
+ d.leaveOnDate.forEach(r => {
+ const e = empsById.get(r.employeeId);
+ if (!e) return;
+ s1Data.push([
+ dateStr, e.id, `${e.firstName} ${e.lastName}`,
+ e.nickname || '', getCompanyLabel(e.company) || '-',
+ e.department || '', '', '', _leaveTypeToStatus(r.type), ''
+ ]);
+ });
+ // Field Work
+ d.fieldWorkOnDate.forEach(f => {
+ const e = empsById.get(f.employeeId);
+ if (!e) return;
+ s1Data.push([
+ dateStr, e.id, `${e.firstName} ${e.lastName}`,
+ e.nickname || '', getCompanyLabel(e.company) || '-',
+ e.department || '', f.startTime || '', f.endTime || '-', 'ทำงานนอกสถานที่', ''
+ ]);
+ });
+ // Exempt Present
+ d.exemptPresent.forEach(e => {
+ s1Data.push([
+ dateStr, e.id, `${e.firstName} ${e.lastName}`,
+ e.nickname || '', getCompanyLabel(e.company) || '-',
+ e.department || '', '(ละเว้น)', '-', 'มาตรงเวลา', 0
+ ]);
+ });
+ // Absent
+ d.absent.forEach(r => {
+ const empObj = empsById.get(r.employeeCode) || empsById.get(r.employeeId);
+ s1Data.push([
+ r.date || dateStr, r.employeeCode || '-', r.employeeName || '-',
+ empObj ? (empObj.nickname || '') : '',
+ empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
+ getDeptForAttendance(r), '', '', 'ขาดงาน', ''
+ ]);
+ });
+ // Day off
+ d.dayOff.forEach(r => {
+ const empObj = empsById.get(r.employeeCode) || empsById.get(r.employeeId);
+ s1Data.push([
+ dateStr, r.employeeCode, r.employeeName,
+ empObj ? (empObj.nickname || '') : '',
+ empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
+ empObj ? (empObj.department || '') : getDeptForAttendance(r),
+ '', '', 'วันหยุด', ''
+ ]);
+ });
+ });
+
+ const ws1 = XLSX.utils.aoa_to_sheet(s1Data);
+ ws1['!cols'] = [{wch:12},{wch:14},{wch:26},{wch:12},{wch:16},{wch:22},{wch:12},{wch:12},{wch:14},{wch:12}];
+ ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:9}},{s:{r:1,c:0},e:{r:1,c:9}}];
+ XLSX.utils.book_append_sheet(wb, ws1, 'ภาพรวม');
+
+ // ============================================================
+ // Helper: build per-company summary (Grand total + per-day breakdown)
+ // ============================================================
+ const _buildRangeSummary = (label, subsetEmpIds) => {
+ // Grand totals
+ let g_scanned = 0, g_onTime = 0, g_afterStart = 0, g_late = 0;
+ let g_exempt = 0, g_fw = 0, g_dayOff = 0, g_absent = 0;
+ const g_leaveBT = { 'ลากิจ':0, 'ลาป่วย':0, 'ลาพักร้อน':0, 'ลาสะสมวันหยุด':0, 'ลาอื่นๆ':0 };
+ const perDay = []; // [date, active, present, onTime, afterStart, late, fw, leave, dayOff, absent]
+
+ dates.forEach(dateStr => {
+ const d = dayData[dateStr];
+ const _in = (id) => subsetEmpIds.has(id);
+ const p = d.present.filter(r => _in(r.employeeCode || r.employeeId));
+ const ep = d.exemptPresent.filter(e => _in(e.id));
+ const fw = d.fieldWorkOnDate.filter(f => _in(f.employeeId));
+ const lv = d.leaveOnDate.filter(l => _in(l.employeeId));
+ const off = d.dayOff.filter(r => _in(r.employeeCode || r.employeeId));
+ const ab = d.absent.filter(r => _in(r.employeeCode || r.employeeId));
+
+ let d_onTime = 0, d_afterStart = 0, d_late = 0;
+ p.forEach(r => {
+ const empObj = empsById.get(r.employeeCode) || empsById.get(r.employeeId);
+ const th = empObj ? d._getThresholdFor(empObj) : globalLateThreshold;
+ if (th === null) { d_onTime++; return; } // working on day off — count as on-time
+ if (r.checkIn >= th) d_late++;
+ else if (r.checkIn >= workStart) d_afterStart++;
+ else d_onTime++;
+ });
+
+ g_scanned += p.length; g_onTime += d_onTime; g_afterStart += d_afterStart; g_late += d_late;
+ g_exempt += ep.length; g_fw += fw.length;
+ g_dayOff += off.length; g_absent += ab.length;
+ lv.forEach(l => { g_leaveBT[_leaveTypeToStatus(l.type)]++; });
+
+ perDay.push([
+ dateStr, subsetEmpIds.size,
+ p.length + ep.length, // present incl exempt
+ d_onTime + ep.length, // onTime incl exempt (Q13 C)
+ d_afterStart, d_late,
+ fw.length, lv.length, off.length, ab.length
+ ]);
+ });
+
+ const g_totalPresent = g_scanned + g_exempt;
+ const g_leaveTotal = Object.values(g_leaveBT).reduce((s,v) => s+v, 0);
+
+ const rows = [
+ [label],
+ [],
+ ['ช่วงวันที่', `${formatDate(startDate)} - ${formatDate(endDate)} (${daysDiff} วัน)`],
+ ['จำนวนพนักงานที่คิดเวลาทำงาน (ไม่รวม Admin ยกเว้นที่ตั้ง countInAttendance=true)', subsetEmpIds.size],
+ ['มาทำงาน (รวมละเว้นการพิจารณา, รวม ' + daysDiff + ' วัน)', g_totalPresent],
+ [' - มาตรงเวลา (ก่อน ' + workStart + ')', g_onTime + g_exempt],
+ [' - มาหลังเวลา (' + workStart + ' - lateThreshold ตามกะแต่ละคน)', g_afterStart],
+ [' - มาสาย (หลัง lateThreshold ตามกะแต่ละคน)', g_late],
+ ['ทำงานนอกสถานที่ (รวม)', g_fw],
+ ['ลาหยุด (รวม)', g_leaveTotal],
+ [' - ลากิจ', g_leaveBT['ลากิจ']],
+ [' - ลาป่วย', g_leaveBT['ลาป่วย']],
+ [' - ลาพักร้อน', g_leaveBT['ลาพักร้อน']],
+ [' - ลาสะสมวันหยุด', g_leaveBT['ลาสะสมวันหยุด']],
+ [' - ลาอื่นๆ (คลอด / บวช / ไม่รับค่าจ้าง)', g_leaveBT['ลาอื่นๆ']],
+ ['วันหยุด (ตามตารางกะ)', g_dayOff],
+ ['ไม่มา / ขาดงาน', g_absent],
+ [],
+ ['ตรวจสอบยอด (มา + นอกสถานที่ + ลา + วันหยุด + ขาด)',
+ g_totalPresent + g_fw + g_leaveTotal + g_dayOff + g_absent],
+ [],
+ ['— per-day breakdown (v1.5.3) —'],
+ ['วันที่', 'พนักงาน', 'มา', 'ตรงเวลา', 'หลังเวลา', 'สาย', 'นอกสถานที่', 'ลา', 'วันหยุด', 'ขาด'],
+ ...perDay
+ ];
+ return rows;
+ };
+
+ // Build per-company summary sheets
+ const _byCompany = new Map();
+ const _appendToCompany = (companyId, empId) => {
+ const id = companyId || '__unknown__';
+ if (!_byCompany.has(id)) _byCompany.set(id, new Set());
+ _byCompany.get(id).add(empId);
+ };
+ activeEmps.forEach(e => _appendToCompany(e.company, e.id));
+ exemptEmps.forEach(e => _appendToCompany(e.company, e.id));
+
+ // Sheet 2: สรุป-ทั้งหมด
+ const allIds = new Set([...activeEmps, ...exemptEmps].map(e => e.id));
+ const s2Data = _buildRangeSummary('สรุปรายงานการเข้างาน (ทั้งหมด, ' + daysDiff + ' วัน)', allIds);
+ const ws2 = XLSX.utils.aoa_to_sheet(s2Data);
+ ws2['!cols'] = [{wch:52},{wch:14},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];
+ ws2['!merges'] = [{s:{r:0,c:0},e:{r:0,c:9}}];
+ XLSX.utils.book_append_sheet(wb, ws2, 'สรุป-ทั้งหมด');
+
+ // Per-company sheets (in configured order)
+ const _configuredCompanies = settings.companies || [];
+ _configuredCompanies.forEach(c => {
+ if (!_byCompany.has(c.id)) return;
+ const dataC = _buildRangeSummary(`สรุปรายงานการเข้างาน — ${c.label} (${daysDiff} วัน)`, _byCompany.get(c.id));
+ const wsC = XLSX.utils.aoa_to_sheet(dataC);
+ wsC['!cols'] = [{wch:52},{wch:14},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];
+ wsC['!merges'] = [{s:{r:0,c:0},e:{r:0,c:9}}];
+ let sheetName = `สรุป-${c.label}`;
+ if (sheetName.length > 31) sheetName = sheetName.slice(0, 31);
+ XLSX.utils.book_append_sheet(wb, wsC, sheetName);
+ });
+ // ไม่ระบุบริษัท (if any)
+ if (_byCompany.has('__unknown__')) {
+ const dataU = _buildRangeSummary('สรุปรายงานการเข้างาน — ไม่ระบุบริษัท (' + daysDiff + ' วัน)', _byCompany.get('__unknown__'));
+ const wsU = XLSX.utils.aoa_to_sheet(dataU);
+ wsU['!cols'] = [{wch:52},{wch:14},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];
+ wsU['!merges'] = [{s:{r:0,c:0},e:{r:0,c:9}}];
+ XLSX.utils.book_append_sheet(wb, wsU, 'สรุป-ไม่ระบุ');
+ }
+ // MTP+Crochet combined
+ const _mtp = _byCompany.get('masterpiece');
+ const _crochet = _byCompany.get('crochet');
+ if ((_mtp && _mtp.size) || (_crochet && _crochet.size)) {
+ const combinedIds = new Set();
+ if (_mtp) _mtp.forEach(id => combinedIds.add(id));
+ if (_crochet) _crochet.forEach(id => combinedIds.add(id));
+ const dataMx = _buildRangeSummary('สรุปรายงานการเข้างาน — Masterpiece + Crochet (' + daysDiff + ' วัน)', combinedIds);
+ const wsMx = XLSX.utils.aoa_to_sheet(dataMx);
+ wsMx['!cols'] = [{wch:52},{wch:14},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12},{wch:12}];
+ wsMx['!merges'] = [{s:{r:0,c:0},e:{r:0,c:9}}];
+ XLSX.utils.book_append_sheet(wb, wsMx, 'สรุป MTPxCrochet');
+ }
+
+ // ============================================================
+ // Last sheet: สรุปลา-สาย — all leave + late records across range
+ // ============================================================
+ const primaryCompany = (settings.companies || []).find(c => c.id === 'masterpiece') || (settings.companies || [])[0] || {};
+ const companyFullName = primaryCompany.name || 'บริษัท มาสเตอร์พีช แอนด์ โครเชท์ จำกัด';
+ const s3Data = [];
+ s3Data.push([`เรียน คุณ${settings.reportRecipientName || 'รัชตะ สาริบุตร'}`]);
+ s3Data.push([settings.reportRecipientTitle || 'กรรมการผู้จัดการ']);
+ s3Data.push([`จาก ${settings.reportSenderName || 'ฝ่ายทรัพยากรบุคคล'}`]);
+ s3Data.push([]);
+ s3Data.push([`รายงานการขาดลาของพนักงาน ${companyFullName}`]);
+ s3Data.push([`ช่วงวันที่ ${formatDate(startDate)} ถึง ${formatDate(endDate)} (${daysDiff} วัน)`]);
+ s3Data.push([]);
+ s3Data.push(['ลำดับ','วันที่','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','ประเภทลา','หมายเหตุ']);
+ let idx = 1;
+ dates.forEach(dateStr => {
+ const d = dayData[dateStr];
+ d.leaveOnDate.forEach(r => {
+ const e = empsById.get(r.employeeId);
+ if (!e) return;
+ s3Data.push([
+ idx++, formatDate(dateStr), `${e.firstName} ${e.lastName}`, e.nickname || '', e.department || '',
+ e.company === 'crochet' ? '/' : '',
+ e.company === 'masterpiece' ? '/' : '',
+ e.company === 'habita' ? '/' : '',
+ getLeaveTypeName(r.type), r.reason || ''
+ ]);
+ });
+ });
+ s3Data.push([]);
+ s3Data.push(['พนักงานที่มาทำงานสาย']);
+ s3Data.push(['ลำดับ','วันที่','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','เวลาเข้า','เกณฑ์สาย']);
+ let lateIdx = 1;
+ dates.forEach(dateStr => {
+ const d = dayData[dateStr];
+ [...d.present].filter(r => {
+ const empObj = empsById.get(r.employeeCode) || empsById.get(r.employeeId);
+ if (!empObj) return false;
+ const th = d._getThresholdFor(empObj);
+ return th !== null && r.checkIn >= th;
+ }).sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||''))
+ .forEach(r => {
+ const empObj = empsById.get(r.employeeCode) || empsById.get(r.employeeId);
+ const th = d._getThresholdFor(empObj);
+ s3Data.push([
+ lateIdx++, formatDate(dateStr),
+ `${empObj.firstName} ${empObj.lastName}`, empObj.nickname || '',
+ empObj.department || '',
+ empObj.company === 'crochet' ? '/' : '',
+ empObj.company === 'masterpiece' ? '/' : '',
+ empObj.company === 'habita' ? '/' : '',
+ r.checkIn, th
+ ]);
+ });
+ });
+ const ws3 = XLSX.utils.aoa_to_sheet(s3Data);
+ ws3['!cols'] = [{wch:8},{wch:12},{wch:26},{wch:12},{wch:22},{wch:12},{wch:14},{wch:10},{wch:14},{wch:12}];
+ XLSX.utils.book_append_sheet(wb, ws3, 'สรุปลา-สาย');
+
+ // Write file
+ const filename = `รายงานเข้างาน-${startDate}-ถึง-${endDate}.xlsx`;
+ XLSX.writeFile(wb, filename);
+ toast(`Export ${daysDiff} วัน · ${scopedActiveIds.size} คน · ${wb.SheetNames.length} sheets สำเร็จ`);
+}
+
+// v1.5.3: Modal to pick date range + trigger export
+// Usage: openRangeExportModal({ scope: 'admin' | 'manager' })
+//   - admin: all active emps
+//   - manager: emps where managerId === currentUser.id + self
+function openRangeExportModal(opts = {}) {
+ const scope = opts.scope || 'admin';
+ // Determine scope emp IDs
+ let scopeEmpIds = null;
+ let scopeLabel = '';
+ if (scope === 'manager') {
+ const emps = DB.load('employees').filter(e => e.active);
+ const team = emps.filter(e => e.managerId === currentUser.id || e.id === currentUser.id);
+ scopeEmpIds = new Set(team.map(e => e.id));
+ scopeLabel = `${scopeEmpIds.size} คน (ทีม + ตัวเอง)`;
+ } else {
+ scopeLabel = 'พนักงาน Active ทั้งหมด';
+ }
+
+ // Default range: this payroll cycle (from settings.payrollCutoffDay)
+ const cutoffDay = (DB.load('settings').payrollCutoffDay || 21);
+ const today = new Date();
+ const thisMonth = today.getMonth();
+ const thisYear = today.getFullYear();
+ let cycleStart, cycleEnd;
+ if (today.getDate() > cutoffDay) {
+ // We're past cutoff — cycle is (cutoff+1 of this month) to (cutoff of next month)
+ cycleStart = new Date(thisYear, thisMonth, cutoffDay + 1);
+ cycleEnd = new Date(thisYear, thisMonth + 1, cutoffDay);
+ } else {
+ // We're before or on cutoff — cycle is (cutoff+1 of prev month) to (cutoff of this month)
+ cycleStart = new Date(thisYear, thisMonth - 1, cutoffDay + 1);
+ cycleEnd = new Date(thisYear, thisMonth, cutoffDay);
+ }
+ const cycleStartStr = cycleStart.toISOString().split('T')[0];
+ const cycleEndStr = cycleEnd.toISOString().split('T')[0];
+ const monthStartStr = new Date(thisYear, thisMonth, 1).toISOString().split('T')[0];
+ const monthEndStr = new Date(thisYear, thisMonth + 1, 0).toISOString().split('T')[0];
+ const todayStr = today.toISOString().split('T')[0];
+ const week7 = new Date(today.getTime() - 6 * 86400000).toISOString().split('T')[0];
+
+ const body = `
+ <div class="alert alert-info mb-3" style="font-size:13px;">
+ <strong>ขอบเขต:</strong> ${scopeLabel}<br>
+ <small>Excel Template ตามรูปแบบเดิม — ภาพรวม + สรุปต่อบริษัท (Grand total + per-day) + สรุปลา-สาย</small>
+ </div>
+ <div class="form-row" style="margin-bottom:12px;">
+ <div class="form-group">
+ <label>วันเริ่ม *</label>
+ <input type="date" id="rangeStart" value="${cycleStartStr}" required>
+ </div>
+ <div class="form-group">
+ <label>วันสิ้นสุด *</label>
+ <input type="date" id="rangeEnd" value="${cycleEndStr}" required>
+ </div>
+ </div>
+ <div style="margin-bottom:12px;">
+ <div style="font-size:12px;color:var(--gray-600);margin-bottom:6px;">Quick preset:</div>
+ <div style="display:flex;gap:6px;flex-wrap:wrap;">
+ <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('rangeStart').value='${todayStr}';document.getElementById('rangeEnd').value='${todayStr}';">วันนี้</button>
+ <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('rangeStart').value='${week7}';document.getElementById('rangeEnd').value='${todayStr}';">7 วันล่าสุด</button>
+ <button type="button" class="btn btn-sm btn-secondary" onclick="document.getElementById('rangeStart').value='${monthStartStr}';document.getElementById('rangeEnd').value='${monthEndStr}';">เดือนนี้</button>
+ <button type="button" class="btn btn-sm btn-primary" onclick="document.getElementById('rangeStart').value='${cycleStartStr}';document.getElementById('rangeEnd').value='${cycleEndStr}';">Payroll cycle นี้</button>
+ </div>
+ </div>
+ <div style="font-size:11px;color:var(--gray-500);">⚠ ช่วงสูงสุด 31 วัน · ใช้ v1.5.1 per-day late threshold (ADR-0004)</div>
+ `;
+ const footer = `
+ <button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button>
+ <button class="btn btn-success" onclick="_doRangeExport('${scope}')">⬇ Export Excel</button>
+ `;
+ showModal('เลือกช่วงวันที่ — Export Excel', body, footer);
+}
+
+function _doRangeExport(scope) {
+ const startDate = document.getElementById('rangeStart')?.value;
+ const endDate = document.getElementById('rangeEnd')?.value;
+ if (!startDate || !endDate) { toast('เลือกช่วงวันที่ก่อน', 'error'); return; }
+ let scopeEmpIds = null;
+ if (scope === 'manager') {
+ const emps = DB.load('employees').filter(e => e.active);
+ const team = emps.filter(e => e.managerId === currentUser.id || e.id === currentUser.id);
+ scopeEmpIds = new Set(team.map(e => e.id));
+ }
+ exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds);
+ closeModal();
 }
 
 function exportPayrollXLSX() {
@@ -9446,6 +9961,7 @@ function renderReports() {
  <div class="tab ${reportTab==='field-work'?'active':''}" onclick="setReportTab('field-work')">งานนอกสถานที่</div>
  <div class="tab ${reportTab==='time-cert'?'active':''}" onclick="setReportTab('time-cert')">รับรองเวลา</div>
  <div class="tab ${reportTab==='late-summary'?'active':''}" onclick="setReportTab('late-summary')">มาสายสะสม</div>
+ ${currentUser.role === 'manager' ? `<div class="tab ${reportTab==='attendance-range'?'active':''}" onclick="setReportTab('attendance-range')">รายงานเข้างาน</div>` : ''}
  </div>
  <div id="reportContent"></div>
  `;
@@ -9887,6 +10403,47 @@ function drawReport() {
  </tbody>
  </table>
  ` : '<div class="empty-state" style="padding:40px;text-align:center;">ไม่มีพนักงานมาสายในเดือนนี้</div>'}
+ </div>
+ </div>
+ `;
+ }
+
+ // v1.5.3: Manager-only tab — range attendance export
+ else if (reportTab === 'attendance-range') {
+ const emps = DB.load('employees').filter(e => e.active);
+ const team = emps.filter(e => e.managerId === currentUser.id || e.id === currentUser.id);
+ const cutoffDay = (DB.load('settings').payrollCutoffDay || 21);
+ html = `
+ <div class="card">
+ <div class="card-header">
+ <h3>📅 รายงานเข้างาน (Export Excel — ช่วงวันที่)</h3>
+ </div>
+ <div class="card-body">
+ <div class="alert alert-info mb-3" style="font-size:13px;">
+ <strong>ขอบเขต:</strong> ทีมของคุณ ${team.length} คน (direct reports + ตัวเอง)<br>
+ <small>ใช้ v1.5.1 per-day late threshold (ADR-0004) — คำนวณตามกะที่ตั้งของแต่ละคน</small>
+ </div>
+ <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px;align-items:center;">
+ <button class="btn btn-primary" onclick="openRangeExportModal({scope:'manager'})" style="padding:12px 24px;font-weight:700;font-size:14px;">
+ ⬇ เลือกช่วงวันที่ + Export Excel
+ </button>
+ <div style="font-size:12px;color:var(--gray-600);">
+ ⚙ ช่วงสูงสุด <strong>31 วัน</strong> · Default: Payroll cycle นี้
+ </div>
+ </div>
+ <hr style="margin:16px 0;border:none;border-top:1px solid var(--gray-200);">
+ <div style="font-size:13px;line-height:1.8;">
+ <strong>📄 Excel Template ประกอบด้วย:</strong>
+ <ul style="margin:8px 0 0 20px;">
+ <li><strong>ภาพรวม</strong> — เข้างานทั้งหมดในช่วง (long format: date × emp)</li>
+ <li><strong>สรุป-ทั้งหมด</strong> — Grand total + per-day breakdown</li>
+ <li><strong>สรุปต่อบริษัท</strong> — Crochet / Masterpiece / Habita / ConceptOne / MTPxCrochet (เฉพาะที่มีทีม)</li>
+ <li><strong>สรุปลา-สาย</strong> — รายชื่อ + วันที่ทุก records ในช่วง</li>
+ </ul>
+ </div>
+ <div class="alert alert-warning mt-3" style="font-size:12px;">
+ ⚠ Manager scope: เห็นเฉพาะพนักงาน direct reports + ตัวเอง (ADR-0004 Q6)
+ </div>
  </div>
  </div>
  `;

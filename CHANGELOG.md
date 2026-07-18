@@ -6,6 +6,102 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.4] — 2026-07-18 (HOTFIX: daily report per-day + STRICT late + field work)
+
+**HOTFIX + SEMANTIC CHANGE — Late detection semantic revised per user Q1 B + Q4**
+
+### Bug Report
+Emp บุษกร (690518001, ConceptOne). Scan 17 ก.ค. checkin 09:57. Admin set shift 17 ก.ค. = `10` (10:00 start). Daily attendance report showed "สาย" — but should be "ตรงเวลา" (09:57 before 10:00 shift start).
+
+### Root Cause
+Daily report (`renderAttendanceReport` at line 7118) + single-day Excel export (`exportAttendanceXLSX`) both used global `settings.lateThreshold` directly — bypassed per-day resolver. Deferred fix from v1.5.1 CHANGELOG that turned out to be higher priority than assumed (Admin uses daily report for management decisions).
+
+Field work also missing from daily report (only present in exportAttendanceXLSX) — inconsistency.
+
+### Semantic Change — STRICT for Grid Shifts (User Q1 B)
+
+**Before v1.5.4:** Grid shift `10` → threshold = 10:16 (with `defaultGracePeriodMinutes` grace)
+**After v1.5.4:** Grid shift `10` → threshold = **10:01** (STRICT, no grace)
+
+Late minutes calculation:
+- Strict shift: `checkIn - shiftStartTime` (from 10:00 exactly)
+- Global fallback: `checkIn - lateThreshold` (from 09:01, unchanged)
+
+New buckets:
+- Grid shift → 2-bucket: ตรงเวลา / สาย (no "หลังเวลา" band)
+- Global fallback → 3-bucket: ตรงเวลา (before 08:45) / หลังเวลา (08:45-09:00) / สาย (09:01+)
+
+### Semantic Change — Remove `emp.customStartTime` Tier (User Q4)
+
+Per user decision: remove tier 2 from resolver — rely on shift schedule as single source of truth.
+
+**Before v1.5.4:** 3-tier chain (grid → customStartTime → global)
+**After v1.5.4:** 2-tier chain (grid → global)
+
+`emp.customStartTime` field:
+- **Data preserved** — not deleted, just not used
+- **Resolver ignores it** — never consulted for late threshold
+- **UI hidden** — Employee edit modal no longer shows input; existing values show warning banner ("v1.5.4 ยกเลิกฟีเจอร์นี้แล้ว")
+- **Practical requirement:** Admin ต้องกรอกกะให้ทุก emp ที่มี custom schedule (Kitchen, Front Office, Salon)
+
+### Added
+- `getShiftLateInfo_v1_5_4(emp, date, settings)` — returns `{ lateThreshold, lateBase, workStart, isStrict }` or `null` (day off)
+- `getLateThresholdForEmployee` — now wraps new helper, returns just `lateThreshold` (backward compat)
+
+### Fixed
+1. `renderAttendanceReport` (line 7118) — per-day threshold via `_isLateRec` / `_isAfterStartRec` helpers
+2. `exportAttendanceXLSX` (line 7456+) — same pattern
+3. `resolveAttendanceStatus` (line 2154) — uses `getShiftLateInfo_v1_5_4`, removed customStartTime tier
+4. `computeLateMinutes_v1_5_1` — uses `info.lateBase` (from shift start, not threshold)
+
+### Added — Field Work in Daily Report (User Q3)
+- Field work query added at top of `renderAttendanceReport`
+- Absent filter excludes field work emps (were incorrectly counted as absent before)
+- New tab "**นอกสถานที่ (N)**" in report — shows approved fieldwork records with time + purpose
+- Consistent with `exportAttendanceXLSX` which already handled field work
+
+### Labels Updated (Q2 B)
+- "มาสาย 09:01+" → "**มาสาย (ตามกะ)**"
+- Sub-text: "strict per-shift (v1.5.4)"
+
+### DB Impact
+🟢 **Zero schema changes** — computation logic only.
+🟡 **Payroll numbers WILL change** — emps with grid shift now stricter (no grace). Kitchen/Front Office with early shifts (`6`, `7`) → threshold = 06:01, 07:01 (was 06:16, 07:16). More lateness detected.
+
+### Impact on Existing Users
+| Scenario | Before | After |
+|---|---|---|
+| Emp with grid shift `10`, checkin 10:15 | Threshold 10:16 = ตรงเวลา (in grace) | Threshold 10:01 = สาย 15 min |
+| Emp with grid shift `6`, checkin 06:15 | Threshold 06:16 = ตรงเวลา (in grace) | Threshold 06:01 = สาย 14 min |
+| Emp NO grid shift + customStartTime `10:00` | Threshold 10:16 = ตรงเวลา | Global 09:01 (customStartTime ignored) → สาย |
+| Emp NO grid shift + NO customStartTime | Global 09:01 (unchanged) | Global 09:01 (unchanged) |
+| Emp with shift `O` (day off) | Not late (unchanged) | Not late (unchanged) |
+
+**Priority action for Admin:** Fill grid shifts for ALL Kitchen/Front Office/Salon emps before 21 ก.ค. cutoff.
+
+### Verification
+1. Console: `v1.5.4`
+2. Emp 690518001 (บุษกร) — 17 ก.ค. checkin 09:57 shift `10`:
+   - Should show "ตรงเวลา" in daily report ✅ (was "สาย" — bug)
+   - `getShiftLateInfo_v1_5_4(emp, '2026-07-17', settings)` → `{ lateThreshold: '10:01', lateBase: '10:00', workStart: '10:00', isStrict: true }`
+3. Daily report shows new "นอกสถานที่" tab
+4. Employee edit modal: `customStartTime` UI hidden; users with existing values see warning
+5. Late-summary report + Excel export continue working (same as v1.5.1-3)
+
+### Rollback
+Vercel promote v1.5.3 (~10 sec). Data preserved. Payroll math reverts to v1.5.3 (with grace + customStartTime tier).
+
+### Deferred to v1.5.5
+- Fully remove `emp.customStartTime` field from schema (data cleanup)
+- Excel styling (colors/borders) for range summaries
+- Per-emp detail modal for range view
+- CSV export version
+
+### Docs
+- ADR-0004 supersede pending — Q1 B strict semantic + Q4 customStartTime removal
+
+---
+
 ## [1.5.3] — 2026-07-18 (range date Excel export + Manager report tab)
 
 **FEATURE — Attendance Excel export over date range (Admin + Manager)**

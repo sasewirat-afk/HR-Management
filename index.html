@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.3</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.4</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.3';
+const APP_VERSION = '1.5.4';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1647,41 +1647,38 @@ function isRecordLate_v1_5_1(record, empOrId, settings) {
  return record.checkIn >= th;
 }
 
-// v1.5.1 HOTFIX: Compute late minutes for a record using per-day threshold.
-// Returns 0 if not late (including day off).
+// v1.5.4: Compute late minutes using lateBase (subtract from shift start, not threshold).
+// For strict shift 10:00, checkIn 10:15 → 15 min late (from 10:00, not from 10:01).
+// For global 09:01 default, checkIn 09:30 → 29 min late (from 09:01, unchanged).
 function computeLateMinutes_v1_5_1(record, empOrId, settings) {
  if (!isRecordLate_v1_5_1(record, empOrId, settings)) return 0;
  const emp = (typeof empOrId === 'object' && empOrId?.id)
  ? empOrId
  : (typeof empOrId === 'string' ? (typeof getEmployee === 'function' ? getEmployee(empOrId) : DB.load('employees').find(e => e.id === empOrId || e.id === record.employeeId)) : null);
- const th = getLateThresholdForEmployee(emp, record.date, settings);
- if (!th) return 0;
+ const info = getShiftLateInfo_v1_5_4(emp, record.date, settings);
+ if (!info) return 0;
  const [h, m] = record.checkIn.split(':').map(Number);
- const [thH, thM] = th.split(':').map(Number);
- return Math.max(0, (h * 60 + m) - (thH * 60 + thM));
+ const [bH, bM] = info.lateBase.split(':').map(Number);
+ return Math.max(0, (h * 60 + m) - (bH * 60 + bM));
 }
 
-// v1.5.0 (ADR-0004, supersedes v1.4.65): Derive the effective late threshold.
-// 3-tier resolution chain (Q4 D):
-//   1. shift[emp, date].type numeric → HH:00/30 + graceMinutes
-//   2. shift[emp, date].type = 'O' → null (day off, no late check)
-//   3. shift missing/empty → fallback to emp.customStartTime + grace (ADR-0003)
-//   4. emp.customStartTime missing → global settings.lateThreshold
-// Returns HH:MM string OR null (day off).
-// ALL late-detection code paths MUST call this helper.
-function getLateThresholdForEmployee(emp, date, settings) {
- // Backward-compat: allow old 2-arg call (emp, settings) — will use no shift lookup
- if (date && typeof date === 'object' && date.lateThreshold !== undefined) {
- settings = date;
- date = null;
- }
+// v1.5.4 (revised ADR-0004): Derive shift late info — STRICT for grid, GRACE for global.
+// Returns { lateThreshold, lateBase, workStart, isStrict } OR null (day off).
+// - lateThreshold: HH:MM — checkIn >= this = late
+// - lateBase: HH:MM — subtract for late minutes calc (checkIn - lateBase)
+// - workStart: HH:MM — start of "หลังเวลา" band (== lateThreshold for strict = no band)
+// - isStrict: true if no grace period (grid shift = strict per user Q1 B)
+//
+// v1.5.4 CHANGES from v1.5.0:
+//   - Tier 2 (emp.customStartTime) REMOVED per user Q4 (rely on shift schedule only)
+//   - Grid shift now STRICT (no grace) per user Q1 B — 10:00 → threshold 10:01, lateBase 10:00
+//   - Global tier keeps grace (backward compat with 08:45→09:01 legacy)
+function getShiftLateInfo_v1_5_4(emp, date, settings) {
  settings = settings || DB.load('settings');
  const globalLate = settings.lateThreshold || '09:01';
- const grace = (typeof settings.defaultGracePeriodMinutes === 'number' && settings.defaultGracePeriodMinutes >= 0)
- ? settings.defaultGracePeriodMinutes
- : 16;
+ const globalWorkStart = settings.workStartTime || '08:45';
 
- // Tier 1: per-day shift (v1.5.0)
+ // Tier 1: per-day shift (v1.5.0) — STRICT semantic (v1.5.4)
  if (emp && date) {
  const shifts = DB.load('shifts', []);
  const sh = shifts.find(s => s.employeeId === emp.id && s.date === date);
@@ -1689,20 +1686,39 @@ function getLateThresholdForEmployee(emp, date, settings) {
  const parsed = parseShiftValue(sh.type);
  if (parsed.kind === 'off') return null; // day off — no late check
  if (parsed.kind === 'hour') {
- return addMinutesToTimeStr(hourToTimeString(parsed.hour), grace);
+ const startTime = hourToTimeString(parsed.hour);
+ return {
+ lateThreshold: addMinutesToTimeStr(startTime, 1), // 10:00 → 10:01 (strict boundary)
+ lateBase: startTime, // late minutes = checkIn - 10:00
+ workStart: startTime, // == threshold → no "หลังเวลา" band
+ isStrict: true
+ };
  }
- // 'unset' → fall through to tier 2
  }
  }
 
- // Tier 2: emp.customStartTime (v1.4.65)
- if (emp && emp.customStartTime) {
- const m = /^(\d{1,2}):(\d{2})$/.exec(emp.customStartTime);
- if (m) return addMinutesToTimeStr(emp.customStartTime, grace);
- }
+ // Tier 2 (emp.customStartTime): REMOVED in v1.5.4 per user decision
+ // Data field emp.customStartTime is DEPRECATED (kept but not used in resolver)
 
- // Tier 3: global fallback
- return globalLate;
+ // Tier 3: global fallback (grace 3-bucket, unchanged)
+ return {
+ lateThreshold: globalLate, // 09:01
+ lateBase: globalLate, // late minutes from 09:01
+ workStart: globalWorkStart, // 08:45 — start of "หลังเวลา" band
+ isStrict: false
+ };
+}
+
+// v1.5.4: Backward-compat wrapper — returns just lateThreshold string OR null.
+// All existing callers using getLateThresholdForEmployee continue to work.
+function getLateThresholdForEmployee(emp, date, settings) {
+ // Backward-compat: allow old 2-arg call (emp, settings)
+ if (date && typeof date === 'object' && date.lateThreshold !== undefined) {
+ settings = date;
+ date = null;
+ }
+ const info = getShiftLateInfo_v1_5_4(emp, date, settings);
+ return info === null ? null : info.lateThreshold;
 }
 
 // v1.4.55: Set countInAttendance=true for admin employee 430806001
@@ -2151,15 +2167,10 @@ function formatSlipMonth(slipMonth) {
 function resolveAttendanceStatus(emp, dateStr, ctx) {
  if (!emp || !dateStr) return 'ขาดงาน';
  const settings = ctx?.settings || DB.load('settings');
- // v1.5.0 (ADR-0004): 3-tier late threshold — per-day shift → emp default → global
- const lateThreshold = getLateThresholdForEmployee(emp, dateStr, settings);
- // v1.5.0: workStart derived from same chain (per-day shift takes priority over emp.customStartTime)
- let workStart = emp.customStartTime || settings.workStartTime || '08:45';
- const _sh = (ctx?.shifts || DB.load('shifts', [])).find(s => s.employeeId === emp.id && s.date === dateStr);
- if (_sh) {
- const _parsed = parseShiftValue(_sh.type);
- if (_parsed.kind === 'hour') workStart = hourToTimeString(_parsed.hour);
- }
+ // v1.5.4: use info object — strict for grid, grace for global. customStartTime removed.
+ const _lateInfo = getShiftLateInfo_v1_5_4(emp, dateStr, settings);
+ const lateThreshold = _lateInfo ? _lateInfo.lateThreshold : null;
+ const workStart = _lateInfo ? _lateInfo.workStart : (settings.workStartTime || '08:45');
  const companyHolidays = ctx?.companyHolidays || new Set(settings.companyHolidays || []);
 
  // 1. Day Off — shift schedule OR weekend/holiday
@@ -6078,16 +6089,13 @@ function showEmployeeForm(id) {
  <label class="ios-toggle"><input type="checkbox" id="empExemptAttendance" ${emp?.exemptFromAttendance ? 'checked' : ''}><span>ละเว้นการพิจารณาเวลาเข้า-ออก (ไม่ต้องสแกน · ไม่ขึ้นในรายงานเข้างาน) <small style="color:var(--gray-500);">— สำหรับ CEO/คนสวน/แม่บ้าน ฯลฯ</small></span></label>
  </div>
  <hr style="margin:12px 0;border:none;border-top:1px dashed var(--gray-300);">
- <div style="font-size:12px;color:var(--gray-500);margin-bottom:6px;">⏰ ตารางเวลาส่วนตัว (v1.4.65 · ADR-0003)</div>
- <div class="form-group" style="margin-top:6px;">
- <label>เวลาเริ่มงาน (custom) — ปล่อยว่างถ้าใช้เวลามาตรฐาน</label>
- <input type="time" id="empCustomStartTime" value="${emp?.customStartTime || ''}" placeholder="เช่น 10:00">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
- ถ้าตั้งเวลา → พนักงานคนนี้จะเริ่มงานตามเวลานี้ + grace period<br>
- ตัวอย่าง: ตั้ง 10:00 + grace 16 นาที → มาสายที่ 10:16 (แทน 09:01 มาตรฐาน)<br>
- <span style="color:var(--gray-500);">📌 grace period ตั้งใน หน้า "ตั้งค่า → เวลาทำงาน"</span>
- </div>
- </div>
+ <!-- v1.5.4: DEPRECATED — emp.customStartTime removed from late detection resolver.
+      Use shift schedule (ตารางลงกะงาน) instead. UI hidden. Data field preserved for reference.
+      Hidden input kept so save handler doesn't crash. -->
+ <input type="hidden" id="empCustomStartTime" value="${emp?.customStartTime || ''}">
+ ${emp?.customStartTime ? `<div style="padding:8px 12px;background:#fef3c7;color:#92400e;border-radius:6px;font-size:12px;margin-bottom:12px;">
+ ⚠ พนักงานคนนี้เคยตั้ง custom start time = <code>${emp.customStartTime}</code> (v1.4.65) — v1.5.4 ยกเลิกฟีเจอร์นี้แล้ว ให้ใช้ <strong>ตารางลงกะงาน</strong> แทน · ค่าเดิมยังอยู่แต่ระบบไม่ใช้แล้ว
+ </div>` : ''}
  <hr style="margin:12px 0;border:none;border-top:1px dashed var(--gray-300);">
  <div style="font-size:12px;color:var(--gray-500);margin-bottom:6px;">🔐 สิทธิ์พิเศษ (Attendance Module)</div>
  <div style="margin-top:6px;">
@@ -7117,6 +7125,29 @@ function renderAttendanceReport() {
  const workStart = settings.workStartTime || '08:45';
  const lateThreshold = settings.lateThreshold || '09:01';
  const autoAbsentCutoff = computeAutoAbsentCutoff(settings);
+ // v1.5.4: helpers for per-day threshold (strict for grid, grace for global)
+ const _empsById = new Map(DB.load('employees').map(e => [e.id, e]));
+ const _getInfoForRec = (r) => {
+ const emp = _empsById.get(r.employeeCode) || _empsById.get(r.employeeId);
+ return getShiftLateInfo_v1_5_4(emp, r.date || _attReportDate, settings);
+ };
+ const _isLateRec = (r) => {
+ if (!r?.checkIn) return false;
+ const info = _getInfoForRec(r);
+ if (!info) return false; // day off
+ return r.checkIn >= info.lateThreshold;
+ };
+ const _isAfterStartRec = (r) => {
+ if (!r?.checkIn) return false;
+ const info = _getInfoForRec(r);
+ if (!info || info.isStrict) return false; // no "หลังเวลา" band for strict
+ return r.checkIn >= info.workStart && r.checkIn < info.lateThreshold;
+ };
+ // v1.5.4 (Q3): Field work handling in daily report — was missing
+ const fieldWorkOnDate = DB.load('fieldWorkRequests', []).filter(f =>
+ f.status === 'approved' && f.date === _attReportDate
+ );
+ const fieldWorkIds = new Set(fieldWorkOnDate.map(f => f.employeeId));
 
  // Categorize by employeeCode (unique per person per day) — apply auto-absent rule
  // ใช้ Map keyed by employeeCode เพื่อให้แต่ละ "คน" นับเพียงครั้งเดียวต่อวัน
@@ -7157,8 +7188,9 @@ function renderAttendanceReport() {
  const explicitAbsent = uniqueDayRecords.filter(r => !r.checkIn);
 
  // v1.4.39: split candidates by shift type — 'O' = วันหยุด, else = ขาดงาน
+ // v1.5.4 (Q3): exclude field work emps from absent — they get "ทำงานนอกสถานที่" status
  const absentCandidates = activeEmps
- .filter(e => !presentIds.has(e.id) && !autoAbsentIds.has(e.id) && !leaveIds.has(e.id) && !trackedInFile.has(e.id));
+ .filter(e => !presentIds.has(e.id) && !autoAbsentIds.has(e.id) && !leaveIds.has(e.id) && !trackedInFile.has(e.id) && !fieldWorkIds.has(e.id));
  const dayOff = [];
  const inferredAbsent = [];
  absentCandidates.forEach(e => {
@@ -7185,9 +7217,12 @@ function renderAttendanceReport() {
 
  console.log(`[AttReport ${_attReportDate}] active=${activeEmps.length}, present=${present.length}, autoAbsent=${autoAbsent.length}, leave=${leaveOnDate.length}, dayOff=${dayOff.length}, absent=${absent.length} (explicit=${explicitAbsent.length}, inferred=${inferredAbsent.length})`);
 
- const arrivedFromStart = present.filter(r => r.checkIn >= workStart);
- const lateArrived = present.filter(r => r.checkIn >= lateThreshold);
- const onTime = present.filter(r => r.checkIn < workStart);
+ // v1.5.4: use per-day helpers (strict for grid shift, grace for global fallback)
+ const arrivedFromStart = present.filter(r => _isAfterStartRec(r) || _isLateRec(r));
+ const lateArrived = present.filter(r => _isLateRec(r));
+ const onTime = present.filter(r => !_isLateRec(r) && !_isAfterStartRec(r));
+ // v1.5.4 (Q3): field work emps who have approved fieldwork but no scan
+ const fieldWorkPresent = activeEmps.filter(e => fieldWorkIds.has(e.id) && !presentIds.has(e.id));
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
@@ -7226,14 +7261,14 @@ function renderAttendanceReport() {
  <div class="sub">อนุมัติแล้ว</div>
  </div>
  <div class="stat-card">
- <div class="label"> เข้างาน ตั้งแต่ ${workStart}+</div>
+ <div class="label"> เข้างาน ตั้งแต่ ${workStart}+ (default)</div>
  <div class="value">${arrivedFromStart.length} <small>คน</small></div>
- <div class="sub">หลังเวลามาตรฐาน</div>
+ <div class="sub">v1.5.4: default shift + late</div>
  </div>
  <div class="stat-card red">
- <div class="label"> มาสาย ${lateThreshold}+</div>
+ <div class="label"> มาสาย (ตามกะ)</div>
  <div class="value">${lateArrived.length} <small>คน</small></div>
- <div class="sub">หลัง ${lateThreshold}</div>
+ <div class="sub">strict per-shift (v1.5.4)</div>
  </div>
  ${autoAbsentCutoff && autoAbsent.length ? `
  <div class="stat-card red">
@@ -7248,6 +7283,7 @@ function renderAttendanceReport() {
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-late').style.display='block';">มาสาย (${lateArrived.length})</div>
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-absent').style.display='block';">ไม่มา (${absent.length})</div>
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-leave').style.display='block';">ลา (${leaveOnDate.length})</div>
+ <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-fieldwork').style.display='block';">นอกสถานที่ (${fieldWorkOnDate.length + fieldWorkPresent.length})</div>
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-dayoff').style.display='block';">วันหยุด (${dayOff.length})</div>
  </div>
 
@@ -7269,7 +7305,7 @@ function renderAttendanceReport() {
  <td>${(() => { const d = getDeptForAttendance(r); return d === 'พนักงานใหม่' ? '<span class="status-badge status-pending">พนักงานใหม่</span>' : d; })()}</td>
  <td><strong>${r.checkIn}</strong></td>
  <td>${r.checkOut || '-'}</td>
- <td>${r.checkIn >= lateThreshold ? '<span class="status-badge status-rejected">สาย</span>' : r.checkIn >= workStart ? '<span class="status-badge status-pending">หลังเวลา</span>' : '<span class="status-badge status-approved">ตรงเวลา</span>'}</td>
+ <td>${_isLateRec(r) ? '<span class="status-badge status-rejected">สาย</span>' : _isAfterStartRec(r) ? '<span class="status-badge status-pending">หลังเวลา</span>' : '<span class="status-badge status-approved">ตรงเวลา</span>'}</td>
  </tr>`;
  }).join('')}
  </tbody>
@@ -7347,6 +7383,30 @@ function renderAttendanceReport() {
  <td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? ' - ' + formatDate(r.endDate) : ''}</td>
  </tr>`;
  }).join('') || '<tr><td colspan="7" style="text-align:center;padding:20px;">ไม่มีคนลา</td></tr>'}
+ </tbody>
+ </table>
+ </div>
+ </div>
+
+ <div id="sec-fieldwork" class="att-section card" style="display:none;">
+ <div class="card-body" style="padding:0;">
+ <table>
+ <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>บริษัท</th><th>แผนก</th><th>เวลา</th><th>วัตถุประสงค์</th></tr></thead>
+ <tbody>
+ ${fieldWorkOnDate.map(f => {
+ const e = getEmployee(f.employeeId);
+ const companyLabel = e ? (getCompanyLabel(e.company) || '-') : '-';
+ return `<tr>
+ <td>${formatDate(_attReportDate)}</td>
+ <td>${f.employeeId}</td>
+ <td>${e ? esc(e.firstName) + ' ' + esc(e.lastName) : '-'}</td>
+ <td>${e ? esc(e.nickname || '') : ''}</td>
+ <td>${companyLabel}</td>
+ <td>${e ? (e.department || '-') : '-'}</td>
+ <td>${f.startTime || ''}-${f.endTime || ''}</td>
+ <td>${esc(f.purpose || '-')}</td>
+ </tr>`;
+ }).join('') || '<tr><td colspan="8" style="text-align:center;padding:20px;">ไม่มีคนทำงานนอกสถานที่วันนี้</td></tr>'}
  </tbody>
  </table>
  </div>
@@ -7463,6 +7523,32 @@ function exportAttendanceXLSX() {
  const workStart = settings.workStartTime || '08:45';
  const lateThreshold = settings.lateThreshold || '09:01';
  const dayRecords = mergeApprovedTimeCertForDate(dayRecordsRaw, _attReportDate);
+ // v1.5.4: per-day threshold helpers (mirror renderAttendanceReport)
+ const _empsById = new Map(DB.load('employees').map(e => [e.id, e]));
+ const _getInfoForRec = (r) => {
+ const emp = _empsById.get(r.employeeCode) || _empsById.get(r.employeeId);
+ return getShiftLateInfo_v1_5_4(emp, r.date || _attReportDate, settings);
+ };
+ const _isLateRec = (r) => {
+ if (!r?.checkIn) return false;
+ const info = _getInfoForRec(r);
+ if (!info) return false;
+ return r.checkIn >= info.lateThreshold;
+ };
+ const _isAfterStartRec = (r) => {
+ if (!r?.checkIn) return false;
+ const info = _getInfoForRec(r);
+ if (!info || info.isStrict) return false;
+ return r.checkIn >= info.workStart && r.checkIn < info.lateThreshold;
+ };
+ const _lateMinRec = (r) => {
+ if (!_isLateRec(r)) return 0;
+ const info = _getInfoForRec(r);
+ if (!info) return 0;
+ const [h, m] = r.checkIn.split(':').map(Number);
+ const [bH, bM] = info.lateBase.split(':').map(Number);
+ return Math.max(0, (h * 60 + m) - (bH * 60 + bM));
+ };
 
  // Unique per employee per day
  const byEmp = new Map();
@@ -7584,13 +7670,12 @@ function exportAttendanceXLSX() {
  [],
  ['วันที่','รหัสพนักงาน','ชื่อ-สกุล','ชื่อเล่น','บริษัท','แผนก','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่มาสาย']
  ];
- // Present (sorted by checkIn time)
+ // Present (sorted by checkIn time) — v1.5.4: per-day threshold
  [...present].sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||'')).forEach(r => {
- const [h, m] = r.checkIn.split(':').map(Number);
- const lateMin = Math.max(0, (h*60+m) - thresholdMin);
+ const lateMin = _lateMinRec(r);
  let status;
- if (r.checkIn >= lateThreshold) status = 'มาสาย';
- else if (r.checkIn >= workStart) status = 'มาหลังเวลา';
+ if (_isLateRec(r)) status = 'มาสาย';
+ else if (_isAfterStartRec(r)) status = 'มาหลังเวลา';
  else status = 'มาตรงเวลา';
  const empObj = getEmployee(r.employeeCode || r.employeeId);
  s1Data.push([
@@ -7701,11 +7786,10 @@ function exportAttendanceXLSX() {
  // Sheet 2+: สรุป (v1.4.55 — split per company per Topic 3)
  // สรุป-ทั้งหมด + สรุป-Crochet / Masterpiece / ConceptOne / Habita + optional สรุป-ไม่ระบุ
  // ============================================================
- // v1.4.55: Count exempt as มาตรงเวลา (Q13 C + Q14 B)
- // Present buckets from Tigersoft scans:
- const onTime = present.filter(r => r.checkIn < workStart).length;
- const afterStart = present.filter(r => r.checkIn >= workStart && r.checkIn < lateThreshold).length;
- const lateAfterTh = present.filter(r => r.checkIn >= lateThreshold).length;
+ // v1.5.4: per-day threshold buckets (strict for grid, grace for global)
+ const onTime = present.filter(r => !_isLateRec(r) && !_isAfterStartRec(r)).length;
+ const afterStart = present.filter(r => _isAfterStartRec(r)).length;
+ const lateAfterTh = present.filter(r => _isLateRec(r)).length;
  // + Exempt Present bucket → onTime
  const onTimeIncExempt = onTime + exemptPresent.length;
  // + Field Work — separate bucket (not "มาทำงาน" in the traditional sense but present)
@@ -7718,12 +7802,12 @@ function exportAttendanceXLSX() {
 
  // Helper: build summary data for a subset of employees (all or one company)
  const _buildSummaryRows = (label, subsetEmpIds) => {
- // Filter each bucket to the subset
+ // Filter each bucket to the subset (v1.5.4: per-day threshold)
  const _in = (id) => subsetEmpIds.has(id);
  const sub_present = present.filter(r => _in(r.employeeCode || r.employeeId));
- const sub_onTime = sub_present.filter(r => r.checkIn < workStart).length;
- const sub_afterStart = sub_present.filter(r => r.checkIn >= workStart && r.checkIn < lateThreshold).length;
- const sub_late = sub_present.filter(r => r.checkIn >= lateThreshold).length;
+ const sub_onTime = sub_present.filter(r => !_isLateRec(r) && !_isAfterStartRec(r)).length;
+ const sub_afterStart = sub_present.filter(r => _isAfterStartRec(r)).length;
+ const sub_late = sub_present.filter(r => _isLateRec(r)).length;
  const sub_exemptPresent = exemptPresent.filter(e => _in(e.id));
  const sub_fw = fieldWorkOnDate.filter(f => _in(f.employeeId));
  const sub_leave = leaveOnDate.filter(l => _in(l.employeeId));
@@ -7885,7 +7969,8 @@ function exportAttendanceXLSX() {
  const lateHeaderRow = s3Data.length;
  s3Data.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','เวลาเข้า','หมายเหตุ']);
  let lateIdx = 1;
- present.filter(r => r.checkIn >= lateThreshold)
+ // v1.5.4: per-day threshold filter
+ present.filter(r => _isLateRec(r))
  .sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||''))
  .forEach(r => {
  const empObj = getEmployee(r.employeeCode || r.employeeId);

@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.4</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.6</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.4';
+const APP_VERSION = '1.5.6';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1662,23 +1662,23 @@ function computeLateMinutes_v1_5_1(record, empOrId, settings) {
  return Math.max(0, (h * 60 + m) - (bH * 60 + bM));
 }
 
-// v1.5.4 (revised ADR-0004): Derive shift late info — STRICT for grid, GRACE for global.
-// Returns { lateThreshold, lateBase, workStart, isStrict } OR null (day off).
-// - lateThreshold: HH:MM — checkIn >= this = late
-// - lateBase: HH:MM — subtract for late minutes calc (checkIn - lateBase)
-// - workStart: HH:MM — start of "หลังเวลา" band (== lateThreshold for strict = no band)
-// - isStrict: true if no grace period (grid shift = strict per user Q1 B)
+// v1.5.6 (revised): Derive shift late info — 15-MIN GRACE BAND BEFORE shift start for all shifts.
+// Returns { lateThreshold, lateBase, workStart } OR null (day off).
+// - lateThreshold: HH:MM — checkIn >= this = สาย (shiftStart + 1 min)
+// - lateBase: HH:MM — subtract for late minutes calc (== shiftStart)
+// - workStart: HH:MM — start of "หลังเวลา" band (== shiftStart - 15 min)
 //
-// v1.5.4 CHANGES from v1.5.0:
-//   - Tier 2 (emp.customStartTime) REMOVED per user Q4 (rely on shift schedule only)
-//   - Grid shift now STRICT (no grace) per user Q1 B — 10:00 → threshold 10:01, lateBase 10:00
-//   - Global tier keeps grace (backward compat with 08:45→09:01 legacy)
+// v1.5.6 CHANGES from v1.5.4:
+//   - Restore "หลังเวลา" band for grid shifts (was removed in v1.5.4 as "strict")
+//   - Grace band = 15 min BEFORE shift start (e.g., shift 9 → 08:45-09:00 = หลังเวลา)
+//   - Late still 1 min AFTER shift start (unchanged from v1.5.4)
+//   - Removed `isStrict` field (all shifts have grace band now)
 function getShiftLateInfo_v1_5_4(emp, date, settings) {
  settings = settings || DB.load('settings');
  const globalLate = settings.lateThreshold || '09:01';
  const globalWorkStart = settings.workStartTime || '08:45';
 
- // Tier 1: per-day shift (v1.5.0) — STRICT semantic (v1.5.4)
+ // Tier 1: per-day shift (grid) — v1.5.6: has 15-min grace band + 1-min strict late
  if (emp && date) {
  const shifts = DB.load('shifts', []);
  const sh = shifts.find(s => s.employeeId === emp.id && s.date === date);
@@ -1688,10 +1688,9 @@ function getShiftLateInfo_v1_5_4(emp, date, settings) {
  if (parsed.kind === 'hour') {
  const startTime = hourToTimeString(parsed.hour);
  return {
- lateThreshold: addMinutesToTimeStr(startTime, 1), // 10:00 → 10:01 (strict boundary)
+ lateThreshold: addMinutesToTimeStr(startTime, 1), // 10:00 → 10:01
  lateBase: startTime, // late minutes = checkIn - 10:00
- workStart: startTime, // == threshold → no "หลังเวลา" band
- isStrict: true
+ workStart: addMinutesToTimeStr(startTime, -15) // 09:45 (15 min before) = หลังเวลา band start
  };
  }
  }
@@ -1700,12 +1699,11 @@ function getShiftLateInfo_v1_5_4(emp, date, settings) {
  // Tier 2 (emp.customStartTime): REMOVED in v1.5.4 per user decision
  // Data field emp.customStartTime is DEPRECATED (kept but not used in resolver)
 
- // Tier 3: global fallback (grace 3-bucket, unchanged)
+ // Tier 3: global fallback (uses settings values directly — implicit shift start ~09:00)
  return {
  lateThreshold: globalLate, // 09:01
- lateBase: globalLate, // late minutes from 09:01
- workStart: globalWorkStart, // 08:45 — start of "หลังเวลา" band
- isStrict: false
+ lateBase: globalLate, // late minutes from 09:01 (backward compat)
+ workStart: globalWorkStart // 08:45
  };
 }
 
@@ -7138,9 +7136,10 @@ function renderAttendanceReport() {
  return r.checkIn >= info.lateThreshold;
  };
  const _isAfterStartRec = (r) => {
+ // v1.5.6: "หลังเวลา" band = [workStart, lateThreshold). Grid shift = [shift-15, shift+1)
  if (!r?.checkIn) return false;
  const info = _getInfoForRec(r);
- if (!info || info.isStrict) return false; // no "หลังเวลา" band for strict
+ if (!info) return false;
  return r.checkIn >= info.workStart && r.checkIn < info.lateThreshold;
  };
  // v1.5.4 (Q3): Field work handling in daily report — was missing
@@ -7261,14 +7260,14 @@ function renderAttendanceReport() {
  <div class="sub">อนุมัติแล้ว</div>
  </div>
  <div class="stat-card">
- <div class="label"> เข้างาน ตั้งแต่ ${workStart}+ (default)</div>
+ <div class="label"> เข้างาน หลังเวลา</div>
  <div class="value">${arrivedFromStart.length} <small>คน</small></div>
- <div class="sub">v1.5.4: default shift + late</div>
+ <div class="sub">v1.5.6: 15 นาทีก่อนเวลากะ ถึง เวลากะ</div>
  </div>
  <div class="stat-card red">
- <div class="label"> มาสาย (ตามกะ)</div>
+ <div class="label"> มาสาย</div>
  <div class="value">${lateArrived.length} <small>คน</small></div>
- <div class="sub">strict per-shift (v1.5.4)</div>
+ <div class="sub">v1.5.6: 1 นาที+ หลังเวลากะ</div>
  </div>
  ${autoAbsentCutoff && autoAbsent.length ? `
  <div class="stat-card red">
@@ -7280,7 +7279,7 @@ function renderAttendanceReport() {
 
  <div class="tabs">
  <div class="tab active" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-present').style.display='block';">มาทำงาน (${present.length})</div>
- <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-late').style.display='block';">มาสาย (${lateArrived.length})</div>
+ <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-late').style.display='block';" title="v1.5.6: strict 1 min past shift start">มาสาย (${lateArrived.length})</div>
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-absent').style.display='block';">ไม่มา (${absent.length})</div>
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-leave').style.display='block';">ลา (${leaveOnDate.length})</div>
  <div class="tab" onclick="document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));this.classList.add('active');document.querySelectorAll('.att-section').forEach(s=>s.style.display='none');document.getElementById('sec-fieldwork').style.display='block';">นอกสถานที่ (${fieldWorkOnDate.length + fieldWorkPresent.length})</div>

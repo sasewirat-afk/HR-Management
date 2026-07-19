@@ -6,6 +6,80 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.6] — 2026-07-18 (restore หลังเวลา band — 15-min grace before shift start)
+
+**REVISION — User clarified late detection rule after v1.5.4 test feedback**
+
+### User's Corrected Rule (Q3 revised)
+> "ตารางกะลงเวลา 9 หมายความ มาทำงาน 08:44 ถือว่ามาตรงเวลา มาทำงาน 08:45 ถือว่ามาหลังเวลา มาทำงาน 09:00 ถือว่ามาหลังเวลา มาทำงาน 09:01 ถือว่าสาย"
+
+Pattern: **15 minutes BEFORE shift start = "หลังเวลา" grace band**, then 1 min past = "สาย"
+
+### Changed
+`getShiftLateInfo_v1_5_4` semantic revised:
+| Field | v1.5.4 (strict) | v1.5.6 (revised) |
+|---|---|---|
+| `lateThreshold` | shiftStart + 1 min | shiftStart + 1 min (unchanged) |
+| `lateBase` | shiftStart | shiftStart (unchanged) |
+| `workStart` | == shiftStart (no band) | **shiftStart - 15 min** |
+| `isStrict` | `true` for grid | **REMOVED** (all shifts have band now) |
+
+Examples:
+| Shift | ตรงเวลา ก่อน | หลังเวลา ช่วง | สาย ตั้งแต่ |
+|---|---|---|---|
+| Grid `9` | 08:44 | **08:45 - 09:00** | 09:01 |
+| Grid `10` | 09:44 | **09:45 - 10:00** | 10:01 |
+| Grid `13` | 12:44 | **12:45 - 13:00** | 13:01 |
+| Grid `21` | 20:44 | **20:45 - 21:00** | 21:01 |
+| Global fallback | 08:44 | 08:45 - 09:00 | 09:01 (unchanged) |
+
+### Impact on v1.5.4 Test 9 Screenshot
+Under v1.5.4: emps checking in at 08:45-08:49 with grid shift `9` were shown "ตรงเวลา" (strict = no grace band).
+Under v1.5.6: same emps now shown "หลังเวลา" (in grace band before 09:00).
+
+### Consumer Functions Updated
+- `_isAfterStartRec` — removed `isStrict` check, now bracket [workStart, lateThreshold)
+- Stat card labels: "มาสาย (ตามกะ)" → "**มาสาย**" + sub "1 นาที+ หลังเวลากะ"
+- Tab label: "มาสาย ตามกะ (N)" → "**มาสาย (N)**"
+- "เข้างาน ตั้งแต่ 08:45+ (default)" → "**เข้างาน หลังเวลา**" + sub "15 นาทีก่อนเวลากะ ถึง เวลากะ"
+
+### DB Impact
+🟢 **Zero schema changes**
+🟡 **Payroll: minimal impact** — late detection (สาย) UNCHANGED from v1.5.4. Only "หลังเวลา" band now exists for grid shifts (was missing). No effect on lateDays / lateMinutes.
+
+### Verification
+1. Console: `v1.5.6`
+2. Emp 690518001 with shift `10`:
+```javascript
+const emp = DB.load('employees').find(e => e.id === '690518001');
+const info = getShiftLateInfo_v1_5_4(emp, '2026-07-17', DB.load('settings'));
+// Expected: { lateThreshold: '10:01', lateBase: '10:00', workStart: '09:45' }
+```
+3. Daily report: emps with checkin 08:45-09:00 + grid shift 9 → "หลังเวลา" (was "ตรงเวลา")
+4. Emps with checkin 09:44 or earlier + grid shift 10 → "ตรงเวลา"
+5. Grid shift 13: 12:45-13:00 = "หลังเวลา", 13:01+ = "สาย"
+
+### Rollback
+Vercel promote v1.5.4 (~10 sec). No data changes to revert.
+
+---
+
+## [1.5.5] — 2026-07-18 (label polish — tab bar "มาสาย ตามกะ")
+
+**POLISH — Tab label update after v1.5.4 test feedback**
+
+### Changed
+- Tab bar "มาสาย (N)" → "**มาสาย ตามกะ (N)**" with tooltip "v1.5.4: strict per-shift threshold"
+- Matches stat card label style (both now say "ตามกะ")
+
+### DB Impact
+🟢 **Zero** — label text change only
+
+### Verification
+Console: `v1.5.5` · Tab shows "มาสาย ตามกะ (N)"
+
+---
+
 ## [1.5.4] — 2026-07-18 (HOTFIX: daily report per-day + STRICT late + field work)
 
 **HOTFIX + SEMANTIC CHANGE — Late detection semantic revised per user Q1 B + Q4**

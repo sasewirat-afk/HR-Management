@@ -6,6 +6,48 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.9] — 2026-07-18 (HOTFIX: calculatePaySlip late minute off-by-one)
+
+**HOTFIX — Payslip undercounts late minutes by 1 per record vs modal**
+
+### Bug Report
+After v1.5.8 deploy, 680701004 payslip test:
+- Modal showed 4 records = 9 min total (2+4+1+2)
+- `calculatePaySlip` returned `totalLateMinutes = 5` — off by 4 (1 per record)
+
+### Root Cause
+Two calculations used different reference points:
+- **Modal** (`computeLateMinutes_v1_5_1`): uses `info.lateBase` = shift **start time** (e.g., 09:00 for shift 9)
+- **Payslip** (`calculatePaySlip`): uses `getLateThresholdForEmployee` = shift **start + 1** (e.g., 09:01)
+
+For shift 9, checkin 09:02:
+- Modal: 09:02 - 09:00 = **2 min** ✓ (matches user rule)
+- Payslip: 09:02 - 09:01 = **1 min** ✗
+
+Systematic undercount of 1 min per late record.
+
+### User's Rule (previously stated)
+> "checkin 09:02 for shift 9 = 2 min late" — counted from shift start (09:00), not from threshold (09:01)
+
+### Fixed
+`calculatePaySlip` late minute loop now uses `getShiftLateInfo_v1_5_4(emp, date, settings).lateBase` — same as modal.
+
+### DB Impact
+🟢 **Zero schema/data changes**
+🟡 **Payroll numbers WILL adjust upward slightly** — 1 min per late record added back. For hour-based deduction with ceil() rounding, some emps may cross an hour boundary (e.g., 59 min → 60 min = 1 hour extra).
+
+### Verification
+```javascript
+const slip = calculatePaySlip('680701004', 2026, 7);
+console.log(slip.totalLateMinutes);
+// Expected: 9 (matches modal)
+```
+
+### Rollback
+Vercel promote v1.5.8 (~10 sec).
+
+---
+
 ## [1.5.8] — 2026-07-18 (🔴 CRITICAL HOTFIX: getPayrollMonth Date rollover)
 
 **CRITICAL — JS Date rollover caused end-of-month records to leak into wrong payroll cycle**

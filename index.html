@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.8</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.9</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.8';
+const APP_VERSION = '1.5.9';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -8804,15 +8804,17 @@ function calculatePaySlip(employeeId, year, month) {
  });
  const lateDays = lateRecords.length;
 
- // Calculate total late minutes (for minute/hour mode) — v1.5.0: per-record threshold
+ // Calculate total late minutes — v1.5.9: use lateBase (shift start) not lateThreshold (shift+1)
+ // This matches computeLateMinutes_v1_5_1 (used by modal) — was off by 1 per record.
+ // User rule: "checkin 09:02 for shift 9 = 2 min late" (from 09:00 shift start, not 09:01 threshold)
  let totalLateMinutes = 0;
  lateRecords.forEach(r => {
- const th = getLateThresholdForEmployee(emp, r.date, settings);
- if (!th) return;
- const [lthH, lthM] = th.split(':').map(Number);
- const thresholdMinutes = lthH * 60 + lthM;
+ const info = getShiftLateInfo_v1_5_4(emp, r.date, settings);
+ if (!info) return;
+ const [bH, bM] = info.lateBase.split(':').map(Number);
+ const baseMinutes = bH * 60 + bM;
  const [h, m] = r.checkIn.split(':').map(Number);
- totalLateMinutes += Math.max(0, (h * 60 + m) - thresholdMinutes);
+ totalLateMinutes += Math.max(0, (h * 60 + m) - baseMinutes);
  });
  const totalLateHours = Math.ceil(totalLateMinutes / 60);
 

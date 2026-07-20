@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.9</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.10</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.9';
+const APP_VERSION = '1.5.10';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -5683,17 +5683,28 @@ function bulkApproveApprovals(approve) {
  r.approverNote = note;
  r.approvedDate = today();
  successCount++;
- // Comp-off cascade (from approveRequest)
+ // Comp-off cascade — v1.5.10: idempotent (check existing stock before push)
  if (type === 'comp-off' && approve) {
  const settings = DB.load('settings');
  const expireMonths = settings.compOffExpireMonths || 12;
+ const existingStocks = DB.load('accumulatedHolidays', []);
+ // Check: does a stock already exist for this request (via sourceRequestId) OR (employeeId + earnedDate)?
+ const alreadyExists = existingStocks.some(s =>
+ s.sourceRequestId === r.id ||
+ (s.employeeId === r.employeeId && s.earnedDate === r.workDate)
+ );
+ if (!alreadyExists) {
  const expireDt = new Date(r.workDate);
  expireDt.setMonth(expireDt.getMonth() + expireMonths);
  compOffAdditions.push({
  id: uid('AH'), employeeId: r.employeeId,
  earnedDate: r.workDate, expireDate: expireDt.toISOString().split('T')[0],
- used: false, usedInLeaveRequestId: null
+ used: false, usedInLeaveRequestId: null,
+ sourceRequestId: r.id // v1.5.10: track source for idempotency
  });
+ } else {
+ console.log(`[v1.5.10] Skipping duplicate accumulatedHoliday for ${r.employeeId} ${r.workDate} (already exists)`);
+ }
  }
  // Notify
  const typeLabel = {leave:'ลา', ot:'OT', 'comp-off':'สะสมวันหยุด', 'field-work':'งานนอกสถานที่', 'time-cert':'รับรองเวลา'}[type] || type;
@@ -5874,21 +5885,31 @@ function approveRequest(type, id, approve) {
  r.approvedDate = today();
  DB.save(key, reqs);
 
- // If comp-off approved, add to accumulated holidays
+ // If comp-off approved, add to accumulated holidays — v1.5.10: idempotent
  if (type === 'comp-off' && approve) {
  const stocks = DB.load('accumulatedHolidays');
  const settings = DB.load('settings');
- const expireMonths = settings.compOffExpireMonths || 12; // configurable in Settings
+ const expireMonths = settings.compOffExpireMonths || 12;
  const earned = r.workDate;
+ // v1.5.10: Check for existing stock (avoid duplicates on re-approve/edit)
+ const alreadyExists = stocks.some(s =>
+ s.sourceRequestId === r.id ||
+ (s.employeeId === r.employeeId && s.earnedDate === earned)
+ );
+ if (!alreadyExists) {
  const expireDt = new Date(earned);
  expireDt.setMonth(expireDt.getMonth() + expireMonths);
  const expire = expireDt.toISOString().split('T')[0];
  stocks.push({
  id: uid('AH'), employeeId: r.employeeId,
  earnedDate: earned, expireDate: expire,
- used: false, usedInLeaveRequestId: null
+ used: false, usedInLeaveRequestId: null,
+ sourceRequestId: r.id // v1.5.10: track source for idempotency
  });
  DB.save('accumulatedHolidays', stocks);
+ } else {
+ console.log(`[v1.5.10] Skipping duplicate accumulatedHoliday for ${r.employeeId} ${earned} (already exists)`);
+ }
  }
 
  const statusText = approve ? 'อนุมัติ' : 'ปฏิเสธ';

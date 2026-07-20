@@ -6,6 +6,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.10] — 2026-07-18 (HOTFIX: duplicate accumulatedHolidays on re-approve)
+
+**HOTFIX — Duplicate comp-off stocks created when same request is approved multiple times**
+
+### Bug Report
+Multiple emps have duplicate `accumulatedHolidays` records:
+- **430806001 ภาวนา** — 2 approved requests → **4 stocks** (2x duplicated: 3 มิ.ย. and 21 ก.ค. each appear twice)
+- **690302002 เดชา** — 3 approved requests → **4 stocks** (5 ก.ค. appears twice)
+- Report shows `earned=4` but actual requests are fewer
+
+### Root Cause
+Both `approveRequest` (single) and `bulkApproveApprovals` (bulk) had **no idempotency check** before creating new stock. Trigger scenarios:
+1. **Edit + re-approve** — Emp edits comp-off request → status resets to `pending` → Admin re-approves → creates NEW stock (old still exists)
+2. **Bulk + individual overlap** — Admin uses both approval methods on same request
+3. **Double-click approve** — Accidental duplicate submission
+
+Each approval added a fresh stock via `stocks.push({ id: uid('AH'), ... })` without checking existing records.
+
+### Fixed
+Added idempotency check in BOTH approval code paths:
+```javascript
+const alreadyExists = stocks.some(s =>
+  s.sourceRequestId === r.id ||
+  (s.employeeId === r.employeeId && s.earnedDate === r.workDate)
+);
+if (!alreadyExists) { stocks.push({ ..., sourceRequestId: r.id }); }
+else { console.log('[v1.5.10] Skipping duplicate...'); }
+```
+
+New field `sourceRequestId` tracks which request created each stock (proper foreign key for future dedup + FIFO tracking).
+
+### DB Impact
+🟢 **Zero schema changes** — `sourceRequestId` added as optional field (missing on old records, present on new)
+🟡 **Existing duplicates NOT auto-cleaned** — need manual cleanup (see script below)
+
+### Manual Cleanup Script
+```javascript
+// v1.5.10 CLEANUP: Remove duplicate accumulatedHolidays (same employeeId + earnedDate)
+// SAFE: keeps oldest stock per (empId, date), removes newer duplicates
+const stocks = DB.load('accumulatedHolidays', []);
+const seen = new Set();
+const kept = [];
+const removed = [];
+// Sort by id (uid contains timestamp), keep first (oldest)
+[...stocks].sort((a, b) => (a.id || '').localeCompare(b.id || '')).forEach(s => {
+ const key = `${s.employeeId}|${s.earnedDate}`;
+ if (seen.has(key)) {
+   removed.push(s);
+ } else {
+   seen.add(key);
+   kept.push(s);
+ }
+});
+console.log(`Total: ${stocks.length}, Keeping: ${kept.length}, Removing: ${removed.length} duplicates`);
+console.table(removed.slice(0, 20));
+// TO EXECUTE: uncomment next 2 lines and run
+// DB.save('accumulatedHolidays', kept);
+// console.log('Cleanup done — reload page');
+```
+
+### Verification
+1. Console: `v1.5.10`
+2. Run diagnostic (see above) to see duplicates
+3. Approve a test comp-off twice → should only create 1 stock + console log "Skipping duplicate..."
+4. Report → สะสมวันหยุด tab — `earned` matches actual `compOffRequests` count
+
+### Rollback
+Vercel promote v1.5.9 (~10 sec). Duplicates persist but no data loss.
+
+---
+
 ## [1.5.9] — 2026-07-18 (HOTFIX: calculatePaySlip late minute off-by-one)
 
 **HOTFIX — Payslip undercounts late minutes by 1 per record vs modal**

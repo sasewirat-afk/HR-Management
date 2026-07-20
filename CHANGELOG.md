@@ -6,6 +6,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.7] — 2026-07-18 (HOTFIX: comp-off report tab used=0 bug)
+
+**HOTFIX — Comp-off report tab showed wrong "used" count**
+
+### Bug Report
+Emp 590630001 (จิรภัทร จินตรัตน์, Warehouse):
+- **สรุปสิทธิ์การลา tab:** สะสม (เหลือ/ใช้) = **3/4** — correct (used 4 of 7)
+- **สะสมวันหยุด tab:** ได้รับ 7, **ใช้แล้ว 0**, คงเหลือ 7 — WRONG (should be used 4, remaining 3)
+
+Same discrepancy for 690302002 (เดชา สมจิตต์) — 2/2 in summary vs (probably) 0 in comp-off tab.
+
+### Root Cause
+`accumulatedHolidays.used` boolean field exists in schema but is **NEVER set to true anywhere in codebase**. Only referenced in:
+- `deleteCompOffRequest` (line 10769) — filters out unused stocks (backward-only)
+- `comp-off report tab` (line 10222) — counts `s.used === true` for "used" display → always 0
+
+`calculateLeaveBalance` correctly cross-references `leaveRequests` for actual usage:
+```js
+compOff: { quota: compOffBalance, used: used['comp-off'], remaining: compOffBalance - used['comp-off'] }
+```
+
+But `comp-off tab` used its own broken logic that only checked the never-set `used` flag.
+
+### Fixed
+`comp-off report tab` (`renderReports` line 10215) — now cross-references `leaveRequests`:
+1. Sum `days` from `leaveRequests` where `type='comp-off'` and `status='approved'` per employee
+2. Compute `available = max(0, earned - expired - used)`
+3. Include emps with leave usage but no accumulatedHolidays (edge case)
+
+### DB Impact
+🟢 **Zero** — computation logic fix only. No schema/data changes.
+
+### Note on `accumulatedHolidays.used` Field
+The field remains in schema but is now confirmed DEAD (never set). Two options for v1.6.x:
+1. Remove field entirely (schema cleanup)
+2. Wire up FIFO tracking — mark oldest accumulations as used when comp-off leave approved
+
+Deferred — current fix (cross-reference leaveRequests) is safer and matches existing pattern.
+
+### Verification
+1. Console: `v1.5.7`
+2. Report → สะสมวันหยุด tab
+3. Find 590630001 → ✅ ใช้แล้ว **4**, คงเหลือ **3**
+4. Find 690302002 → ✅ ใช้แล้ว **2**, คงเหลือ **2**
+5. Sum matches `calculateLeaveBalance` output for same emp
+
+### Rollback
+Vercel promote v1.5.6 (~10 sec). Zero data risk.
+
+---
+
 ## [1.5.6] — 2026-07-18 (restore หลังเวลา band — 15-min grace before shift start)
 
 **REVISION — User clarified late detection rule after v1.5.4 test feedback**

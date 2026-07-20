@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.6</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.7</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.6';
+const APP_VERSION = '1.5.7';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -10214,18 +10214,35 @@ function drawReport() {
 
  else if (reportTab === 'comp-off') {
  // v1.4.17: comp-off tab — รวมทั้ง requests + accumulated balances
+ // v1.5.7 FIX: cross-reference leaveRequests for actual usage — accumulatedHolidays.used flag
+ //           is never set anywhere in codebase, so old logic always showed used=0.
+ //           Match calculateLeaveBalance semantic (subtract from earned).
  const allReqs = DB.load('compOffRequests').filter(r => scopeIds.has(r.employeeId)).sort((a,b) => new Date(b.requestDate) - new Date(a.requestDate));
  const stocks = DB.load('accumulatedHolidays').filter(a => scopeIds.has(a.employeeId));
  const today = new Date();
- // Summary per employee: earned, used, available, expired
+ // v1.5.7: query approved comp-off leaves (source of truth for "used")
+ const usedByEmp = {};
+ DB.load('leaveRequests').filter(r =>
+ r.status === 'approved' && r.type === 'comp-off' && scopeIds.has(r.employeeId)
+ ).forEach(r => {
+ usedByEmp[r.employeeId] = (usedByEmp[r.employeeId] || 0) + (r.days || 0);
+ });
+ // Summary per employee: earned, used, available, expired (v1.5.7 semantics)
  const byEmp = {};
  stocks.forEach(s => {
  const key = s.employeeId;
  if (!byEmp[key]) byEmp[key] = { earned: 0, used: 0, available: 0, expired: 0 };
  byEmp[key].earned++;
- if (s.used) byEmp[key].used++;
- else if (new Date(s.expireDate) < today) byEmp[key].expired++;
- else byEmp[key].available++;
+ if (new Date(s.expireDate) < today) byEmp[key].expired++;
+ });
+ // v1.5.7: also include emps with leave usage but no stocks (edge case)
+ Object.keys(usedByEmp).forEach(key => {
+ if (!byEmp[key]) byEmp[key] = { earned: 0, used: 0, available: 0, expired: 0 };
+ });
+ // Compute used + available from leaveRequests cross-reference
+ Object.keys(byEmp).forEach(key => {
+ byEmp[key].used = usedByEmp[key] || 0;
+ byEmp[key].available = Math.max(0, byEmp[key].earned - byEmp[key].expired - byEmp[key].used);
  });
  const summary = Object.entries(byEmp).sort((a,b) => b[1].earned - a[1].earned);
 

@@ -6,6 +6,87 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.8] — 2026-07-18 (🔴 CRITICAL HOTFIX: getPayrollMonth Date rollover)
+
+**CRITICAL — JS Date rollover caused end-of-month records to leak into wrong payroll cycle**
+
+### Bug Report
+Emp 680701004 payslip showed 6 late records including 31 พ.ค. (May 31) — should belong to June payroll cycle, not July. Investigation revealed getPayrollMonth('2026-05-31') returns '2026-07' instead of '2026-06'.
+
+### Root Cause — Classic JS Date Rollover
+```javascript
+// pre-v1.5.8 code
+const d = new Date('2026-05-31');    // May 31
+d.setMonth(d.getMonth() + 1);         // setMonth(5) — try to set to June
+// But June only has 30 days → 31 doesn't exist → rolls forward to July 1
+// d becomes 2026-07-01
+// Returns '2026-07' (WRONG — should be '2026-06')
+```
+
+### Impact Analysis
+**Bug affects ALL end-of-month dates where next month has fewer days:**
+| Original | Rolls To | Should Be |
+|---|---|---|
+| Jan 29-31 | March (28-day Feb) | February |
+| Mar 31 | May (30-day April) | April |
+| May 31 | **July (30-day June)** | June |
+| Aug 31 | October (30-day September) | September |
+| Oct 31 | December (30-day November) | November |
+
+**Verified impact:** Test 4 found 20+ records with `displayMonth ≠ payrollMonth` (all May 31 → July shift).
+
+**Payroll consequences:**
+- Late minutes overcounted in payroll cycles that received leaked records
+- Deductions potentially incorrect for affected emps
+- Cross-cycle records showed up in wrong "รายละเอียดการมาสาย" modal
+- Same for OT, leave, diligence — anything using `getPayrollMonth`
+
+### Fixed
+`getPayrollMonth(dateStr)` — replaced Date object arithmetic with string arithmetic:
+```javascript
+// Parse YYYY-MM-DD directly, do integer math (no Date rollover risk)
+if (day > cutoffDay) {
+  payrollMonth += 1;
+  if (payrollMonth > 12) { payrollMonth = 1; payrollYear += 1; }
+}
+```
+
+### DB Impact
+🟢 **Zero schema/data changes**
+🟡 **Payroll numbers WILL RE-CALCULATE** for cycles affected — some emps' lateness will DECREASE (removes leaked records from previous month)
+
+### Verification
+```javascript
+// Before v1.5.8: '2026-07' (WRONG)
+// After v1.5.8: '2026-06' (CORRECT)
+console.log(getPayrollMonth('2026-05-31'));
+
+// Other edge cases
+console.log(getPayrollMonth('2026-01-31')); // '2026-02' ✓
+console.log(getPayrollMonth('2026-03-31')); // '2026-04' ✓
+console.log(getPayrollMonth('2026-12-31')); // '2027-01' ✓ (year rollover)
+console.log(getPayrollMonth('2026-05-21')); // '2026-05' (cutoff = same cycle)
+console.log(getPayrollMonth('2026-05-22')); // '2026-06' (day after cutoff)
+```
+
+### All Consumers Auto-Fixed
+Because they all call `getPayrollMonth(r.date)`:
+- `calculatePaySlip` — cycle filter for attendance + OT + leave
+- `showLateDetailModal` — late records modal
+- `late-summary` report tab
+- `exportLateSummaryXLSX` — Excel export
+- Any place that groups by payroll month
+
+### Rollback
+Vercel promote v1.5.7 (~10 sec). No data risk.
+
+### Related
+- Bug session: user found via 680701004 with 31 พ.ค. record appearing in July cycle
+- Debug-mantra Step 3 (falsify) identified Date rollover as root cause
+- Deferred cleanup: `emp.exemptFromLateDeduction` — separate investigation for -650 vs 0 discrepancy
+
+---
+
 ## [1.5.7] — 2026-07-18 (HOTFIX: comp-off report tab used=0 bug)
 
 **HOTFIX — Comp-off report tab showed wrong "used" count**

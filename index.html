@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.11</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.12</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.11';
+const APP_VERSION = '1.5.12';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1963,7 +1963,7 @@ function seedData() {
  DB.save('timeCertRequests', []);
  DB.save('paySlips', []);
  DB.save('commissions', []);
- DB.save('evaluations', []);
+ // v1.5.12: evaluations table seed removed (evaluation system deprecated)
  DB.save('stationery', [
    { id: uid('ST'), name: 'กระดาษ A4 80g', unit: 'รีม', stock: 45, minStock: 20 },
    { id: uid('ST'), name: 'หมึกพิมพ์ HP 26A', unit: 'กล่อง', stock: 3, minStock: 5 },
@@ -2633,7 +2633,7 @@ function renderNav() {
  html += navLink('my-fieldwork', 'ขอปฏิบัติงานนอกสถานที่');
  html += navLink('my-calendar', 'ปฏิทินของฉัน');
  html += navLink('my-payslip', 'สลิปเงินเดือนของฉัน');
- html += navLink('my-evaluation', 'การประเมินของฉัน');
+ // v1.5.12: my-evaluation removed (evaluation system deprecated)
  html += navLink('org-chart', 'ผังองค์กร');
  }
 
@@ -2645,7 +2645,7 @@ function renderNav() {
  html += navLink('shift-schedule', 'ตารางลงกะงาน');
  // v1.4.17: Manager team reports — เห็นเฉพาะลูกน้องในทีม (Admin เห็นทั้งระบบที่เมนู Admin ด้านล่าง)
  if (role === 'manager') html += navLink('reports', 'รายงานทีม');
- html += navLink('team-evaluations', 'ประเมินทีม');
+ // v1.5.12: team-evaluations removed (evaluation system deprecated)
  }
 
  // Maintenance ticket — visible to all roles (request) + special view for maintenance MGR
@@ -2728,8 +2728,7 @@ function renderPage() {
  'org-chart': renderOrgChart,
  'dashboard-overview': renderDashboardOverview,
  'holiday-leave': renderHolidayLeave,
- 'my-evaluation': renderMyEvaluation,
- 'team-evaluations': renderTeamEvaluations,
+ // v1.5.12: my-evaluation + team-evaluations routes removed (evaluation system deprecated)
  'exec-dashboard': renderExecDashboard,
  maintenance: renderMaintenance,
  announcements: renderAnnouncements,
@@ -11830,192 +11829,12 @@ function toggleOnbTask(empId, taskId, phase) {
 }
 
 // ============================================================
-// PROBATION EVALUATION (Employee Self + Manager)
+// PROBATION EVALUATION — REMOVED IN v1.5.12
+// Functions renderMyEvaluation, submitSelfEval, renderTeamEvaluations,
+// showMgrEvalForm, submitMgrEval removed (evaluation system deprecated).
+// Data in `evaluations` table preserved in Supabase (Admin may manually clear).
+// See CHANGELOG v1.5.12 for full details + rollback via Git.
 // ============================================================
-function renderMyEvaluation() {
- const settings = DB.load('settings');
- const probationDays = settings.probationEvalDays || 120;
- const criteria = settings.evalCriteria || [];
-
- const startDate = new Date(currentUser.startDate);
- const dueDate = new Date(startDate.getTime() + probationDays * 86400000);
- const daysRemaining = Math.ceil((dueDate - new Date()) / 86400000);
-
- const evals = DB.load('evaluations', []).filter(e => e.employeeId === currentUser.id);
- const latest = evals.sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt))[0];
-
- document.getElementById('mainContent').innerHTML = `
-  <div class="page-header">
-   <h1>การประเมินของฉัน</h1>
-   <div class="text-sm">${daysRemaining > 0 ? `อีก ${daysRemaining} วัน ครบกำหนดประเมิน` : 'ครบกำหนดประเมินแล้ว'}</div>
-  </div>
-
-  <div class="card">
-   <div class="card-header"><h3>ประเมินตนเอง (Self Assessment)</h3></div>
-   <div class="card-body">
-    ${latest ? `<div class="alert alert-info">คุณส่งประเมินตนเองไปแล้วเมื่อ ${formatDateTime(latest.createdAt)} - คะแนนรวม ${latest.totalScore}%</div>` : ''}
-    <form onsubmit="submitSelfEval(event); return false;">
-     ${criteria.map(c => `
-      <div class="form-group">
-       <label>${c.label} (น้ำหนัก ${c.weight}%)</label>
-       <input type="range" min="0" max="100" value="${latest?.selfScores?.[c.id] || 70}" id="evalSelf_${c.id}" oninput="document.getElementById('evalSelfV_${c.id}').textContent=this.value+'%'">
-       <div class="text-sm"><span id="evalSelfV_${c.id}">${latest?.selfScores?.[c.id] || 70}%</span></div>
-      </div>
-     `).join('')}
-     <div class="form-group">
-      <label>ความคิดเห็นเพิ่มเติม</label>
-      <textarea id="evalSelfNote" rows="3">${latest?.selfNote || ''}</textarea>
-     </div>
-     <button type="submit" class="btn btn-primary">${latest ? 'อัปเดตประเมินตนเอง' : 'ส่งประเมินตนเอง'}</button>
-    </form>
-   </div>
-  </div>
-
-  ${latest?.managerScores ? `
-   <div class="card">
-    <div class="card-header"><h3>ผลประเมินจากหัวหน้า</h3></div>
-    <div class="card-body">
-     ${criteria.map(c => {
-      const score = latest.managerScores[c.id] || 0;
-      return `<div style="margin-bottom:12px;">
-       <div class="flex-between"><span>${c.label}</span><strong>${score}%</strong></div>
-       <div style="background:var(--gray-200);height:8px;border-radius:4px;overflow:hidden;"><div style="background:var(--primary);height:100%;width:${score}%;"></div></div>
-      </div>`;
-     }).join('')}
-     <div style="margin-top:16px;padding:14px;background:var(--primary-light);border-radius:6px;">
-      <div class="text-sm">คะแนนรวม</div>
-      <div style="font-size:32px;font-weight:700;color:var(--primary);">${latest.managerTotal}%</div>
-      ${latest.managerNote ? `<div style="margin-top:8px;font-size:13px;">${latest.managerNote}</div>` : ''}
-     </div>
-    </div>
-   </div>
-  ` : ''}
- `;
-}
-
-function submitSelfEval(e) {
- e.preventDefault();
- const settings = DB.load('settings');
- const criteria = settings.evalCriteria || [];
- const selfScores = {};
- let totalScore = 0;
- criteria.forEach(c => {
-  selfScores[c.id] = parseInt(document.getElementById(`evalSelf_${c.id}`).value);
-  totalScore += selfScores[c.id] * c.weight / 100;
- });
- const evals = DB.load('evaluations', []);
- const existing = evals.findIndex(v => v.employeeId === currentUser.id && v.cycle === 'probation');
- const data = {
-  id: existing >= 0 ? evals[existing].id : uid('EV'),
-  employeeId: currentUser.id,
-  cycle: 'probation',
-  selfScores,
-  selfNote: document.getElementById('evalSelfNote').value,
-  totalScore: Math.round(totalScore),
-  status: 'self-done',
-  createdAt: existing >= 0 ? evals[existing].createdAt : new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-  managerScores: existing >= 0 ? evals[existing].managerScores : null,
-  managerNote: existing >= 0 ? evals[existing].managerNote : null,
-  managerTotal: existing >= 0 ? evals[existing].managerTotal : null
- };
- if (existing >= 0) evals[existing] = data; else evals.push(data);
- DB.save('evaluations', evals);
- if (currentUser.managerId) {
-  notify(currentUser.managerId, `${esc(currentUser.firstName)} ${esc(currentUser.lastName)} ส่งประเมินตนเอง ${data.totalScore}% รอประเมิน`, 'eval', data.id);
- }
- auditLog('eval-self', 'employee', currentUser.id, `Score ${data.totalScore}%`);
- toast('ส่งประเมินสำเร็จ');
- renderMyEvaluation();
-}
-
-function renderTeamEvaluations() {
- const team = DB.load('employees').filter(e => e.active && e.managerId === currentUser.id);
- const evals = DB.load('evaluations', []);
-
- document.getElementById('mainContent').innerHTML = `
-  <div class="page-header">
-   <h1>ประเมินทีม</h1>
-   <div class="text-sm">${team.length} คนในทีม · ครบกำหนดประเมินทดลองงาน 120 วัน</div>
-  </div>
-  <div class="card">
-   <div class="card-body" style="padding:0;">
-    <table>
-     <thead><tr><th>พนักงาน</th><th>ตำแหน่ง</th><th>ทดลองงานวันที่</th><th>SELF</th><th>หัวหน้า</th><th>สถานะ</th><th></th></tr></thead>
-     <tbody>${team.map(emp => {
-      const ev = evals.find(v => v.employeeId === emp.id && v.cycle === 'probation');
-      const days = Math.floor((new Date() - new Date(emp.startDate)) / 86400000);
-      return `<tr>
-       <td><strong>${esc(emp.firstName)}</strong><div class="text-sm">${emp.id}</div></td>
-       <td>${esc(emp.position)}</td>
-       <td>วันที่ ${days}</td>
-       <td>${ev?.totalScore ? ev.totalScore + '%' : '—'}</td>
-       <td>${ev?.managerTotal ? ev.managerTotal + '%' : '—'}</td>
-       <td>${ev ? (ev.managerTotal ? '<span class="status-badge status-approved">เสร็จ '+ev.managerTotal+'%</span>' : '<span class="status-badge status-pending">รอหัวหน้า</span>') : '<span class="status-badge status-rejected">ยังไม่เริ่ม</span>'}</td>
-       <td>${ev?.selfScores ? `<button class="btn btn-sm btn-primary" onclick="showMgrEvalForm('${emp.id}')">${ev.managerTotal ? 'แก้ไข' : 'ประเมิน'}</button>` : '<button class="btn btn-sm btn-secondary" disabled>รอ Self</button>'}</td>
-      </tr>`;
-     }).join('')}</tbody>
-    </table>
-   </div>
-  </div>
- `;
-}
-
-function showMgrEvalForm(empId) {
- const emp = getEmployee(empId);
- const settings = DB.load('settings');
- const criteria = settings.evalCriteria || [];
- const evals = DB.load('evaluations', []);
- const ev = evals.find(v => v.employeeId === empId && v.cycle === 'probation');
- const body = `
-  <div class="alert alert-info mb-3">ประเมินทดลองงาน 120 วัน · ${esc(emp.firstName)} ${esc(emp.lastName)}</div>
-  <form id="mgrEvalForm" onsubmit="submitMgrEval(event, '${empId}'); return false;">
-   ${criteria.map(c => `
-    <div class="form-group">
-     <label>${c.label} (น้ำหนัก ${c.weight}%) · self ${ev?.selfScores?.[c.id] || 0}%</label>
-     <input type="range" min="0" max="100" value="${ev?.managerScores?.[c.id] || ev?.selfScores?.[c.id] || 70}" id="mgrEval_${c.id}" oninput="document.getElementById('mgrEvalV_${c.id}').textContent=this.value+'%'">
-     <div class="text-sm"><span id="mgrEvalV_${c.id}">${ev?.managerScores?.[c.id] || ev?.selfScores?.[c.id] || 70}%</span></div>
-    </div>
-   `).join('')}
-   <div class="form-group">
-    <label>หมายเหตุ / แนวทางพัฒนา</label>
-    <textarea id="mgrEvalNote" rows="3">${ev?.managerNote || ''}</textarea>
-   </div>
-  </form>
- `;
- showModal('ประเมินทดลองงาน', body, `
-  <button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button>
-  <button class="btn btn-primary" onclick="document.getElementById('mgrEvalForm').requestSubmit()">บันทึก</button>
- `);
-}
-
-function submitMgrEval(e, empId) {
- e.preventDefault();
- const settings = DB.load('settings');
- const criteria = settings.evalCriteria || [];
- const managerScores = {};
- let total = 0;
- criteria.forEach(c => {
-  managerScores[c.id] = parseInt(document.getElementById(`mgrEval_${c.id}`).value);
-  total += managerScores[c.id] * c.weight / 100;
- });
- const evals = DB.load('evaluations', []);
- const idx = evals.findIndex(v => v.employeeId === empId && v.cycle === 'probation');
- if (idx >= 0) {
-  evals[idx].managerScores = managerScores;
-  evals[idx].managerNote = document.getElementById('mgrEvalNote').value;
-  evals[idx].managerTotal = Math.round(total);
-  evals[idx].managerId = currentUser.id;
-  evals[idx].managerEvaluatedAt = new Date().toISOString();
-  evals[idx].status = 'completed';
-  DB.save('evaluations', evals);
-  notify(empId, `ผลประเมินทดลองงานพร้อมแล้ว: ${Math.round(total)}%`, 'eval', evals[idx].id);
-  auditLog('eval-manager', 'employee', empId, `Score ${Math.round(total)}%`);
-  closeModal();
-  toast('บันทึกประเมินสำเร็จ');
-  renderTeamEvaluations();
- }
-}
 
 // ============================================================
 // EXEC DASHBOARD (Manager only)
@@ -12045,8 +11864,7 @@ function renderExecDashboard() {
  });
  const totalLeaves = Object.values(leaveCounts).reduce((s,v) => s+v, 0);
 
- const evals = DB.load('evaluations', []).filter(e => team.find(t => t.id === e.employeeId) && e.managerTotal);
- const topPerf = evals.sort((a,b) => b.managerTotal - a.managerTotal).slice(0, 3);
+ // v1.5.12: evaluations removed — Top Performer widget deprecated
 
  document.getElementById('mainContent').innerHTML = `
   <div class="page-header">
@@ -12067,7 +11885,7 @@ function renderExecDashboard() {
   <div class="stats-grid">
    <div class="stat-card"><div class="label">พนักงานทั้งหมด</div><div class="value">${totalEmps}</div><div class="sub">+${newHires.length} เข้าใหม่</div></div>
    <div class="stat-card red"><div class="label">ลาเดือนนี้</div><div class="value">${leavesThisMonth.length}</div><div class="sub">รายการ</div></div>
-   <div class="stat-card green"><div class="label">ผลประเมินรอบนี้</div><div class="value">${evals.length}</div><div class="sub">เสร็จ ${evals.filter(e => e.managerTotal).length}</div></div>
+   <!-- v1.5.12: "ผลประเมินรอบนี้" stat card removed (evaluation system deprecated) -->
   </div>
 
   <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;">
@@ -12105,19 +11923,7 @@ function renderExecDashboard() {
    </div>
   </div>
 
-  <div class="card">
-   <div class="card-header"><h3>Top Performer</h3></div>
-   <div class="card-body" style="padding:0;">
-    ${topPerf.length ? `<table>
-     <thead><tr><th>พนักงาน</th><th>แผนก</th><th>คะแนน</th><th>สถานะ</th></tr></thead>
-     <tbody>${topPerf.map((ev, i) => {
-      const emp = getEmployee(ev.employeeId);
-      const badge = i === 0 ? '<span class="status-badge status-approved">Top Performer</span>' : ev.managerTotal >= 85 ? '<span class="status-badge status-pending">ดีเยี่ยม</span>' : '<span class="status-badge status-rejected">ต้องพัฒนา</span>';
-      return `<tr><td>${emp ? esc(emp.firstName) + ' ' + esc(emp.lastName) : '-'}</td><td>${emp?.department || '-'}</td><td><strong>${ev.managerTotal}%</strong></td><td>${badge}</td></tr>`;
-     }).join('')}</tbody>
-    </table>` : '<div class="empty-state">ยังไม่มีผลประเมิน</div>'}
-   </div>
-  </div>
+  <!-- v1.5.12: Top Performer widget removed (evaluation system deprecated) -->
   </div>
  `;
 }
@@ -12148,9 +11954,8 @@ function _execComputeSnapshot() {
  else leaveCounts.other++;
  });
 
- const evals = DB.load('evaluations', []).filter(e => team.find(t => t.id === e.employeeId) && e.managerTotal);
- const topPerf = evals.slice().sort((a,b) => b.managerTotal - a.managerTotal).slice(0, 10);
- const avgScore = evals.length ? Math.round(evals.reduce((s,e) => s + e.managerTotal, 0) / evals.length) : 0;
+ // v1.5.12: evaluations removed — snapshot no longer includes eval-based stats
+ const evals = [], topPerf = [], avgScore = 0;
 
  return { emps, team, newHires, leavesThisMonth, byCompany, byDept, leaveCounts, evals, topPerf, avgScore };
 }
@@ -12239,24 +12044,10 @@ function exportExecDashboardXLSX() {
  ws5['!cols'] = [{wch:12},{wch:24},{wch:18},{wch:20},{wch:14},{wch:12}];
  XLSX.utils.book_append_sheet(wb, ws5, 'พนักงานเข้าใหม่');
 
- // Sheet 6: top performers
- const sheet6 = [['Top Performers (ผลประเมินรอบนี้)'],[],['อันดับ','รหัส','ชื่อ-นามสกุล','แผนก','คะแนน']];
- s.topPerf.forEach((ev, i) => {
- const emp = getEmployee(ev.employeeId);
- sheet6.push([
- i + 1,
- ev.employeeId,
- emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : '-',
- emp?.department || '-',
- ev.managerTotal + '%'
- ]);
- });
- const ws6 = XLSX.utils.aoa_to_sheet(sheet6);
- ws6['!cols'] = [{wch:8},{wch:12},{wch:24},{wch:18},{wch:12}];
- XLSX.utils.book_append_sheet(wb, ws6, 'Top Performers');
+ // v1.5.12: Sheet 6 (Top Performers) removed — evaluation system deprecated
 
  XLSX.writeFile(wb, `Exec-Dashboard-${stamp}.xlsx`);
- toast(`Export สำเร็จ — 6 sheets · ${s.team.length} พนักงาน`);
+ toast(`Export สำเร็จ — 5 sheets · ${s.team.length} พนักงาน`);
 }
 
 async function exportExecDashboardPNG(mode) {

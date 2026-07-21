@@ -6,6 +6,72 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.12] — 2026-07-18 (REMOVE: evaluation system deprecated)
+
+**BREAKING CHANGE — Full removal of self + team evaluation feature**
+
+### Context
+User decision: evaluation feature not used in practice. Remove to reduce code surface + clean up UX. Per option B grill: full removal (not just menu hide).
+
+### Removed
+**Menu links (2):**
+- `my-evaluation` — "การประเมินของฉัน" (Employee sidebar)
+- `team-evaluations` — "ประเมินทีม" (Manager/Admin sidebar)
+
+**Route handlers (2):**
+- `'my-evaluation': renderMyEvaluation`
+- `'team-evaluations': renderTeamEvaluations`
+
+**Functions (5, ~200 lines):**
+- `renderMyEvaluation()` — self-eval form UI
+- `submitSelfEval(e)` — self-eval submission
+- `renderTeamEvaluations()` — manager team view
+- `showMgrEvalForm(empId)` — manager eval modal
+- `submitMgrEval(e, empId)` — manager eval submission
+
+**Related UI (Exec Dashboard):**
+- Stat card "ผลประเมินรอบนี้" — removed
+- Widget "Top Performer" — removed
+- Excel export Sheet 6 "Top Performers" — removed (Exec Dashboard now 5 sheets, was 6)
+
+**Data initialization:**
+- `DB.save('evaluations', []);` seed init removed
+
+### Preserved (dead but harmless)
+- `settings.probationEvalDays` (default 120) — orphan setting, safe to leave
+- `settings.evalCriteria` — orphan array, safe to leave
+- **`evaluations` table data in Supabase** — NOT deleted (Admin may clear manually if desired)
+- `_computeSnapshot` returns `evals: [], topPerf: [], avgScore: 0` — backward-compat return shape
+
+### DB Impact
+🟢 **Zero automatic data changes** — evaluations table remains untouched in Supabase
+🟡 If Admin wants clean slate: `DB.save('evaluations', []); await DB.cloudPushAllChanged();`
+
+### Restoration Path (if needed)
+Git revert this commit. All code is in Git history. No data lost (evaluations table preserved).
+
+### Verification
+1. Console: `v1.5.12`
+2. Employee sidebar: no "การประเมินของฉัน" menu ✓
+3. Manager sidebar: no "ประเมินทีม" menu ✓
+4. Deep-link `#my-evaluation` → 404 / redirect
+5. Exec Dashboard: no "ผลประเมินรอบนี้" stat card, no "Top Performer" widget
+6. Excel export from Exec Dashboard: 5 sheets (was 6)
+7. No console errors
+
+### Related Cleanup (Optional)
+```javascript
+// If Admin wants to clear evaluations data from Supabase
+DB.save('evaluations', []);
+await DB.cloudPushAllChanged();
+console.log('✓ Evaluations table cleared');
+```
+
+### Rollback
+Vercel promote v1.5.11 (~10 sec). Full code restored, data was never deleted.
+
+---
+
 ## [1.5.11] — 2026-07-18 (FEATURE: night shift post-midnight scan merging)
 
 **FEATURE — Auto-merge post-midnight scans as prev-day check-OUT for night workers**

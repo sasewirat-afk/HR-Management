@@ -6,6 +6,90 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.11] — 2026-07-18 (FEATURE: night shift post-midnight scan merging)
+
+**FEATURE — Auto-merge post-midnight scans as prev-day check-OUT for night workers**
+
+### Context
+Emps with night shifts (e.g., shift `21` = 21:00-06:00) scan OUT after midnight. Before v1.5.11, that scan was recorded as NEXT DAY's check-IN — wrong. Should be merged as prev day's check-OUT.
+
+### Design (per Q1-Q6 grill)
+- **Q1 A:** Shift-driven detection — check prev day's shift value
+- **Q2 C:** Cutoff = 07:00 — scans before this on day X+1 are candidates
+- **Q3 A:** Night shift = start >= 18:00 (per shift value, e.g., `18`, `21`)
+- **Q4 A:** No prev shift = normal check-IN (safe fallback)
+- **Q5 C:** Both import + cleanup — code fix + one-time script
+
+### Added
+- **`isNightShift_v1_5_11(shiftType)`** — returns true if parsed shift start >= 18:00
+- **`processNightShiftMerging_v1_5_11(records, empId)`** — merges post-midnight scans:
+  - Sort records by date + checkIn chronologically
+  - For each scan at day X+1 with checkIn < 07:00:
+    - Find prev day's record + prev day's shift
+    - If prev day has night shift (>= 18:00) → set prev.checkOut = curr.checkIn, mark curr for removal
+  - Returns processed records + merged count
+
+### Changed
+- **`confirmUploadAttendance`** — applies `processNightShiftMerging_v1_5_11` on new records before save
+- Groups by emp, processes per-emp, logs merged count to console
+
+### Safety Rules
+- **Kitchen 5:48 for shift `6`** — prev day is `6`/`9`/`O` (day shift) → **NOT merged**, correctly today's check-IN
+- **Hotel 06:15 for shift `6`** — prev day was `21` (night) → merged as prev day checkOut
+- **No prev day shift** — safe fallback, treat as normal check-IN
+
+### DB Impact
+🟢 **Zero schema changes** — attendance records structure unchanged
+🟡 **Data cleanup available** — 9 existing records identified for cleanup (see script)
+
+### One-Time Cleanup Script
+```javascript
+// v1.5.11: Cleanup existing post-midnight scans
+const records = DB.load('attendanceRecords', []);
+const empIds = [...new Set(records.map(r => r.employeeCode || r.employeeId))];
+let totalMerged = 0;
+const finalRecords = [];
+empIds.forEach(empId => {
+ const empRecs = records.filter(r => (r.employeeCode || r.employeeId) === empId);
+ const { processedRecords, mergedCount } = processNightShiftMerging_v1_5_11(empRecs, empId);
+ finalRecords.push(...processedRecords);
+ totalMerged += mergedCount;
+});
+console.log(`Total: ${records.length} → After: ${finalRecords.length} → Merged: ${totalMerged}`);
+
+// BACKUP first
+const s = DB.load('settings');
+s._preNightShiftCleanupBackup_v1_5_11 = JSON.parse(JSON.stringify(records));
+s._preNightShiftCleanupBackupDate = new Date().toISOString();
+DB.save('settings', s);
+console.log('✓ Backup saved');
+
+// EXECUTE
+DB.save('attendanceRecords', finalRecords);
+console.log('✓ Cleanup done — reload page');
+location.reload();
+```
+
+### Verification
+1. Console: `v1.5.11`
+2. Run cleanup script → check merged count = 9
+3. Check emp 968030100X (or similar night worker):
+   - 22 มิ.ย. records should have `checkOut` around 06:XX (was in separate 22 มิ.ย. record as `checkIn`)
+   - No standalone 22 มิ.ย. record with `checkIn 06:03` etc.
+
+### Rollback
+```javascript
+// Restore from backup
+const backup = DB.load('settings')._preNightShiftCleanupBackup_v1_5_11;
+if (backup) { DB.save('attendanceRecords', backup); location.reload(); }
+```
+
+### Related
+- Applies at import — future uploads auto-merge
+- Deferred: v1.5.12 might also detect based on time gap (< 12hr since prev scan)
+
+---
+
 ## [1.5.10] — 2026-07-18 (HOTFIX: duplicate accumulatedHolidays on re-approve)
 
 **HOTFIX — Duplicate comp-off stocks created when same request is approved multiple times**

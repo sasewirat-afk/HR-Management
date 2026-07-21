@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.10</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.11</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.10';
+const APP_VERSION = '1.5.11';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -1613,6 +1613,53 @@ function parseShiftValue(raw) {
  const frac = num - Math.floor(num);
  if (frac !== 0 && frac !== 0.5) return { kind: 'unset', raw: trimmed };
  return { kind: 'hour', hour: num, raw: trimmed };
+}
+
+// v1.5.11: Check if a shift value represents a night shift (start >= 18:00)
+// Night shifts may extend past midnight — post-midnight scans belong to prev day (per Q3 grill).
+function isNightShift_v1_5_11(shiftType) {
+ const parsed = parseShiftValue(shiftType);
+ if (parsed.kind !== 'hour') return false;
+ return parsed.hour >= 18; // 18:00 or later = night shift
+}
+
+// v1.5.11: Process records for night-shift post-midnight scan merging.
+// Rule: if scan on day X+1 before 07:00 AND emp had night shift on day X → treat as day X's checkOut.
+// Returns { processedRecords, mergedCount } — mutates records array to merge/remove.
+// Safe: only merges when prev day shift is confirmed night shift (>= 18:00).
+function processNightShiftMerging_v1_5_11(records, empId) {
+ if (!Array.isArray(records) || records.length < 2) return { processedRecords: records, mergedCount: 0 };
+ const shifts = DB.load('shifts', []);
+ const empShifts = new Map();
+ shifts.filter(s => s.employeeId === empId).forEach(s => empShifts.set(s.date, s));
+ // Sort by date + checkIn to detect chronological pairs
+ const sorted = [...records].sort((a, b) =>
+ (a.date + (a.checkIn || '99:99')).localeCompare(b.date + (b.checkIn || '99:99'))
+ );
+ const toRemove = new Set();
+ let mergedCount = 0;
+ for (let i = 1; i < sorted.length; i++) {
+ const curr = sorted[i];
+ if (!curr.checkIn || curr.checkIn > '07:00') continue; // must be post-midnight window
+ // Find prev day's record (day before curr.date)
+ const currDate = new Date(curr.date);
+ const prevDate = new Date(currDate.getTime() - 86400000);
+ const prevDateStr = prevDate.toISOString().split('T')[0];
+ const prev = sorted.find(r => r.date === prevDateStr);
+ if (!prev) continue; // no prev day record to merge into
+ // Check prev day was night shift
+ const prevShift = empShifts.get(prevDateStr);
+ if (!prevShift || !isNightShift_v1_5_11(prevShift.type)) continue;
+ // Merge: prev's checkOut = curr's checkIn, mark curr for removal
+ prev.checkOut = curr.checkIn;
+ prev._mergedNightShiftFromNext_v1_5_11 = true;
+ toRemove.add(curr.id || `${curr.employeeCode}|${curr.date}|${curr.checkIn}`);
+ mergedCount++;
+ }
+ const processedRecords = records.filter(r =>
+ !toRemove.has(r.id || `${r.employeeCode}|${r.date}|${r.checkIn}`)
+ );
+ return { processedRecords, mergedCount };
 }
 
 // v1.5.0 (ADR-0004): Convert a numeric shift hour to HH:MM string.
@@ -7088,7 +7135,26 @@ function confirmUploadAttendance() {
  const newRecords = _attendanceBuffer;
  const keys = new Set(newRecords.map(r => `${r.employeeCode}|${r.date}`));
  const filtered = existing.filter(r => !keys.has(`${r.employeeCode}|${r.date}`));
- DB.save('attendanceRecords', [...filtered, ...newRecords]);
+ // v1.5.11: Process night-shift post-midnight merging on NEW records before save
+ // Group new records by empId, run merging per employee
+ const empGroups = {};
+ newRecords.forEach(r => {
+ const key = r.employeeCode || r.employeeId;
+ if (!key) return;
+ if (!empGroups[key]) empGroups[key] = [];
+ empGroups[key].push(r);
+ });
+ let totalMerged = 0;
+ const mergedRecords = [];
+ Object.entries(empGroups).forEach(([empId, recs]) => {
+ const { processedRecords, mergedCount } = processNightShiftMerging_v1_5_11(recs, empId);
+ mergedRecords.push(...processedRecords);
+ totalMerged += mergedCount;
+ });
+ if (totalMerged > 0) {
+ console.log(`[v1.5.11] Night-shift merging: ${totalMerged} post-midnight scans merged into prev-day checkOut`);
+ }
+ DB.save('attendanceRecords', [...filtered, ...mergedRecords]);
  // v1.4.20 audit log — ติดตามการ upload โดย non-admin
  const uniqueDates = [...new Set(newRecords.map(r => r.date))].sort();
  auditLog('attendance-upload', 'attendance', uniqueDates.join(','),

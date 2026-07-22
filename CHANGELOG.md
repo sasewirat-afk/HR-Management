@@ -6,6 +6,59 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.16] — 2026-07-18 (FEATURE: calendar cells show shift + times + status)
+
+**FEATURE — Emp calendar (ปฏิทินของฉัน) now shows attendance details in each cell**
+
+### Context
+Emp calendar had lots of empty space — just showed date number. Users needed to click each date to see attendance details.
+
+### Design (per grill Q1-Q6)
+- **Q1 C:** Shift context — "กะ: 9" + times
+- **Q2 A:** Status labels for special states (leave/off/holiday/absent)
+- **Q3 A:** Merged cert values (approved cert overrides raw scan)
+- **Q4 B+C:** 12px font + color coding
+- **Q5 C:** 🟢/🔴 dot for late detection
+- **Q6 A:** Preload data once, build lookup maps
+
+### Added
+Cell content below date number now shows:
+- **Working day with scan:** "กะ: 9", 🟢 08:36 (green if on-time, red if late), 17:02 (checkOut), "✓ รับรอง" badge if from approved cert
+- **Leave day:** "🟠 ลากิจ" / "🟠 ลาป่วย" / "🟠 ลาพักร้อน" / "🟢 สะสมหยุด" / etc.
+- **Day off (shift=O):** "🔵 หยุด"
+- **Company holiday:** "🔴 วันหยุด"
+- **Absent (past workday, no scan):** "❌ ขาดงาน"
+- **Future day with shift:** "กะ: X"
+
+### Changed — CSS
+`.calendar-day` cells now:
+- `flex-direction: column` for stacked content
+- `min-height: 90px` for adequate space
+- `padding: 6px 4px 4px` + `overflow: hidden`
+
+### Changed — drawCalendar Logic
+- **Preload once per render:** shifts, attendanceRecords, leaves, holidays (Q6 A)
+- **Apply cert merge** at month scope via `mergeApprovedTimeCertForMonth` (Q3 A)
+- **Late dot** via `getShiftLateInfo_v1_5_4` per-day threshold (Q5 C)
+
+### DB Impact
+🟢 **Zero data changes** — display enhancement only
+
+### Verification
+1. Console: `v1.5.16`
+2. Emp login → ปฏิทินของฉัน
+3. Working day with scan: shows "กะ: X", check-in/out with dot color
+4. วิรัช 20 ก.ค.: shows "🟢 08:36" and "19:00" (merged cert) + "✓ รับรอง"
+5. 21 ก.ค. (payroll cutoff): shows raw scan 08:30 → "--:--" (no cert)
+6. Leave day: shows appropriate "🟠 ลากิจ" / etc.
+7. Weekend/holiday: shows blank or "🔴 วันหยุด"
+8. Absent past workday: shows "❌ ขาดงาน"
+
+### Rollback
+Vercel promote v1.5.15 (~10 sec)
+
+---
+
 ## [1.5.15] — 2026-07-18 (HOTFIX: calendar modal missed cert merge)
 
 **HOTFIX — Emp calendar popup showed raw scan instead of approved-cert values**

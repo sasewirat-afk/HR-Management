@@ -634,15 +634,20 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  letter-spacing: 0.06em;
 }
 .calendar-day {
+ /* v1.5.16: flex column for date number + content lines below */
  aspect-ratio: 1;
  display: flex;
+ flex-direction: column;
  align-items: center;
- justify-content: center;
+ justify-content: flex-start;
+ padding: 6px 4px 4px;
  background: #ffffff;
  font-size: 13px;
  position: relative;
  color: var(--ink);
  font-weight: 500;
+ overflow: hidden;
+ min-height: 90px;
 }
 .calendar-day.other-month { color: var(--gray-300); background: #ffffff; }
 .calendar-day.today {
@@ -863,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.15</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.16</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +892,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.15';
+const APP_VERSION = '1.5.16';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -3942,21 +3947,62 @@ function drawCalendar() {
  const monthNames = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
  document.getElementById('calTitle').textContent = `${monthNames[calMonth]} ${calYear + 543}`;
 
+ // v1.5.16: Preload all data once, build lookup maps for performance (Q6 A)
  const settings = DB.load('settings');
  const holidays = new Set(settings.companyHolidays);
- const leaves = DB.load('leaveRequests').filter(r => r.employeeId === currentUser.id && r.status === 'approved');
- const leaveDates = new Set();
+ const empId = currentUser.id;
+ const monthStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}`;
+ // Leaves — approved for this emp
+ const leaves = DB.load('leaveRequests').filter(r => r.employeeId === empId && r.status === 'approved');
+ const leaveByDate = {}; // date → leave type
  leaves.forEach(r => {
  const s = new Date(r.startDate), e = new Date(r.endDate);
  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
- leaveDates.add(d.toISOString().split('T')[0]);
+ leaveByDate[d.toISOString().split('T')[0]] = r.type;
  }
  });
+ // Shifts (grid)
+ const shifts = DB.load('shifts', []);
+ const shiftByDate = {};
+ shifts.filter(s => s.employeeId === empId && s.date.startsWith(monthStr)).forEach(s => {
+ shiftByDate[s.date] = s.type;
+ });
+ // Attendance records (raw + apply cert merge per month for accuracy)
+ const rawRecords = DB.load('attendanceRecords').filter(r =>
+ (r.employeeCode === empId || r.employeeId === empId) && r.date && r.date.startsWith(monthStr)
+ );
+ const mergedRecords = mergeApprovedTimeCertForMonth(rawRecords, monthStr);
+ const attByDate = {};
+ mergedRecords.forEach(r => { if (r.date) attByDate[r.date] = r; });
 
  const first = new Date(calYear, calMonth, 1);
  const startDay = first.getDay();
  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
  const todayStr = today();
+
+ // Helper: determine late status (Q5 C — 🟢 on-time / 🔴 late)
+ // Uses per-day late threshold via v1.5.4 helper if available.
+ const _getLateDot = (rec, dStr) => {
+ if (!rec?.checkIn) return '';
+ const info = (typeof getShiftLateInfo_v1_5_4 === 'function')
+ ? getShiftLateInfo_v1_5_4(currentUser, dStr, settings)
+ : null;
+ if (!info) return ''; // day off
+ return rec.checkIn >= info.lateThreshold ? '🔴' : '🟢';
+ };
+
+ const leaveTypeLabel = (t) => {
+ switch (t) {
+ case 'personal': return '🟠 ลากิจ';
+ case 'sick': case 'sick-cert': case 'sick-with-cert': case 'sick-without-cert': return '🟠 ลาป่วย';
+ case 'vacation': return '🟠 ลาพักร้อน';
+ case 'comp-off': return '🟢 สะสมหยุด';
+ case 'maternity': return '🟣 ลาคลอด';
+ case 'ordination': return '🟤 ลาบวช';
+ case 'unpaid': return '⚫ ลาไม่รับค่าจ้าง';
+ default: return '🟠 ลา';
+ }
+ };
 
  const days = ['อา','จ','อ','พ','พฤ','ศ','ส'];
  let html = '<div class="calendar-grid">';
@@ -3969,15 +4015,44 @@ function drawCalendar() {
  let cls = 'calendar-day';
  if (dStr === todayStr) cls += ' today';
  if (dow === 0) cls += ' sunday';
- if (leaveDates.has(dStr)) cls += ' leave';
- else if (holidays.has(dStr)) cls += ' holiday';
+ const hasLeave = !!leaveByDate[dStr];
+ const isHoliday = holidays.has(dStr);
+ if (hasLeave) cls += ' leave';
+ else if (isHoliday) cls += ' holiday';
  else if (dow === 6) cls += ' weekend';
- // v1.5.13: past/today dates clickable → opens time cert modal (simplified form, needs approval)
+ // v1.5.13: past/today dates clickable → time cert modal
  const isPastOrToday = dStr <= todayStr;
  const clickHandler = isPastOrToday
  ? ` onclick="openCalendarTimeCertModal('${dStr}')" style="cursor:pointer;" title="คลิกเพื่อขอรับรองเวลาสำหรับวันนี้"`
  : ` style="cursor:not-allowed;opacity:0.6;" title="ไม่สามารถขอรับรองเวลาล่วงหน้าได้"`;
- html += `<div class="${cls}"${clickHandler}>${d}</div>`;
+
+ // v1.5.16: build content below date number (Q1 C — shift context, Q4 12px + colors)
+ const shiftType = shiftByDate[dStr];
+ const rec = attByDate[dStr];
+ let content = '';
+ if (hasLeave) {
+ content = `<div style="font-size:11px;color:#c2410c;margin-top:2px;line-height:1.3;">${leaveTypeLabel(leaveByDate[dStr])}</div>`;
+ } else if (shiftType === 'O') {
+ content = `<div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.3;">🔵 หยุด</div>`;
+ } else if (isHoliday) {
+ content = `<div style="font-size:11px;color:#dc2626;margin-top:2px;line-height:1.3;">🔴 วันหยุด</div>`;
+ } else if (rec) {
+ // Working day with scan data
+ const inDot = _getLateDot(rec, dStr);
+ const shiftLabel = shiftType ? `<div style="font-size:11px;color:#4b5563;line-height:1.2;">กะ: ${shiftType}</div>` : '';
+ const inLine = rec.checkIn ? `<div style="font-size:12px;line-height:1.2;">${inDot} ${rec.checkIn}</div>` : '';
+ const outLine = rec.checkOut ? `<div style="font-size:12px;color:#4b5563;line-height:1.2;">${rec.checkOut}</div>` : `<div style="font-size:11px;color:#9ca3af;line-height:1.2;">--:--</div>`;
+ const certBadge = rec._certified ? `<div style="font-size:9px;color:#16a34a;line-height:1;">✓ รับรอง</div>` : '';
+ content = `<div style="margin-top:3px;">${shiftLabel}${inLine}${outLine}${certBadge}</div>`;
+ } else if (isPastOrToday && !hasLeave && !isHoliday && dow !== 0 && dow !== 6) {
+ // Past workday without scan and no leave → absent
+ const shiftLabel = shiftType ? `<div style="font-size:11px;color:#4b5563;line-height:1.2;">กะ: ${shiftType}</div>` : '';
+ content = `${shiftLabel}<div style="font-size:11px;color:#dc2626;margin-top:2px;line-height:1.2;">❌ ขาดงาน</div>`;
+ } else if (shiftType) {
+ // Future date with shift set (or no scan needed)
+ content = `<div style="font-size:11px;color:#4b5563;margin-top:2px;line-height:1.2;">กะ: ${shiftType}</div>`;
+ }
+ html += `<div class="${cls}"${clickHandler}><div style="font-weight:600;">${d}</div>${content}</div>`;
  }
  html += '</div>';
  document.getElementById('calendarGrid').innerHTML = html;

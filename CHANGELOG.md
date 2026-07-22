@@ -6,6 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.19] — 2026-07-18 (UX: sort รายงานเข้างาน by status)
+
+**UX — Group daily attendance report by status for easier visual check**
+
+### Context
+User request: หน้ารายงานเข้างาน 'มาทำงาน' tab was sorted by employeeCode, mixing all statuses. Hard to scan for problem cases (สาย).
+
+### Changed
+`renderAttendanceReport` sec-present table now sorts by:
+1. **Status priority** — ตรงเวลา (0) → หลังเวลา (1) → สาย (2)
+2. **Within same status** — sort by checkIn time ascending
+
+### Result
+- All ตรงเวลา rows appear first (green badges)
+- Then หลังเวลา (yellow badges)
+- Then สาย (red badges) — easy to spot at bottom
+
+### DB Impact
+🟢 Zero — pure display sort
+
+### Verification
+1. Console: `v1.5.19`
+2. Admin → รายงานเข้างาน → 22 ก.ค.
+3. มาทำงาน tab: ✅ all "ตรงเวลา" rows first, then "หลังเวลา", then "สาย" at bottom
+
+---
+
 ## [1.5.18] — 2026-07-18 (🔴 CRITICAL: cross-emp cert leak in merge)
 
 **CRITICAL — Cross-employee cert leak in `mergeApprovedTimeCertForDate` affected payroll**

@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.18</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.19</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -892,7 +892,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.18';
+const APP_VERSION = '1.5.19';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -7606,7 +7606,20 @@ function renderAttendanceReport() {
  <table>
  <thead><tr><th>วันที่</th><th>รหัส</th><th>ชื่อ</th><th>ชื่อเล่น</th><th>บริษัท</th><th>แผนก</th><th>เข้างาน</th><th>ออกงาน</th><th>สถานะ</th></tr></thead>
  <tbody>
- ${present.map(r => {
+ ${(() => {
+ // v1.5.19: Sort by status priority (ตรงเวลา → หลังเวลา → สาย), then by checkIn time.
+ // Makes visual scan easier — group same-status rows together.
+ const _statusRank = (r) => {
+ if (_isLateRec(r)) return 2; // สาย
+ if (_isAfterStartRec(r)) return 1; // หลังเวลา
+ return 0; // ตรงเวลา
+ };
+ const sortedPresent = [...present].sort((a, b) => {
+ const pa = _statusRank(a), pb = _statusRank(b);
+ if (pa !== pb) return pa - pb;
+ return (a.checkIn || '').localeCompare(b.checkIn || '');
+ });
+ return sortedPresent.map(r => {
  const empObj = getEmployee(r.employeeCode || r.employeeId);
  const nick = empObj ? (empObj.nickname || '') : '';
  const companyLabel = empObj ? (getCompanyLabel(empObj.company) || '-') : '-';
@@ -7621,7 +7634,8 @@ function renderAttendanceReport() {
  <td>${r.checkOut || '-'}</td>
  <td>${_isLateRec(r) ? '<span class="status-badge status-rejected">สาย</span>' : _isAfterStartRec(r) ? '<span class="status-badge status-pending">หลังเวลา</span>' : '<span class="status-badge status-approved">ตรงเวลา</span>'}</td>
  </tr>`;
- }).join('')}
+ }).join('');
+ })()}
  </tbody>
  </table>
  </div>

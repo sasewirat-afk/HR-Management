@@ -6,6 +6,73 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.17] — 2026-07-18 (HOTFIX: cert merge key mismatch — employeeCode vs employeeId)
+
+**HOTFIX — Approved cert created duplicate records instead of updating raw scan**
+
+### Bug Report
+Emp วิรัช (690309002), 18 ก.ค.:
+- Raw scan: checkIn 08:55
+- Approved cert: claimed checkIn 09:01
+- **Modal shows: 08:55** (raw)
+- **Calendar cell shows: 09:01 + ✓ รับรอง** (cert)
+- Same emp, same date, DIFFERENT display
+
+### Root Cause
+`mergeApprovedTimeCertForDate` (line 7270) indexed raw records by `employeeId`:
+```javascript
+records.forEach(r => { byKey[`${r.employeeId}|${r.date}`] = r; });
+```
+
+But Tigersoft scans store `employeeCode` (not `employeeId`). So:
+- Raw record: `{ employeeCode: '690309002', employeeId: undefined, ... }`
+- Cert: `{ employeeId: '690309002', ... }`
+- byKey = `{ 'undefined|2026-07-18': raw_record }` (indexed by undefined!)
+- Cert lookup key: `'690309002|2026-07-18'` → not found
+- Falls to else branch → **INJECTS cert record as new** (duplicate)
+
+Result: merged array has BOTH raw and cert records for same emp+date.
+
+### Downstream Bugs
+Different views pick different records:
+- Modal (v1.5.15): `mergedRecords[0]` = first pushed = raw record (08:55)
+- Calendar (v1.5.16): `attByDate[date] = r` overwrites, last write wins = cert record (09:01)
+- Attendance reports: could show either (non-deterministic)
+
+### Fixed
+Index by BOTH employeeId AND employeeCode:
+```javascript
+records.forEach(r => {
+  if (r.employeeId) byKey[`${r.employeeId}|${r.date}`] = r;
+  if (r.employeeCode) byKey[`${r.employeeCode}|${r.date}`] = r; // ← v1.5.17
+});
+```
+
+Now cert lookup finds raw record via employeeCode → **UPDATE existing** (no duplicate).
+
+Also changed `merged.findIndex(r => r.employeeId === c.employeeId ...)` to `merged.indexOf(existingRec)` to find the actual record object regardless of employeeId presence.
+
+### DB Impact
+🟢 **Zero data changes** — pure logic fix. No cleanup needed (existing records untouched, only merge output changes).
+
+### Verification
+1. Console: `v1.5.17`
+2. Emp วิรัช 18 ก.ค.: BOTH modal and calendar now show **09:01** (cert value) with ✓ รับรอง
+3. Or both show 08:55 if cert was rejected/not approved — consistent
+
+### Impact on Other Views
+Now consistent across:
+- Calendar modal ✅
+- Calendar cell display ✅
+- Attendance report ✅
+- Payroll calculation ✅
+- Late-summary tab ✅
+
+### Rollback
+Vercel promote v1.5.16 (~10 sec)
+
+---
+
 ## [1.5.16] — 2026-07-18 (FEATURE: calendar cells show shift + times + status)
 
 **FEATURE — Emp calendar (ปฏิทินของฉัน) now shows attendance details in each cell**

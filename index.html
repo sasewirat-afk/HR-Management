@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.16</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.17</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -892,7 +892,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.16';
+const APP_VERSION = '1.5.17';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -7267,18 +7267,27 @@ function computeAutoAbsentCutoff(settings) {
 }
 
 // Merge approved time-cert requests for a specific date into the attendance pool
+// v1.5.17 FIX: index raw records by BOTH employeeId AND employeeCode.
+// Bug: Tigersoft scans have only employeeCode (no employeeId), certs have only employeeId.
+// Old code keyed by employeeId only → cert couldn't find raw record → INJECTED duplicate.
+// Result: 2 records for same emp+date, calendar showed cert, modal showed raw = inconsistent.
 function mergeApprovedTimeCertForDate(records, dateStr) {
  const certs = DB.load('timeCertRequests', []).filter(c => c.status === 'approved' && c.date === dateStr);
  if (!certs.length) return records;
  const byKey = {};
- records.forEach(r => { byKey[`${r.employeeId}|${r.date}`] = r; });
+ // v1.5.17: index by employeeId AND employeeCode so cert lookup finds raw records
+ records.forEach(r => {
+ if (r.employeeId) byKey[`${r.employeeId}|${r.date}`] = r;
+ if (r.employeeCode) byKey[`${r.employeeCode}|${r.date}`] = r;
+ });
  const merged = [...records];
  certs.forEach(c => {
  const k = `${c.employeeId}|${c.date}`;
  const emp = getEmployee(c.employeeId);
- if (byKey[k]) {
- // Update existing record's check-in if cert moves it earlier
- const idx = merged.findIndex(r => r.employeeId === c.employeeId && r.date === c.date);
+ const existingRec = byKey[k];
+ if (existingRec) {
+ // v1.5.17: find by object identity (was by employeeId which failed for raw-only-code records)
+ const idx = merged.indexOf(existingRec);
  if (idx >= 0) {
  merged[idx] = {
  ...merged[idx],

@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.20</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.21</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -892,7 +892,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.20';
+const APP_VERSION = '1.5.21';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -12438,7 +12438,16 @@ function _execComputeSnapshot() {
  // v1.5.12: evaluations removed — snapshot no longer includes eval-based stats
  const evals = [], topPerf = [], avgScore = 0;
 
- return { emps, team, newHires, leavesThisMonth, byCompany, byDept, leaveCounts, evals, topPerf, avgScore };
+ // v1.5.21: YTD analytics for Excel export (mirror dashboard widgets)
+ const ytdOT = _execOTByDept(team);
+ const ytdSick = _execLeaveByDept(team, t => t === 'sick' || (t && t.startsWith('sick-')));
+ const ytdVacation = _execLeaveByDept(team, t => t === 'vacation');
+ const ytdPersonal = _execLeaveByDept(team, t => t === 'personal');
+ const ytdLate = _execLateByDept(team);
+ const ytdHiresResigns = _execHiresResignsByDept(team);
+
+ return { emps, team, newHires, leavesThisMonth, byCompany, byDept, leaveCounts, evals, topPerf, avgScore,
+ ytdOT, ytdSick, ytdVacation, ytdPersonal, ytdLate, ytdHiresResigns };
 }
 
 function exportExecDashboardXLSX() {
@@ -12448,7 +12457,8 @@ function exportExecDashboardXLSX() {
  const companyLabel = (id) => getCompanyLabel(id);
  const stamp = today();
 
- // Sheet 1: KPI Summary
+ // Sheet 1: KPI Summary (v1.5.12: eval refs removed, v1.5.21: YTD totals added)
+ const _sumDept = (byDept) => Object.values(byDept).reduce((s, g) => s + g.total, 0);
  const sheet1 = [
  ['Dashboard ผู้บริหาร — สรุป KPI'],
  [`รายงาน ณ วันที่ ${formatDate(stamp)}`],
@@ -12458,14 +12468,21 @@ function exportExecDashboardXLSX() {
  ['พนักงานทั้งหมด (Active)', s.team.length],
  ['พนักงานเข้าใหม่ (60 วันที่ผ่านมา)', s.newHires.length],
  ['คำขอลาเดือนนี้', s.leavesThisMonth.length],
- ['ผลประเมินที่เสร็จ', s.evals.length],
- ['คะแนนเฉลี่ย (ผลประเมิน)', s.avgScore + '%'],
  [],
  ['สัดส่วนการลาเดือนนี้',''],
  ['ลาพักร้อน', s.leaveCounts.vacation],
  ['ลาป่วย', s.leaveCounts.sick],
  ['ลากิจ', s.leaveCounts.personal],
- ['อื่นๆ', s.leaveCounts.other]
+ ['อื่นๆ', s.leaveCounts.other],
+ [],
+ [`สรุป YTD (1 ม.ค. ${new Date().getFullYear() + 543} ถึงปัจจุบัน)`, ''],
+ ['OT รวม (ชม.)', _sumDept(s.ytdOT).toFixed(1)],
+ ['ลาป่วย รวม (วัน)', _sumDept(s.ytdSick).toFixed(1)],
+ ['ลาพักร้อน รวม (วัน)', _sumDept(s.ytdVacation).toFixed(1)],
+ ['ลากิจ รวม (วัน)', _sumDept(s.ytdPersonal).toFixed(1)],
+ ['มาสายสะสม (ครั้ง)', _sumDept(s.ytdLate)],
+ ['พนักงานเข้าใหม่ YTD', s.ytdHiresResigns.hiresTotal],
+ ['พนักงานลาออก YTD', s.ytdHiresResigns.resignsTotal]
  ];
  const ws1 = XLSX.utils.aoa_to_sheet(sheet1);
  ws1['!cols'] = [{wch:40},{wch:18}];
@@ -12527,8 +12544,81 @@ function exportExecDashboardXLSX() {
 
  // v1.5.12: Sheet 6 (Top Performers) removed — evaluation system deprecated
 
+ // v1.5.21: YTD widget sheets — mirror dashboard 6 widgets
+ // Helper to render dept aggregation as sheet rows (dept summary + emp detail)
+ const _renderDeptSheet = (title, byDept, unit) => {
+ const rows = [
+ [title],
+ [`สะสมตั้งแต่ 1 ม.ค. ${new Date().getFullYear() + 543} ถึง ${formatDate(stamp)}`],
+ [],
+ ['— สรุปตามแผนก —'],
+ ['แผนก', `รวม (${unit})`, 'จำนวนพนักงาน']
+ ];
+ const entries = Object.entries(byDept).sort((a, b) => b[1].total - a[1].total);
+ entries.forEach(([dept, g]) => {
+ rows.push([dept, g.total, g.count]);
+ });
+ rows.push([]);
+ rows.push(['— รายละเอียดพนักงาน —']);
+ rows.push(['อันดับ', 'รหัส', 'ชื่อ-นามสกุล', 'แผนก', `จำนวน (${unit})`]);
+ // Flatten all emps across depts, sorted by value desc
+ const allEmps = [];
+ entries.forEach(([dept, g]) => {
+ g.emps.forEach(e => allEmps.push({ ...e, dept }));
+ });
+ allEmps.sort((a, b) => b.value - a.value);
+ allEmps.forEach((e, i) => {
+ rows.push([i + 1, e.empId, e.name, e.dept, e.value]);
+ });
+ return rows;
+ };
+
+ // Sheet 6: YTD OT
+ const wsYTD_OT = XLSX.utils.aoa_to_sheet(_renderDeptSheet('YTD — OT ตามแผนก', s.ytdOT, 'ชม.'));
+ wsYTD_OT['!cols'] = [{wch:8},{wch:14},{wch:26},{wch:20},{wch:14}];
+ XLSX.utils.book_append_sheet(wb, wsYTD_OT, 'YTD OT');
+
+ // Sheet 7: YTD Sick Leave
+ const wsYTD_Sick = XLSX.utils.aoa_to_sheet(_renderDeptSheet('YTD — ลาป่วย ตามแผนก', s.ytdSick, 'วัน'));
+ wsYTD_Sick['!cols'] = [{wch:8},{wch:14},{wch:26},{wch:20},{wch:14}];
+ XLSX.utils.book_append_sheet(wb, wsYTD_Sick, 'YTD ลาป่วย');
+
+ // Sheet 8: YTD Vacation
+ const wsYTD_Vac = XLSX.utils.aoa_to_sheet(_renderDeptSheet('YTD — ลาพักร้อน ตามแผนก', s.ytdVacation, 'วัน'));
+ wsYTD_Vac['!cols'] = [{wch:8},{wch:14},{wch:26},{wch:20},{wch:14}];
+ XLSX.utils.book_append_sheet(wb, wsYTD_Vac, 'YTD ลาพักร้อน');
+
+ // Sheet 9: YTD Personal Leave
+ const wsYTD_Per = XLSX.utils.aoa_to_sheet(_renderDeptSheet('YTD — ลากิจ ตามแผนก', s.ytdPersonal, 'วัน'));
+ wsYTD_Per['!cols'] = [{wch:8},{wch:14},{wch:26},{wch:20},{wch:14}];
+ XLSX.utils.book_append_sheet(wb, wsYTD_Per, 'YTD ลากิจ');
+
+ // Sheet 10: YTD Hires + Resignations
+ const hrRows = [
+ ['YTD — พนักงานเริ่มงาน / ลาออก'],
+ [`สะสมตั้งแต่ 1 ม.ค. ${new Date().getFullYear() + 543} ถึง ${formatDate(stamp)}`],
+ [],
+ [`เข้าใหม่รวม: ${s.ytdHiresResigns.hiresTotal} คน · ลาออกรวม: ${s.ytdHiresResigns.resignsTotal} คน`],
+ [],
+ ['— เข้าใหม่แยกตามแผนก —'],
+ ['แผนก', 'จำนวน']
+ ];
+ Object.entries(s.ytdHiresResigns.hires).sort((a,b) => b[1]-a[1]).forEach(([d, n]) => hrRows.push([d, n]));
+ hrRows.push([]);
+ hrRows.push(['— ลาออกแยกตามแผนก —']);
+ hrRows.push(['แผนก', 'จำนวน']);
+ Object.entries(s.ytdHiresResigns.resigns).sort((a,b) => b[1]-a[1]).forEach(([d, n]) => hrRows.push([d, n]));
+ const wsYTD_HR = XLSX.utils.aoa_to_sheet(hrRows);
+ wsYTD_HR['!cols'] = [{wch:36},{wch:12}];
+ XLSX.utils.book_append_sheet(wb, wsYTD_HR, 'YTD เข้า-ออก');
+
+ // Sheet 11: YTD Late
+ const wsYTD_Late = XLSX.utils.aoa_to_sheet(_renderDeptSheet('YTD — มาสายสะสม ตามแผนก', s.ytdLate, 'ครั้ง'));
+ wsYTD_Late['!cols'] = [{wch:8},{wch:14},{wch:26},{wch:20},{wch:14}];
+ XLSX.utils.book_append_sheet(wb, wsYTD_Late, 'YTD มาสาย');
+
  XLSX.writeFile(wb, `Exec-Dashboard-${stamp}.xlsx`);
- toast(`Export สำเร็จ — 5 sheets · ${s.team.length} พนักงาน`);
+ toast(`Export สำเร็จ — 11 sheets · ${s.team.length} พนักงาน · YTD included`);
 }
 
 async function exportExecDashboardPNG(mode) {

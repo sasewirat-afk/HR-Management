@@ -6,6 +6,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.21] — 2026-07-18 (FEATURE: Excel export includes YTD widget data)
+
+**FEATURE — Exec Dashboard Excel export mirrors 6 YTD widgets (v1.5.20)**
+
+### Context
+v1.5.20 added 6 YTD widgets to Dashboard. Excel export was still using old 5-sheet template + referenced removed eval fields. User wants Excel to match dashboard.
+
+### Changed — `_execComputeSnapshot`
+Now includes YTD data:
+- `ytdOT` — OT hours by dept + all emps
+- `ytdSick` — sick leave days by dept
+- `ytdVacation` — vacation days by dept
+- `ytdPersonal` — personal leave days by dept
+- `ytdLate` — late count by dept
+- `ytdHiresResigns` — hires + resignations by dept
+
+### Changed — Sheet 1 (KPI Summary)
+Removed:
+- "ผลประเมินที่เสร็จ" (evaluation deprecated in v1.5.12)
+- "คะแนนเฉลี่ย" (evaluation deprecated)
+
+Added:
+- YTD OT รวม (ชม.)
+- YTD ลาป่วย/พักร้อน/กิจ รวม (วัน)
+- YTD มาสายสะสม (ครั้ง)
+- YTD พนักงานเข้าใหม่/ลาออก
+
+### Added — 6 New Sheets (11 total now)
+- **Sheet 6: YTD OT** — dept summary + all emps sorted by hours desc
+- **Sheet 7: YTD ลาป่วย** — dept summary + all emps by days
+- **Sheet 8: YTD ลาพักร้อน** — same pattern
+- **Sheet 9: YTD ลากิจ** — same pattern
+- **Sheet 10: YTD เข้า-ออก** — hires by dept + resignations by dept
+- **Sheet 11: YTD มาสาย** — dept summary + all emps by late count
+
+Each sheet includes:
+1. Title + YTD period
+2. Summary by department (sorted desc)
+3. All employee detail (sorted by value desc)
+
+### Added — Helper
+`_renderDeptSheet(title, byDept, unit)` — reusable sheet builder for dept + emp aggregation
+
+### PNG Export
+Auto-includes YTD section (already captured via `execDashboardCapture` div containing v1.5.20 widgets)
+
+### DB Impact
+🟢 Zero — pure display + aggregation
+
+### Verification
+1. Console: `v1.5.21`
+2. Dashboard → Export Excel → download
+3. Open file → verify 11 sheets:
+   - สรุป KPI (with YTD totals)
+   - ตามบริษัท
+   - ตามแผนก
+   - การลา (this month)
+   - พนักงานเข้าใหม่ (60 days)
+   - **YTD OT** (new)
+   - **YTD ลาป่วย** (new)
+   - **YTD ลาพักร้อน** (new)
+   - **YTD ลากิจ** (new)
+   - **YTD เข้า-ออก** (new)
+   - **YTD มาสาย** (new)
+4. PNG export → captures full dashboard including YTD section
+
+### Rollback
+Vercel promote v1.5.20 (~10 sec)
+
+---
+
 ## [1.5.20] — 2026-07-18 (FEATURE: Exec Dashboard YTD analytics — 6 widgets)
 
 **FEATURE — Dashboard ผู้บริหาร gets 6 YTD analytical widgets with drill-down**

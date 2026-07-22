@@ -6,6 +6,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.20] — 2026-07-18 (FEATURE: Exec Dashboard YTD analytics — 6 widgets)
+
+**FEATURE — Dashboard ผู้บริหาร gets 6 YTD analytical widgets with drill-down**
+
+### Design (per grill Q1-Q7)
+- **Q1 A:** Cumulative 1 ม.ค. → ปัจจุบัน (YTD) for all metrics
+- **Q2 A:** Click department bar → modal shows all emps in that dept
+- **Q3 A:** HTML/CSS bar charts (no chart library)
+- **Q4 B:** 2 columns × 3 rows layout
+- **Q5:** Confirmed aggregation rules (approved status, YTD date filter)
+- **Q6 A:** Late = "สาย" bucket only (matches payroll definition)
+- **Q7:** Same scope as existing (Admin=all, Manager=team)
+
+### Added — Data Aggregation Helpers
+- `_execYTDStart()` — returns `'YYYY-01-01'` for current year
+- `_aggregateByDept(data, topN)` — groups by dept, sorts emps by value desc, keeps top N
+- `_execOTByDept(team)` — sum approved OT hours YTD
+- `_execLeaveByDept(team, typeFilter)` — sum approved leave days YTD (sick/vacation/personal)
+- `_execLateByDept(team)` — count late incidents via `isRecordLate_v1_5_1` (v1.5.18-compatible)
+- `_execHiresResignsByDept(scope)` — new hires + resignations grouped by dept
+
+### Added — Widget Renderers
+- `_renderDeptBarWidget(title, data, unit, color, drillFn)` — reusable HTML/CSS bar chart with top-3 name preview
+- `_execDrillDown(deptEncoded, metricKey)` — modal showing all emps in dept sorted by metric
+- 5 drill wrappers: `_execDrillOT`, `_execDrillSick`, `_execDrillVacation`, `_execDrillPersonal`, `_execDrillLate`
+
+### Added — 6 New Widgets on Dashboard
+1. **⏰ OT ตามแผนก (ชั่วโมง)** — YTD hours by dept + top 3 emps + drill-down (Q1 explicit)
+2. **🏥 ลาป่วย ตามแผนก** — YTD sick days by dept + top 3 emps + drill-down
+3. **🌴 ลาพักร้อน ตามแผนก** — YTD vacation days + top 3 emps + drill-down
+4. **🧳 ลากิจ ตามแผนก** — YTD personal leave days + top 3 emps + drill-down
+5. **👥 พนักงานเริ่มงาน / ลาออก (YTD)** — total counts + breakdown by dept
+6. **⚠️ มาสายสะสม ตามแผนก** — YTD late count + top 3 emps + drill-down
+
+### DB Impact
+🟢 **Zero data changes** — pure display + aggregation
+
+### Verification
+1. Console: `v1.5.20`
+2. Admin login → Dashboard ผู้บริหาร
+3. Scroll below existing widgets → see "📊 YTD Analytics" section
+4. 6 widgets in 2×3 grid
+5. Click any dept bar → modal shows all emps sorted by metric
+6. Manager login → same widgets but scoped to direct reports
+7. Widgets refresh with fresh data on each dashboard visit
+
+### Performance
+- Preload once per render (single DB.load per table)
+- Aggregate in-memory (no repeated queries)
+- HTML/CSS bars (no chart library overhead)
+
+### Rollback
+Vercel promote v1.5.19 (~10 sec). Existing dashboard unaffected.
+
+---
+
 ## [1.5.19] — 2026-07-18 (UX: sort รายงานเข้างาน by status)
 
 **UX — Group daily attendance report by status for easier visual check**

@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.12</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.13</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.12';
+const APP_VERSION = '1.5.13';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -3972,10 +3972,113 @@ function drawCalendar() {
  if (leaveDates.has(dStr)) cls += ' leave';
  else if (holidays.has(dStr)) cls += ' holiday';
  else if (dow === 6) cls += ' weekend';
- html += `<div class="${cls}">${d}</div>`;
+ // v1.5.13: past/today dates clickable → opens time cert modal (simplified form, needs approval)
+ const isPastOrToday = dStr <= todayStr;
+ const clickHandler = isPastOrToday
+ ? ` onclick="openCalendarTimeCertModal('${dStr}')" style="cursor:pointer;" title="คลิกเพื่อขอรับรองเวลาสำหรับวันนี้"`
+ : ` style="cursor:not-allowed;opacity:0.6;" title="ไม่สามารถขอรับรองเวลาล่วงหน้าได้"`;
+ html += `<div class="${cls}"${clickHandler}>${d}</div>`;
  }
  html += '</div>';
  document.getElementById('calendarGrid').innerHTML = html;
+}
+
+// v1.5.13: Open simplified time cert modal from calendar click
+// Rules: past/today only, show existing scan info, simplified form (no attachment), approval required
+async function openCalendarTimeCertModal(dateStr) {
+ const todayStr = today();
+ if (dateStr > todayStr) {
+ toast('ไม่สามารถขอรับรองเวลาล่วงหน้าได้', 'error');
+ return;
+ }
+ // Check for existing scan
+ const existingScan = DB.load('attendanceRecords').find(r =>
+ (r.employeeCode === currentUser.id || r.employeeId === currentUser.id) && r.date === dateStr
+ );
+ // Check for pending time cert
+ const existingCert = DB.load('timeCertRequests', []).find(r =>
+ r.employeeId === currentUser.id && r.date === dateStr && r.status === 'pending'
+ );
+
+ const body = `
+ <div style="margin-bottom:14px;padding:12px;background:var(--gray-100);border-radius:8px;font-size:13px;">
+ <div><strong>วันที่:</strong> ${formatDate(dateStr)}</div>
+ ${existingScan ? `
+ <div style="margin-top:8px;padding:10px;background:var(--warning-light, #fef3c7);border-radius:6px;">
+ <strong>⚠️ พบข้อมูลสแกนอยู่แล้ว:</strong><br>
+ เข้างาน: <strong>${existingScan.checkIn || '-'}</strong> · ออกงาน: <strong>${existingScan.checkOut || '-'}</strong><br>
+ <small style="color:var(--gray-600);">คำขอนี้จะ<u>แก้ไข</u>ข้อมูลเดิม (ต้องรอ Manager อนุมัติ)</small>
+ </div>
+ ` : `
+ <div style="margin-top:8px;color:var(--success);"><strong>ℹ️ ยังไม่มีข้อมูลสแกนสำหรับวันนี้</strong></div>
+ `}
+ ${existingCert ? `
+ <div style="margin-top:8px;padding:10px;background:var(--danger-light, #fecaca);border-radius:6px;color:var(--danger);">
+ ⚠️ มีคำขอรับรองเวลาสำหรับวันนี้อยู่แล้ว (สถานะ: รออนุมัติ) — โปรดแก้ไขในหน้า "ขอรับรองเวลา"
+ </div>
+ ` : ''}
+ </div>
+ ${existingCert ? '' : `
+ <form id="calTimeCertForm" onsubmit="submitCalendarTimeCert(event, '${dateStr}'); return false;">
+ <div class="form-row">
+ <div class="form-group">
+ <label>เวลาเข้างาน *</label>
+ <input type="time" id="calTcCheckIn" required value="${existingScan?.checkIn || ''}">
+ </div>
+ <div class="form-group">
+ <label>เวลาออกงาน (ไม่จำเป็น)</label>
+ <input type="time" id="calTcCheckOut" value="${existingScan?.checkOut || ''}">
+ </div>
+ </div>
+ <div class="form-group">
+ <label>เหตุผลที่ขอรับรองเวลา *</label>
+ <textarea id="calTcReason" rows="3" required placeholder="เช่น: ลืมสแกนเข้างาน, เครื่องสแกนเสีย, ทำงานจากที่บ้าน"></textarea>
+ </div>
+ <div class="alert alert-info" style="font-size:12px;">
+ 💡 คำขอนี้จะส่งให้ Manager อนุมัติ · v1.5.13 simplified form ไม่ต้องแนบไฟล์
+ </div>
+ </form>
+ `}
+ `;
+ const footer = existingCert
+ ? `<button class="btn btn-secondary" onclick="closeModal()">ปิด</button>`
+ : `
+ <button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button>
+ <button class="btn btn-primary" onclick="document.getElementById('calTimeCertForm').requestSubmit()">ส่งคำขอรับรองเวลา</button>
+ `;
+ showModal(`ขอรับรองเวลา — ${formatDate(dateStr)}`, body, footer);
+}
+
+// v1.5.13: Simplified time cert submit (no attachment, no editId)
+function submitCalendarTimeCert(e, dateStr) {
+ e.preventDefault();
+ const claimedCheckIn = document.getElementById('calTcCheckIn').value;
+ const claimedCheckOut = document.getElementById('calTcCheckOut').value || null;
+ const reason = document.getElementById('calTcReason').value.trim();
+ if (!claimedCheckIn || !reason) { toast('กรอกข้อมูลให้ครบ', 'error'); return; }
+ if (claimedCheckOut && claimedCheckOut <= claimedCheckIn) {
+ toast('เวลาเลิกงานต้องอยู่หลังเวลาเข้างาน', 'error'); return;
+ }
+ const reqs = DB.load('timeCertRequests', []);
+ const newReq = {
+ id: uid('TC'), employeeId: currentUser.id,
+ date: dateStr, claimedCheckIn, claimedCheckOut, reason,
+ attachment: null, attachmentName: null,
+ status: 'pending', requestDate: today(),
+ managerId: currentUser.managerId,
+ approverNote: '', approvedDate: null,
+ _sourceCalendarClick_v1_5_13: true // marker for audit
+ };
+ reqs.push(newReq);
+ DB.save('timeCertRequests', reqs);
+ if (currentUser.managerId) {
+ notify(currentUser.managerId,
+ `${esc(currentUser.firstName)} ${esc(currentUser.lastName)} ขอรับรองเวลา ${formatDate(dateStr)} (เข้า ${claimedCheckIn}) — via calendar`,
+ 'time-cert', newReq.id);
+ }
+ closeModal();
+ toast('ส่งคำขอรับรองเวลาสำเร็จ! รอ Manager อนุมัติ');
+ drawCalendar(); // refresh calendar
 }
 
 // ============================================================

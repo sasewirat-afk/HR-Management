@@ -6,6 +6,57 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.13] — 2026-07-18 (FEATURE: calendar click → time cert request)
+
+**FEATURE — Emp can click date on ปฏิทินของฉัน to open simplified time cert modal**
+
+### Context
+Emp needed faster way to submit "รับรองเวลา" — current menu requires typing date manually. Calendar-click UX is more intuitive: see the date, click it, fill quick form.
+
+### Design (per grill Q1-Q4)
+- **Q1 B:** Auto-create Time Cert with approval (reuses existing flow, no security risk)
+- **Q2 B:** Past + today only, NO future backdating
+- **Q3 C:** Show existing scan info if any + option to edit via cert flow
+- **Q4 B:** Simplified form — no attachment required (fast entry)
+
+### Added
+- **`openCalendarTimeCertModal(dateStr)`** — modal opens with:
+  - Date pre-filled from calendar click
+  - **Existing scan info displayed** (if any) — pre-fills checkIn/checkOut fields
+  - **Pending cert warning** (if user already has cert for this date)
+  - Simplified form: checkIn (required), checkOut (optional), reason (required)
+  - **No file attachment** (unlike existing รับรองเวลา flow)
+- **`submitCalendarTimeCert(e, dateStr)`** — creates timeCertRequest with same schema as existing (compatible with existing approval flow)
+- Marker `_sourceCalendarClick_v1_5_13: true` for audit (which requests came from calendar UI)
+
+### Changed — Calendar (`drawCalendar`)
+- Each day cell now has click handler (past + today dates only)
+- Future dates: `cursor:not-allowed` + tooltip "ไม่สามารถขอรับรองเวลาล่วงหน้าได้"
+- Past/today: `cursor:pointer` + tooltip "คลิกเพื่อขอรับรองเวลาสำหรับวันนี้"
+
+### DB Impact
+🟢 **Zero schema changes** — reuses `timeCertRequests` table with same shape
+
+### Backward Compat
+- **Existing "ขอรับรองเวลา" menu** — unchanged, still works
+- **Existing รับรองเวลา requests** — unchanged
+- **Approval flow** — same for both entry points (calendar vs menu)
+- Manager approval UX — identical
+
+### Verification
+1. Console: `v1.5.13`
+2. Emp login → ปฏิทินของฉัน
+3. Click past/today date → modal opens
+4. Click future date → tooltip, no action
+5. Submit form → creates `timeCertRequests` record with pending status
+6. Manager sees notification + can approve as usual
+7. Existing scan pre-fills — click date with existing scan → checkIn/checkOut filled
+
+### Rollback
+Vercel promote v1.5.12 (~10 sec). Existing cert requests unaffected.
+
+---
+
 ## [1.5.12] — 2026-07-18 (REMOVE: evaluation system deprecated)
 
 **BREAKING CHANGE — Full removal of self + team evaluation feature**

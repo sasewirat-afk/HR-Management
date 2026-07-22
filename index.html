@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.17</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.18</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -892,7 +892,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.17';
+const APP_VERSION = '1.5.18';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -7266,16 +7266,25 @@ function computeAutoAbsentCutoff(settings) {
  return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
 }
 
-// Merge approved time-cert requests for a specific date into the attendance pool
-// v1.5.17 FIX: index raw records by BOTH employeeId AND employeeCode.
-// Bug: Tigersoft scans have only employeeCode (no employeeId), certs have only employeeId.
-// Old code keyed by employeeId only → cert couldn't find raw record → INJECTED duplicate.
-// Result: 2 records for same emp+date, calendar showed cert, modal showed raw = inconsistent.
+// Merge approved time-cert requests for a specific date into the attendance pool.
+// v1.5.18 CRITICAL FIX: scope certs to emps present in input records (was leaking cross-emp).
+// Bug (pre-v1.5.18): if input scoped to 1 emp but other emp had cert same date → INJECTED
+//                    other emp's cert as new record. Downstream code got contaminated data.
+// v1.5.17: index by employeeId AND employeeCode (Tigersoft uses code, cert uses id).
 function mergeApprovedTimeCertForDate(records, dateStr) {
- const certs = DB.load('timeCertRequests', []).filter(c => c.status === 'approved' && c.date === dateStr);
+ const rawCerts = DB.load('timeCertRequests', []).filter(c => c.status === 'approved' && c.date === dateStr);
+ if (!rawCerts.length) return records;
+ // v1.5.18: build empScope from input records — only process certs for these emps
+ // Prevents cross-emp cert leak into scoped queries (calendar, payslip, etc.)
+ const empScope = new Set();
+ records.forEach(r => {
+ if (r.employeeId) empScope.add(r.employeeId);
+ if (r.employeeCode) empScope.add(r.employeeCode);
+ });
+ // If input is empty → no scope → don't inject cross-emp records (safe default)
+ const certs = empScope.size > 0 ? rawCerts.filter(c => empScope.has(c.employeeId)) : rawCerts;
  if (!certs.length) return records;
  const byKey = {};
- // v1.5.17: index by employeeId AND employeeCode so cert lookup finds raw records
  records.forEach(r => {
  if (r.employeeId) byKey[`${r.employeeId}|${r.date}`] = r;
  if (r.employeeCode) byKey[`${r.employeeCode}|${r.date}`] = r;
@@ -7286,7 +7295,6 @@ function mergeApprovedTimeCertForDate(records, dateStr) {
  const emp = getEmployee(c.employeeId);
  const existingRec = byKey[k];
  if (existingRec) {
- // v1.5.17: find by object identity (was by employeeId which failed for raw-only-code records)
  const idx = merged.indexOf(existingRec);
  if (idx >= 0) {
  merged[idx] = {
@@ -7298,7 +7306,7 @@ function mergeApprovedTimeCertForDate(records, dateStr) {
  };
  }
  } else {
- // No record at all — inject one from the cert
+ // No record — inject one (emp had cert but no scan, e.g., forgot to swipe)
  merged.push({
  id: `CERT-${c.id}`,
  employeeId: c.employeeId,

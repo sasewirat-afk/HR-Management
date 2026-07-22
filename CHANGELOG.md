@@ -6,6 +6,78 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.18] — 2026-07-18 (🔴 CRITICAL: cross-emp cert leak in merge)
+
+**CRITICAL — Cross-employee cert leak in `mergeApprovedTimeCertForDate` affected payroll**
+
+### Bug Report
+Emp วิรัช (690309002), 18 ก.ค.:
+- Only 2 approved certs (dates 20, 21 ก.ค.)
+- But calendar showed ✓ รับรอง on 8 dates (4, 10, 13, 16, 17, 18, 20, 21 ก.ค.)
+- Times shown didn't match วิรัช's raw scans
+- **Test 3 revealed: Merged output has TWO records for วิรัช 18 ก.ค.** despite no cert existing
+
+### Root Cause
+`mergeApprovedTimeCertForDate` filtered certs by `status='approved'` AND `date=dateStr` — but NOT by employee. When called with emp-scoped input records (e.g., วิรัช's records only), the merge would:
+1. Look up cert by `cert.employeeId|cert.date` in byKey (built from วิรัช's records)
+2. If OTHER emp has cert for same date → key not found in byKey (different empId)
+3. **Fall to else branch → INJECT other emp's cert record into วิรัช's merged output**
+4. Downstream code sees phantom cert record (checkIn 09:01, _certified: true)
+5. Calendar cell shows wrong time + ✓ รับรอง badge
+
+### Downstream Impact (Critical)
+Cross-emp cert leak affected:
+- **`calculatePaySlip`** — Other emps' certs injected into current emp's attendance array → inflated late/present counts → **payroll calculation errors**
+- **`renderMyCalendar`** — Wrong ✓ รับรอง badges + wrong times on many days
+- **Any code calling `mergeApprovedTimeCertForDate/Month` on emp-scoped records**
+
+Reports NOT affected (they pass all-emp records intentionally).
+
+### Fixed
+Added `empScope` derivation from input records:
+```javascript
+const empScope = new Set();
+records.forEach(r => {
+  if (r.employeeId) empScope.add(r.employeeId);
+  if (r.employeeCode) empScope.add(r.employeeCode);
+});
+const certs = empScope.size > 0 
+  ? rawCerts.filter(c => empScope.has(c.employeeId)) 
+  : rawCerts;
+```
+
+Behavior:
+- **Emp-scoped input** (calendar, payslip) → only that emp's certs processed
+- **All-emp input** (report, export) → all certs processed (backward compat)
+- **Empty input** → all certs allowed (safe default, matches pre-fix behavior)
+
+### DB Impact
+🟢 **Zero data changes** — pure logic fix. No records modified.
+
+### Verification
+1. Console: `v1.5.18`
+2. Emp วิรัช calendar:
+   - 4, 10, 13, 16, 17 ก.ค. — ✅ NO ✓ รับรอง badge (was wrongly showing)
+   - 18 ก.ค. — shows raw 08:55 → 19:06 (correct)
+   - 20, 21 ก.ค. — ✅ ✓ รับรอง badge (real approved certs)
+3. calculatePaySlip:
+```javascript
+const slip = calculatePaySlip('690309002', 2026, 7);
+console.log('Late days:', slip.lateDays, 'Late minutes:', slip.totalLateMinutes);
+// Should reflect ONLY วิรัช's actual data (not inflated by other emps' certs)
+```
+4. Attendance report — unchanged (all-emp scope preserved)
+
+### Related — Payroll Cutoff Impact
+🚨 If any emp's payslip already calculated with cross-emp contaminated data → **RECALCULATE** after deploy.
+
+**Payroll cutoff 21 ก.ค. — deploy this ASAP if payroll not run yet.**
+
+### Rollback
+Vercel promote v1.5.17 (~10 sec). But payroll data may be wrong — v1.5.18 recommended.
+
+---
+
 ## [1.5.17] — 2026-07-18 (HOTFIX: cert merge key mismatch — employeeCode vs employeeId)
 
 **HOTFIX — Approved cert created duplicate records instead of updating raw scan**

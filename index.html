@@ -863,7 +863,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.14</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.15</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -887,7 +887,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.14';
+const APP_VERSION = '1.5.15';
 const APP_RELEASE_DATE = '2026-06-21';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
@@ -3991,23 +3991,33 @@ async function openCalendarTimeCertModal(dateStr) {
  toast('ไม่สามารถขอรับรองเวลาล่วงหน้าได้', 'error');
  return;
  }
- // Check for existing scan
- const existingScan = DB.load('attendanceRecords').find(r =>
+ // v1.5.15 FIX: apply approved cert merge before reading (was showing raw scan only).
+ // Bug: after Mng approves cert, popup still showed raw checkOut=null instead of approved value.
+ const rawRecords = DB.load('attendanceRecords').filter(r =>
  (r.employeeCode === currentUser.id || r.employeeId === currentUser.id) && r.date === dateStr
  );
- // Check for pending time cert
+ const mergedRecords = mergeApprovedTimeCertForDate(rawRecords, dateStr).filter(r =>
+ (r.employeeCode === currentUser.id || r.employeeId === currentUser.id) && r.date === dateStr
+ );
+ const existingScan = mergedRecords[0] || null;
+ const wasApprovedCert = existingScan?._certified === true;
+ // Check for pending time cert (unchanged)
  const existingCert = DB.load('timeCertRequests', []).find(r =>
  r.employeeId === currentUser.id && r.date === dateStr && r.status === 'pending'
  );
+ // v1.5.15: also check most recent approved cert (for display)
+ const approvedCert = DB.load('timeCertRequests', []).filter(r =>
+ r.employeeId === currentUser.id && r.date === dateStr && r.status === 'approved'
+ ).sort((a, b) => new Date(b.approvedDate || 0) - new Date(a.approvedDate || 0))[0];
 
  const body = `
  <div style="margin-bottom:14px;padding:12px;background:var(--gray-100);border-radius:8px;font-size:13px;">
  <div><strong>วันที่:</strong> ${formatDate(dateStr)}</div>
  ${existingScan ? `
- <div style="margin-top:8px;padding:10px;background:var(--warning-light, #fef3c7);border-radius:6px;">
- <strong>⚠️ พบข้อมูลสแกนอยู่แล้ว:</strong><br>
+ <div style="margin-top:8px;padding:10px;background:${wasApprovedCert ? '#dcfce7' : '#fef3c7'};border-radius:6px;">
+ <strong>${wasApprovedCert ? '✅ ข้อมูลเวลาปัจจุบัน (รับรองแล้ว):' : '⚠️ พบข้อมูลสแกนอยู่แล้ว:'}</strong><br>
  เข้างาน: <strong>${existingScan.checkIn || '-'}</strong> · ออกงาน: <strong>${existingScan.checkOut || '-'}</strong><br>
- <small style="color:var(--gray-600);">คำขอนี้จะ<u>แก้ไข</u>ข้อมูลเดิม (ต้องรอ Manager อนุมัติ)</small>
+ ${wasApprovedCert && approvedCert ? `<small style="color:var(--gray-600);">รับรองโดย: ${approvedCert.approvedDate ? formatDate(approvedCert.approvedDate) : '-'} · เหตุผล: ${esc(approvedCert.reason || '-')}</small>` : `<small style="color:var(--gray-600);">คำขอนี้จะ<u>แก้ไข</u>ข้อมูลเดิม (ต้องรอ Manager อนุมัติ)</small>`}
  </div>
  ` : `
  <div style="margin-top:8px;color:var(--success);"><strong>ℹ️ ยังไม่มีข้อมูลสแกนสำหรับวันนี้</strong></div>

@@ -6,6 +6,66 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.15] — 2026-07-18 (HOTFIX: calendar modal missed cert merge)
+
+**HOTFIX — Emp calendar popup showed raw scan instead of approved-cert values**
+
+### Bug Report
+Emp วิรัช (690309002):
+- Raw scan for 20 ก.ค.: checkIn 08:36, checkOut NULL
+- Cert request: claimed checkOut 19:00, **APPROVED by Mng**
+- Attendance report (correct): shows 08:36 → 19:00
+- **Emp calendar popup (WRONG): shows "เข้างาน 08:36 · ออกงาน: -"**
+
+### Root Cause
+v1.5.13 `openCalendarTimeCertModal` reads raw `attendanceRecords` directly:
+```javascript
+const existingScan = DB.load('attendanceRecords').find(r => ...);  // raw scan only
+```
+
+Missed the cert merge step. Other views (attendance report, payroll) use `mergeApprovedTimeCertForDate` which overlays approved cert values on top of raw scans.
+
+### Regression Timeline
+- v1.5.13 introduced calendar modal
+- Reads raw records without merge
+- Bug manifests when: cert is approved → user re-opens calendar → sees stale data
+
+### Fixed
+Applied `mergeApprovedTimeCertForDate()` before determining `existingScan`:
+```javascript
+const rawRecords = DB.load('attendanceRecords').filter(...);
+const mergedRecords = mergeApprovedTimeCertForDate(rawRecords, dateStr).filter(...);
+const existingScan = mergedRecords[0] || null;
+const wasApprovedCert = existingScan?._certified === true;
+```
+
+### Enhanced Display
+- **If merged from approved cert** — green banner "✅ ข้อมูลเวลาปัจจุบัน (รับรองแล้ว)" + shows cert approval date + reason
+- **If raw scan only** — yellow banner (unchanged from v1.5.13)
+- Better clarity for Emp on what they're seeing
+
+### DB Impact
+🟢 **Zero data changes** — display logic fix only
+
+### Verification
+1. Console: `v1.5.15`
+2. Emp with approved cert for date X (like วิรัช 20 ก.ค.):
+3. Click date X on calendar
+4. ✅ Popup shows: "เข้างาน 08:36 · ออกงาน **19:00**" (was `-`)
+5. ✅ Green banner "✅ ข้อมูลเวลาปัจจุบัน (รับรองแล้ว)"
+6. ✅ Shows approval date + reason
+
+### Related Views (Verify No Regression)
+- Attendance report (daily) — always used merge ✓
+- Payroll calc — uses merge ✓
+- late-summary tab — via calculatePaySlip ✓
+- Calendar modal — **now fixed** in v1.5.15
+
+### Rollback
+Vercel promote v1.5.14 (~10 sec). Popup goes back to showing raw scan.
+
+---
+
 ## [1.5.14] — 2026-07-18 (HARDEN: empId lock on edit — prevent orphan records)
 
 **HARDENING — Enforce Primary Key immutability on Employee edit**

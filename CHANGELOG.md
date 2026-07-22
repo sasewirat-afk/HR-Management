@@ -6,6 +6,77 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.14] — 2026-07-18 (HARDEN: empId lock on edit — prevent orphan records)
+
+**HARDENING — Enforce Primary Key immutability on Employee edit**
+
+### Concern
+User noticed the empId field appeared editable in the Employee edit modal. If Admin changed the ID, no cascade would update related tables → orphan records across 13+ tables.
+
+### Findings
+- HTML `readonly` attribute was already present (`${emp ? 'readonly' : ''}`) — line 6211
+- Visual styling didn't clearly indicate readonly state (native browser allows text selection)
+- No JS safety net if DevTools bypass
+- Diagnostic confirmed: **0 orphan shifts** — no past damage, but risk existed
+
+### Impact if empId changed (bypass)
+Related tables that would break (13+):
+- `shifts.employeeId` → shift history orphaned (grid shows blank)
+- `attendanceRecords.employeeId/employeeCode` → scan history lost
+- `leaveRequests.employeeId` → leave balance broken
+- `otRequests.employeeId` → OT history lost
+- `compOffRequests.employeeId` → comp-off history lost
+- `fieldWorkRequests.employeeId` → field work history lost
+- `timeCertRequests.employeeId` → time cert history lost
+- `accumulatedHolidays.employeeId` → comp-off balance broken
+- `notifications.userId` → notifications lost
+- `auditLog.userId` → audit trail broken
+- `employees.managerId` → direct reports lose manager link
+- **Login credentials** — emp CAN'T LOG IN with old id anymore
+
+### Fixed — Three Layers of Defense
+
+**Layer 1: Visual clarity (HTML)**
+- Label now shows: "รหัสพนักงาน * 🔒 ล็อกไม่ให้แก้ไข — ID = Primary Key"
+- Input styled with gray background + not-allowed cursor when editing
+- Tooltip on hover: full explanation of why
+
+**Layer 2: HTML readonly** (was already present)
+- `readonly` attribute prevents keyboard typing
+
+**Layer 3: JS safety net (submitEmployee)**
+- Server-side check: `if (data.id !== editId) → force revert + toast error`
+- Handles case where DevTools bypasses HTML readonly
+- Logs warning to console for audit
+
+### DB Impact
+🟢 **Zero data changes** — code hardening only. No orphan records exist to clean up.
+
+### Verification
+1. Console: `v1.5.14`
+2. Admin → จัดการพนักงาน → edit any emp
+3. รหัสพนักงาน field:
+   - ✅ Gray background, not-allowed cursor
+   - ✅ Label shows "🔒 ล็อกไม่ให้แก้ไข"
+   - ✅ Hover shows tooltip
+   - ✅ Try to type → nothing happens
+4. Even if bypass via DevTools:
+   - Change value → click Save
+   - Console: `[v1.5.14] empId change blocked: XXX → YYY rejected (PK immutable)`
+   - Toast: "รหัสพนักงานเปลี่ยนไม่ได้ (Primary Key)"
+   - Actual emp record unchanged
+
+### Standard Practice
+Primary keys are IMMUTABLE. To change emp id:
+1. Delete old emp record (via UI or admin script)
+2. Create new emp with correct id + copy relevant data
+3. Manually migrate related records if needed (rare)
+
+### Rollback
+Vercel promote v1.5.13 (~10 sec). Field becomes editable again (with hidden risk).
+
+---
+
 ## [1.5.13] — 2026-07-18 (FEATURE: calendar click → time cert request)
 
 **FEATURE — Emp can click date on ปฏิทินของฉัน to open simplified time cert modal**

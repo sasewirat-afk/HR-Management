@@ -6,6 +6,40 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.23] — 2026-07-25 (FEATURE: Employee OT cycle dropdown — dashboard widget + my-ot page)
+
+**FEATURE — Employees can browse OT history across payroll cycles**
+
+### Context
+v1.5.22 aligned widget with payroll cycle semantic, but widget only showed CURRENT cycle. Employees couldn't view past cycles' OT (e.g., after 21 ก.ค. cutoff, ปิยะวรรณ's ก.ค. cycle 14.5 ชม. became invisible). User requested cycle selector to browse history.
+
+### Added — Dashboard widget dropdown
+`renderDashboardOverview` now includes a compact `<select>` inside the "OT เดือนนี้" stat card. 12 cycles listed with short Thai labels (ก.ค. 2569, มิ.ย. 2569, ...). Current cycle marked "(ปัจจุบัน)". Default = current payroll cycle. State stored in module-level `_empOTCycle` (survives navigation within session, resets on page reload).
+
+Label kept as "OT เดือนนี้" per user Q2:B — tooltip on card updates to full cycle text via `formatPayrollCycle()`.
+
+### Added — my-ot page cycle filter
+Full-width filter card above the OT list with:
+- Cycle selector (12 options + "ทั้งหมด")
+- Live counters: total records shown + approved hours in cycle
+- Cycle date range banner when filter active
+State: `_myOTCycleFilter` (null = show all)
+
+### State
+- `_empOTCycle` (line ~11753) — dashboard widget cycle
+- `_myOTCycleFilter` (line ~3355) — my-ot page filter
+Both use string arithmetic to enumerate cycles (v1.5.8 pattern).
+
+### Files
+`index.html` (widget ~11778, my-ot ~3357, version line 871), `CHANGELOG.md`
+
+### Impact
+- No data model change
+- No calculation change (payroll cycle math already correct per v1.5.22)
+- Purely additive UI — visibility into history
+
+---
+
 ## [1.5.22] — 2026-07-25 (HOTFIX: Employee OT widget + Admin dropdown use payroll cycle)
 
 **HOTFIX — Two OT display bugs (Employee mismatch + Admin dropdown missing current cycle)**

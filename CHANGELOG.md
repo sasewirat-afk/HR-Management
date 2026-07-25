@@ -6,6 +6,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.22] — 2026-07-25 (HOTFIX: Employee OT widget + Admin dropdown use payroll cycle)
+
+**HOTFIX — Two OT display bugs (Employee mismatch + Admin dropdown missing current cycle)**
+
+### Context
+User reported:
+1. Employee dashboard widget "OT เดือนนี้" showed 8.5 ชม. for ปิยะวรรณ (650621001), but Admin OT report showed 14.5 ชม. for same employee.
+2. Admin OT report dropdown didn't include current payroll month (ส.ค. cycle 2569) after cutoff day 21 passed. Dropdown was stuck showing ก.ค. even though data render + header displayed ส.ค.
+
+### Root cause 1: Widget used calendar month, Admin used payroll cycle
+`renderDashboardOverview()` line 11765 filtered `r.date.startsWith(new Date().toISOString().slice(0,7))` — calendar month semantic. Admin OT report (v1.4.51) migrated to `getPayrollMonth(r.date) === monthStr` per ADR-0001, but this widget was overlooked in that wave.
+
+### Root cause 2: Dropdown loop started from calendar month
+`ot-report` renderer line 10478 created options via `new Date().getMonth() - i`. Today is 25 ก.ค. → `getMonth() = 6` (July) → options: 2026-07, 2026-06, ... Never included 2026-08 (current payroll month per cutoff cycle). Selected value `monthStr = getPayrollMonth(today()) = "2026-08"` had no matching option, so browser fell back to first option's display state while `_otReportMonth` stayed null. Result: header + data render for ส.ค., visible dropdown text = ก.ค.
+
+### Fix 1 — `renderDashboardOverview` (line 11765)
+```js
+const _currentPayrollMonth = getPayrollMonth(today());
+const otHoursThisMonth = DB.load('otRequests').filter(r => {
+ return r.employeeId === currentUser.id && r.status === 'approved'
+   && r.date && getPayrollMonth(r.date) === _currentPayrollMonth;
+}).reduce((s,r) => s + r.hours, 0);
+```
+Also added `title` tooltip on stat card: `"รอบเงินเดือน (adjustments cycle) 22-21 ของทุกเดือน"` to clarify semantic without changing label.
+
+### Fix 2 — `ot-report` dropdown builder (line 10478)
+```js
+let [_pmYear, _pmMonth] = getPayrollMonth(today()).split('-').map(Number);
+for (let i = 0; i < 12; i++) {
+ const ms = `${_pmYear}-${String(_pmMonth).padStart(2,'0')}`;
+ otMonthOptions.push({ value: ms, label: formatPayrollCycle(ms) });
+ _pmMonth--;
+ if (_pmMonth === 0) { _pmMonth = 12; _pmYear--; }
+}
+```
+Starts from current PAYROLL month + string arithmetic (avoids v1.5.8 Date rollover).
+
+### Validation
+- Employee ปิยะวรรณ (650621001) refresh dashboard → widget shows 14.5 ชม. (matches Admin)
+- Admin OT report → dropdown starts with "รอบเงินเดือน ส.ค. 2569" (current), goes back 12 cycles
+- Selected value in dropdown = header display value (no more silent mismatch)
+
+### Impact
+- Payroll integrity: no change (calculation still cycle-based; only widget was wrong)
+- No data migration required
+- Backward compat: employees viewing their own dashboard now see cycle-aligned totals
+
+### Files
+`index.html` (widget line 11765, tooltip line 11790, dropdown line 10478, version line 871), `CHANGELOG.md`
+
+---
+
 ## [1.5.21] — 2026-07-18 (FEATURE: Excel export includes YTD widget data)
 
 **FEATURE — Exec Dashboard Excel export mirrors 6 YTD widgets (v1.5.20)**

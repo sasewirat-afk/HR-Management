@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.21</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.22</div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -10473,13 +10473,16 @@ function drawReport() {
  else if (reportTab === 'ot-report') {
  // v1.4.51: Add payroll month filter (was: no filter — showed all OTs regardless of period)
  const monthStr = _otReportMonth || getPayrollMonth(today());
- // Generate 12 payroll months for dropdown (calendar month labels; getPayrollMonth handles cutoff)
+ // v1.5.22: Generate 12 payroll months starting from CURRENT PAYROLL MONTH (was: calendar month)
+ // so post-cutoff period (e.g., ส.ค. cycle when today is 25 ก.ค.) appears in the dropdown.
+ // Uses string arithmetic to avoid v1.5.8 Date rollover bug.
  const otMonthOptions = [];
- const otNow = new Date();
+ let [_pmYear, _pmMonth] = getPayrollMonth(today()).split('-').map(Number);
  for (let i = 0; i < 12; i++) {
- const d = new Date(otNow.getFullYear(), otNow.getMonth() - i, 1);
- const ms = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`;
+ const ms = `${_pmYear}-${String(_pmMonth).padStart(2,'0')}`;
  otMonthOptions.push({ value: ms, label: formatPayrollCycle(ms) });
+ _pmMonth--;
+ if (_pmMonth === 0) { _pmMonth = 12; _pmYear--; }
  }
  const allReqs = DB.load('otRequests')
  .filter(r => scopeIds.has(r.employeeId))
@@ -11762,8 +11765,10 @@ function renderDashboardOverview() {
   ...DB.load('fieldWorkRequests').filter(r => r.employeeId === currentUser.id)
  ];
  const pendingCount = myReqs.filter(r => r.status === 'pending').length;
+ // v1.5.22: use payroll cycle (was: calendar month) to match Admin OT report per ADR-0001
+ const _currentPayrollMonth = getPayrollMonth(today());
  const otHoursThisMonth = DB.load('otRequests').filter(r => {
-  return r.employeeId === currentUser.id && r.status === 'approved' && r.date && r.date.startsWith(new Date().toISOString().slice(0,7));
+  return r.employeeId === currentUser.id && r.status === 'approved' && r.date && getPayrollMonth(r.date) === _currentPayrollMonth;
  }).reduce((s,r) => s + r.hours, 0);
 
  const recentActivity = [
@@ -11785,7 +11790,7 @@ function renderDashboardOverview() {
 
   <div class="stats-grid">
    <div class="stat-card green"><div class="label">วันลาพักร้อนคงเหลือ</div><div class="value">${b.vacation.remaining} <small>วัน</small></div><div class="sub">จากสิทธิ์ ${b.vacation.quota} วัน</div></div>
-   <div class="stat-card"><div class="label">OT เดือนนี้</div><div class="value">${otHoursThisMonth.toFixed(1)} <small>ชม.</small></div></div>
+   <div class="stat-card" title="รอบเงินเดือน (adjustments cycle) 22-21 ของทุกเดือน"><div class="label">OT เดือนนี้</div><div class="value">${otHoursThisMonth.toFixed(1)} <small>ชม.</small></div></div>
    <div class="stat-card orange"><div class="label">คำขอรออนุมัติ</div><div class="value">${pendingCount}</div></div>
    <div class="stat-card"><div class="label">ลาป่วยคงเหลือ</div><div class="value">${b.sick.remaining} <small>/${b.sick.quota}</small></div></div>
   </div>

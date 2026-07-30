@@ -6,6 +6,65 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.24] — 2026-07-30 (HOTFIX: iOS Safari stale cache after tab suspension)
+
+**HOTFIX — Force cloud re-pull when tab becomes visible (iOS Safari suspend guard)**
+
+### Context
+User 670715001 (นิวัฒน์) reported: mobile my-ot page showed **0 records** while desktop showed **10 records** (same user, same cycle ก.ค. 2569, same v1.5.23). Notifications for the same 10 OT approvals appeared correctly on mobile.
+
+### Reproduction
+1. User opens app on mobile Safari → `cloudPullAllSafe()` runs, WebSocket subscribed
+2. User backgrounds tab (locks phone / switches apps)
+3. **iOS Safari suspends the page** to save battery — WebSocket paused/dropped
+4. Admin creates + approves 10 OT records → pushed to Supabase
+5. Notifications delivered via LINE (separate channel)
+6. User opens notification → returns to Safari → **page resumes but no re-pull triggered**
+7. `otRequests` in localStorage still stale → filter returns 0 records
+8. Hard refresh (F5 / pull-to-refresh) forces `DOMContentLoaded` → fresh pull → records appear
+
+### Root cause
+Init sequence (line 13157) runs cloud pull + realtime subscribe on `DOMContentLoaded`. No listener for:
+- `visibilitychange` (tab foreground)
+- `pageshow` with `persisted=true` (BFCache restore, iOS common)
+- `window.focus` (app-switcher return)
+
+When iOS suspends and resumes the page, none of these fire the sync path. WebSocket auto-reconnect is unreliable in this scenario.
+
+### Fix
+Added `setupFocusResync()` — installs 3 listeners that call `_resyncOnFocus(reason)`:
+- `visibilitychange` → `_resyncOnFocus('visibility')`
+- `pageshow` (persisted) → `_resyncOnFocus('bfcache')`
+- `focus` → `_resyncOnFocus('window-focus')`
+
+Each call:
+1. Guards against burst spam (5s dedup)
+2. Forces `cloudPullAllSafe({force:true})` (bypasses 30s debounce)
+3. Re-renders nav + current page if updates found
+4. Logs to console with reason tag for debugging
+
+### Added — Manual refresh button
+Sidebar version line now has a "🔄" button next to `v1.5.24`. Escape hatch for user confidence. Button flashes ✅ (success) or ❌ (fail) after click.
+
+### Falsification (per debug mantra step 3)
+- H1 (top): stale cache after iOS suspend → **confirmed via Test A** (hard refresh restored records)
+- H2-H5: subscribed table mismatch, empId type coercion, wrong r.employeeId, RLS → **disproven** (other user works, desktop shows same data)
+
+### Impact
+- Fixes silent data staleness for all iOS Safari users
+- No data model changes
+- Adds ~3-5 KB of code (event listeners + resync helper + button)
+- Force-pull respects existing quota/tombstone/RLS logic — safe
+
+### Files
+`index.html` (setup ~1484, init ~13175, sidebar ~871, version), `CHANGELOG.md`
+
+### Related bugs / prior art
+- v1.4.40 introduced `_lastPullAttemptedAt` debounce — this fix uses `{force:true}` to bypass safely
+- v1.4.49 realtime cache invalidation — this fix complements it for cases where realtime didn't fire
+
+---
+
 ## [1.5.23] — 2026-07-25 (FEATURE: Employee OT cycle dropdown — dashboard widget + my-ot page)
 
 **FEATURE — Employees can browse OT history across payroll cycles**

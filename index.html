@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;">v1.5.23</div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;">v1.5.24 <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -1480,6 +1480,76 @@ function setupCloudRealtime() {
  .subscribe();
  console.log(' Real-time sync subscribed');
 }
+
+// ============================================================
+// v1.5.24: FOCUS-RESYNC — iOS Safari suspends backgrounded tabs
+// causing WebSocket to drop silently. When user resumes tab,
+// force cloudPullAllSafe to catch missed updates.
+// Fires on 3 events (dedup 5s to prevent burst spam):
+//   - visibilitychange (visible) — tab foreground
+//   - pageshow (persisted=true) — BFCache restore (iOS common)
+//   - window focus — app switcher return
+// ============================================================
+let _lastFocusPullTs = 0;
+async function _resyncOnFocus(reason) {
+ if (!cloudSync) return;
+ const nowMs = Date.now();
+ if (nowMs - _lastFocusPullTs < 5000) {
+  console.log(`[Focus:${reason}] Skip (${((nowMs - _lastFocusPullTs)/1000).toFixed(1)}s ago)`);
+  return;
+ }
+ _lastFocusPullTs = nowMs;
+ console.log(`[Focus:${reason}] Re-pulling cloud data (iOS suspend guard)...`);
+ try {
+  const r = await DB.cloudPullAllSafe({ force: true });
+  if (r.ok && r.count > 0) {
+   console.log(`[Focus:${reason}] Pulled ${r.count} keys — re-rendering`);
+   if (typeof currentUser !== 'undefined' && currentUser) {
+    if (typeof renderNav === 'function') renderNav();
+    if (typeof renderPage === 'function') renderPage();
+   }
+  } else if (r.ok) {
+   console.log(`[Focus:${reason}] Cloud clean — no updates`);
+  } else {
+   console.warn(`[Focus:${reason}] Pull failed:`, r.reason || r.errorDetail);
+  }
+ } catch (e) {
+  console.warn(`[Focus:${reason}] Exception:`, e.message);
+ }
+}
+function setupFocusResync() {
+ if (!cloudSync) return;
+ document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') _resyncOnFocus('visibility');
+ });
+ window.addEventListener('pageshow', (e) => {
+  if (e.persisted) _resyncOnFocus('bfcache');
+ });
+ window.addEventListener('focus', () => _resyncOnFocus('window-focus'));
+ console.log(' Focus re-sync listeners installed (visibility + pageshow + focus)');
+}
+
+// Manual refresh — for user-triggered force pull
+window.manualRefreshCloud = async function() {
+ const btn = document.getElementById('manualRefreshBtn');
+ if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; btn.innerHTML = '⏳'; }
+ try {
+  const r = await DB.cloudPullAllSafe({ force: true });
+  if (r.ok) {
+   if (typeof currentUser !== 'undefined' && currentUser) {
+    if (typeof renderNav === 'function') renderNav();
+    if (typeof renderPage === 'function') renderPage();
+   }
+   if (btn) { btn.innerHTML = '✅'; setTimeout(() => { btn.innerHTML = '🔄'; btn.disabled = false; btn.style.opacity = '1'; }, 1200); }
+  } else {
+   if (btn) { btn.innerHTML = '❌'; setTimeout(() => { btn.innerHTML = '🔄'; btn.disabled = false; btn.style.opacity = '1'; }, 2000); }
+   alert('Sync ล้มเหลว: ' + (r.errorDetail || r.reason || 'unknown'));
+  }
+ } catch (e) {
+  if (btn) { btn.innerHTML = '🔄'; btn.disabled = false; btn.style.opacity = '1'; }
+  alert('Exception: ' + e.message);
+ }
+};
 
 // ============================================================
 // INITIAL SEED DATA
@@ -13173,6 +13243,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
  pullResult = await DB.cloudPullAllSafe();
  setupCloudRealtime();
+ setupFocusResync(); // v1.5.24: iOS Safari suspend guard
 
  if (pullResult.ok) {
  loadingDiv.innerHTML = pullResult.count > 0 ? ` ซิงค์จาก Cloud สำเร็จ (${pullResult.count} รายการ)` : ' Cloud พร้อม (ว่าง)';

@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;">v1.5.24 <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;">v1.5.25 <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -1471,10 +1471,15 @@ function setupCloudRealtime() {
  DB._cache.delete(row.key); // v1.4.49: invalidate before mutating localStorage
  localStorage.setItem('hr_' + row.key, newVal);
  }
- // Refresh current page if user is logged in
+ // v1.5.25: use _safeRerender to skip clobbering in-progress form state
  if (typeof currentUser !== 'undefined' && currentUser) {
- if (typeof renderNav === 'function') renderNav();
- if (typeof renderPage === 'function') renderPage();
+ if (typeof _safeRerender === 'function') {
+  _safeRerender('Realtime');
+ } else {
+  // Fallback if _safeRerender not yet defined (shouldn't happen, but safe)
+  if (typeof renderNav === 'function') renderNav();
+  if (typeof renderPage === 'function') renderPage();
+ }
  }
  })
  .subscribe();
@@ -1489,7 +1494,29 @@ function setupCloudRealtime() {
 //   - visibilitychange (visible) — tab foreground
 //   - pageshow (persisted=true) — BFCache restore (iOS common)
 //   - window focus — app switcher return
+// v1.5.25: focus/realtime re-render clobbered upload preview + open modals.
+// _safeRerender() checks in-progress state before calling renderPage.
 // ============================================================
+function _safeRerender(reason) {
+ // Guard 1: attendance upload preview in progress
+ if (typeof _attendanceBuffer !== 'undefined' && _attendanceBuffer) {
+  console.warn(`[SafeRerender:${reason}] SKIP — attendance upload preview in progress (${_attendanceBuffer.length} records buffered)`);
+  return false;
+ }
+ // Guard 2: modal open (edit form, confirm dialog, etc.)
+ const modalContainer = document.getElementById('modalContainer');
+ if (modalContainer && modalContainer.innerHTML.trim().length > 0) {
+  console.warn(`[SafeRerender:${reason}] SKIP — modal open`);
+  return false;
+ }
+ // Safe to re-render
+ if (typeof currentUser !== 'undefined' && currentUser) {
+  if (typeof renderNav === 'function') renderNav();
+  if (typeof renderPage === 'function') renderPage();
+ }
+ return true;
+}
+
 let _lastFocusPullTs = 0;
 async function _resyncOnFocus(reason) {
  if (!cloudSync) return;
@@ -1503,11 +1530,8 @@ async function _resyncOnFocus(reason) {
  try {
   const r = await DB.cloudPullAllSafe({ force: true });
   if (r.ok && r.count > 0) {
-   console.log(`[Focus:${reason}] Pulled ${r.count} keys — re-rendering`);
-   if (typeof currentUser !== 'undefined' && currentUser) {
-    if (typeof renderNav === 'function') renderNav();
-    if (typeof renderPage === 'function') renderPage();
-   }
+   console.log(`[Focus:${reason}] Pulled ${r.count} keys — attempting safe re-render`);
+   _safeRerender(`Focus:${reason}`);
   } else if (r.ok) {
    console.log(`[Focus:${reason}] Cloud clean — no updates`);
   } else {
@@ -1530,7 +1554,13 @@ function setupFocusResync() {
 }
 
 // Manual refresh — for user-triggered force pull
+// v1.5.25: warn user before clobbering upload preview
 window.manualRefreshCloud = async function() {
+ // Guard: check for in-progress upload
+ if (typeof _attendanceBuffer !== 'undefined' && _attendanceBuffer) {
+  if (!confirm(`⚠️ กำลังอัปโหลด attendance อยู่ (${_attendanceBuffer.length} records buffered)\n\nถ้ารีเฟรชตอนนี้ preview จะหาย — ต้องอัปโหลดใหม่\n\nยืนยันรีเฟรช?`)) return;
+  _attendanceBuffer = null; // user chose to abandon
+ }
  const btn = document.getElementById('manualRefreshBtn');
  if (btn) { btn.disabled = true; btn.style.opacity = '0.5'; btn.innerHTML = '⏳'; }
  try {

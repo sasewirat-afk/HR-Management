@@ -6,6 +6,50 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.25] — 2026-07-30 (HOTFIX: v1.5.24 regression — focus resync clobbered attendance upload preview)
+
+**HOTFIX — Guard renderPage against wiping in-progress form state**
+
+### Context
+Admin uploaded Tigersoft .txt attendance file (108 scans → 106 records, 105 matched). Preview rendered correctly with all 4 stat cards + preview table. But **~2-3 seconds later, the save button + preview disappeared** — data lost.
+
+### Root cause
+v1.5.24 added `_resyncOnFocus()` listener on `window.focus` event. Browser file dialog opens on "Choose File" click, then closes on selection → **focus event fires** → cloud pull runs (2-3s network round-trip) → if updates found, `renderPage()` called → `renderUploadAttendance()` re-renders → `<div id="attPreview"></div>` reset to empty → button + preview HTML wiped. `_attendanceBuffer` remained in JS memory but was invisible + inaccessible.
+
+Same clobbering also possible from realtime WebSocket push (line 1477 handler unconditionally called `renderPage()` on any cloud data change).
+
+### Fix — `_safeRerender(reason)` helper
+Central guard before calling renderNav + renderPage. Checks:
+1. `_attendanceBuffer` non-null → SKIP (upload preview in progress)
+2. `#modalContainer` has content → SKIP (modal open)
+
+Otherwise: safe to re-render.
+
+Applied to:
+- `_resyncOnFocus()` — was calling renderPage directly
+- Realtime handler at line ~1478 — was calling renderPage directly
+- Manual refresh button — now warns user with confirm() before clobbering upload
+
+### Verified via mantra
+- H1 (top): focus/realtime re-render clobbering preview → **confirmed** (2-3s delay matches network round-trip; previous uploads before v1.5.24 worked)
+- H2 (button below fold): disproven — user reported data disappears entirely
+- H3 (template throws): disproven — screenshot shows partial render but no console error
+
+### Impact
+- v1.5.24 iOS suspend fix retained — still auto-syncs on tab return
+- Users mid-form (upload preview or modal) no longer lose state
+- Cloud updates arriving during form-fill are silently queued; user's next navigation picks them up
+
+### Falsification test protocol
+1. Upload text.txt → preview + button appear
+2. Wait 5+ seconds without touching → button + preview PERSIST
+3. Console shows `[SafeRerender:*] SKIP — attendance upload preview in progress` if focus/realtime fires
+
+### Files
+`index.html` (helper ~1484, focus resync ~1520, realtime ~1478, manual refresh ~1560, version line 871), `CHANGELOG.md`
+
+---
+
 ## [1.5.24] — 2026-07-30 (HOTFIX: iOS Safari stale cache after tab suspension)
 
 **HOTFIX — Force cloud re-pull when tab becomes visible (iOS Safari suspend guard)**

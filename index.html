@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;">v1.5.25 <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;">v1.5.26 <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -6061,12 +6061,15 @@ function bulkApproveApprovals(approve) {
  r.approvedDate = today();
  successCount++;
  // Comp-off cascade — v1.5.10: idempotent (check existing stock before push)
+ // v1.5.26: also check in-flight compOffAdditions (same-batch duplicate protection)
  if (type === 'comp-off' && approve) {
  const settings = DB.load('settings');
  const expireMonths = settings.compOffExpireMonths || 12;
  const existingStocks = DB.load('accumulatedHolidays', []);
+ // v1.5.26: merge existing DB stocks + in-flight additions from earlier iterations
+ const combinedStocks = [...existingStocks, ...compOffAdditions];
  // Check: does a stock already exist for this request (via sourceRequestId) OR (employeeId + earnedDate)?
- const alreadyExists = existingStocks.some(s =>
+ const alreadyExists = combinedStocks.some(s =>
  s.sourceRequestId === r.id ||
  (s.employeeId === r.employeeId && s.earnedDate === r.workDate)
  );
@@ -6080,7 +6083,9 @@ function bulkApproveApprovals(approve) {
  sourceRequestId: r.id // v1.5.10: track source for idempotency
  });
  } else {
- console.log(`[v1.5.10] Skipping duplicate accumulatedHoliday for ${r.employeeId} ${r.workDate} (already exists)`);
+ // v1.5.26: enhanced log — indicate which layer matched (DB vs in-flight)
+ const inDB = existingStocks.some(s => s.sourceRequestId === r.id || (s.employeeId === r.employeeId && s.earnedDate === r.workDate));
+ console.warn(`[v1.5.26] Skipping duplicate accumulatedHoliday for ${r.employeeId} ${r.workDate} (source: ${inDB ? 'DB' : 'in-flight-batch'})`);
  }
  }
  // Notify

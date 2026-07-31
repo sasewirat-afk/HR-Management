@@ -6,6 +6,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.26] — 2026-07-31 (HOTFIX: bulk approval dedup missing in-flight compOffAdditions check)
+
+**HOTFIX — Bulk comp-off approval could create duplicate stocks in same batch**
+
+### Context
+Fleet-wide diagnostic (137 emps) revealed:
+- 1 employee UNDER-credited: 680604001 (approved=2 comp-off, stocks=1) — reported case
+- 4 employees OVER-credited: 5 orphan stocks total (all pre-v1.5.10 legacy with source=NONE)
+
+For 680604001 specifically: two approved requests on 31 ก.ค. with different workDates (26 vs 28 ก.ค.). Idempotency check should have allowed both, but only 1 stock created. Most likely cloud sync LWW race during bulk save; underlying dedup check pre-existed a related weakness.
+
+### Root cause (dedup weakness)
+Bulk approval loop (line 6055-6100) checks `existingStocks` (from DB) for dedup, but does NOT check `compOffAdditions` (in-flight array). If two requests in same batch resolve to the SAME (employeeId + earnedDate) key — e.g., accidental duplicate submissions on same date — BOTH would create stocks, over-crediting the user.
+
+### Fix — merge in-flight with DB before dedup check
+```js
+// v1.5.26: merge existing DB stocks + in-flight additions from earlier iterations
+const combinedStocks = [...existingStocks, ...compOffAdditions];
+const alreadyExists = combinedStocks.some(s =>
+ s.sourceRequestId === r.id ||
+ (s.employeeId === r.employeeId && s.earnedDate === r.workDate)
+);
+```
+
+Enhanced log distinguishes source layer:
+- `[v1.5.26] Skipping duplicate ... (source: DB)` — matched pre-existing stock
+- `[v1.5.26] Skipping duplicate ... (source: in-flight-batch)` — matched earlier iteration in same batch
+
+### One-time cleanup (via console)
+- Added missing stock for 680604001 CO_1785410938542_30 (workDate=26 ก.ค.) — id AH_1785475590126_66
+- 5 orphan stocks left in place pending 1-by-1 review
+
+### Note on 680604001 — cause remains cloud LWW race hypothesis
+The dedup fix addresses defensive protection against duplicate creation, NOT the missing-stock LWW race case. That requires optimistic-lock in cloud upsert (deferred). User chose Q2:A (dedup fix only) — LWW race monitored via v1.5.26 log warnings for now.
+
+### Files
+`index.html` (bulk approval ~6063, version line 871), `CHANGELOG.md`
+
+---
+
 ## [1.5.25] — 2026-07-30 (HOTFIX: v1.5.24 regression — focus resync clobbered attendance upload preview)
 
 **HOTFIX — Guard renderPage against wiping in-progress form state**

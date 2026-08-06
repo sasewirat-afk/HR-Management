@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;">v1.5.26 <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;">v1.5.27 <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -1551,6 +1551,39 @@ function setupFocusResync() {
  });
  window.addEventListener('focus', () => _resyncOnFocus('window-focus'));
  console.log(' Focus re-sync listeners installed (visibility + pageshow + focus)');
+}
+
+// ============================================================
+// v1.5.27: AUTO-HEAL comp-off pending-with-stock (LWW race repair)
+// ============================================================
+// Cloud sync LWW race can leave compOffRequests reverted to 'pending'
+// while the corresponding accumulatedHolidays stock still exists (the
+// stock is proof approval happened). This function detects that
+// inconsistency and restores status to 'approved'. Runs on init after
+// cloud pull. Only touches requests with matching stock sourceRequestId
+// (safest signal). Never creates duplicate stocks.
+function healCompOffPendingWithStock() {
+ try {
+  const cos = DB.load('compOffRequests');
+  const stocks = DB.load('accumulatedHolidays');
+  const toHeal = [];
+  cos.filter(r => r.status === 'pending').forEach(r => {
+   const linkedStock = stocks.find(s => s.sourceRequestId === r.id);
+   if (linkedStock) toHeal.push({ req: r, stock: linkedStock });
+  });
+  if (toHeal.length === 0) return;
+  console.warn(`[v1.5.27 auto-heal] Detected ${toHeal.length} comp-off request(s) with reverted status (stock exists — restoring approved)`);
+  toHeal.forEach(({ req, stock }) => {
+   req.status = 'approved';
+   req.approvedDate = req.approvedDate || today();
+   req.approverNote = req.approverNote || '[auto-healed v1.5.27 — LWW race repair]';
+   console.warn(`   ↳ ${req.employeeId} req=${req.id} workDate=${req.workDate} → approved (stock ${stock.id})`);
+  });
+  DB.save('compOffRequests', cos);
+  console.warn(`[v1.5.27 auto-heal] ${toHeal.length} request(s) restored to approved status`);
+ } catch (e) {
+  console.error('[v1.5.27 auto-heal] Exception:', e.message);
+ }
 }
 
 // Manual refresh — for user-triggered force pull
@@ -13279,6 +13312,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  pullResult = await DB.cloudPullAllSafe();
  setupCloudRealtime();
  setupFocusResync(); // v1.5.24: iOS Safari suspend guard
+ healCompOffPendingWithStock(); // v1.5.27: auto-repair LWW race inconsistency
 
  if (pullResult.ok) {
  loadingDiv.innerHTML = pullResult.count > 0 ? ` ซิงค์จาก Cloud สำเร็จ (${pullResult.count} รายการ)` : ' Cloud พร้อม (ว่าง)';

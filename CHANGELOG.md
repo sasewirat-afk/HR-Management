@@ -6,6 +6,61 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.27] — 2026-07-31 (HOTFIX: auto-heal comp-off pending+stock LWW race)
+
+**HOTFIX — Auto-restore approved status when stock proves prior approval**
+
+### Context
+Fleet-wide scan revealed **11 comp-off requests** stuck in `pending` status despite having linked `accumulatedHolidays` stocks with matching `sourceRequestId`. 10 of 11 were for `workDate=2026-07-28` (นักขัตฤกษ์) — evidence of a **single bulk-approval LWW race event** on ~29 ก.ค.
+
+This is the **inverse symptom** of the 680604001 UNDER-credit bug from v1.5.26:
+- 680604001 pattern: cloud lost stock save → approved request, no stock
+- 690309002 pattern (this): cloud lost request save → pending request, has stock
+
+Both from cloud LWW where `compOffRequests` and `accumulatedHolidays` tables desynced independently during async upsert.
+
+### Root cause
+Approval flow saves 2 tables independently via async cloud upsert:
+```js
+DB.save('compOffRequests', reqs);          // step 1
+DB.save('accumulatedHolidays', stocks);    // step 2
+```
+Both save to localStorage synchronously (both succeed). Async cloud upsert may fail on one, or be overwritten by realtime pull from a stale device. Result: two tables end up out of sync.
+
+Stock's existence proves approval happened (stock only created during approval path). Therefore restoring status=approved is safe truth-restoration, not a guess.
+
+### Fix — `healCompOffPendingWithStock()` auto-heal on init
+Runs after `cloudPullAllSafe()` at DOMContentLoaded:
+1. Scan `compOffRequests` for `status === 'pending'`
+2. For each, check if `accumulatedHolidays` has a stock with matching `sourceRequestId`
+3. If found: set `status = 'approved'`, `approvedDate = today()`, add note `[auto-healed v1.5.27 — LWW race repair]`
+4. Save `compOffRequests` once
+5. Log to console for audit
+
+Safety guarantees:
+- Only heals requests with matching stock (strongest signal of prior approval)
+- Never creates duplicate stocks (dedup already in v1.5.10)
+- Never modifies rejected requests (they don't have stocks per approval flow)
+- Idempotent: subsequent runs find nothing to heal
+- Wrapped in try/catch so failures don't block init
+
+### One-time cleanup
+The 11 detected requests will auto-heal on next page reload after deploy.
+
+### Complements
+- v1.5.10: dedup prevents duplicate stock creation on re-approve
+- v1.5.26: bulk approval dedup includes in-flight compOffAdditions
+- v1.5.27 (this): heal already-broken states from prior cloud races
+
+### Not yet fixed
+- Underlying cloud LWW race (would require optimistic-lock in Supabase upsert layer)
+- Reverse case: 680604001 pattern (approved request without stock). Not yet detected fleet-wide — need separate scan.
+
+### Files
+`index.html` (function ~1595, init call ~13281, version line 871), `CHANGELOG.md`
+
+---
+
 ## [1.5.26] — 2026-07-31 (HOTFIX: bulk approval dedup missing in-flight compOffAdditions check)
 
 **HOTFIX — Bulk comp-off approval could create duplicate stocks in same batch**

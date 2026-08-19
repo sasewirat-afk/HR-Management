@@ -898,7 +898,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.5.30';
+const APP_VERSION = '1.5.31';
 const APP_RELEASE_DATE = '2026-08-20';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2343,6 +2343,58 @@ async function provisionSupabaseAuth(empId, password) {
   // Account exists but the derived password no longer matches — the app password was
   // changed at some point without the auth side following. Admin reset handles these.
   return { ok: false, reason: su.error.message };
+ } catch (e) {
+  return { ok: false, reason: e.message };
+ }
+}
+
+// v1.5.31 (Phase 4a step 5): AUTH-FIRST LOGIN
+// ------------------------------------------------------------
+// The app pulls the whole database at DOMContentLoaded, before anyone has logged in.
+// That only works while the policies grant `public`. Once step 6 removes them, a new
+// device gets: pull refused → localStorage empty → login() compares against an empty
+// employees array → nobody can ever get in.
+//
+// So authentication has to come first and the pull second. This also removes the
+// weakest part of the old design: the password was checked by comparing a hash in
+// the browser, against data the browser itself downloaded. Supabase checks it now.
+//
+// Legacy hash login stays as a fallback for employees who have not been provisioned
+// yet. Set PHASE4_LEGACY_LOGIN = false at step 7 to close that door.
+const PHASE4_LEGACY_LOGIN = true;
+
+async function loginViaAuth(empId, password) {
+ if (!cloudSync || !supa || !supa.auth) return { ok: false, reason: 'no-cloud' };
+ try {
+  const si = await supa.auth.signInWithPassword({
+   email: authEmailFor(empId),
+   password: await deriveAuthPassword(empId, password)
+  });
+  if (si.error) return { ok: false, reason: si.error.message };
+
+  // Session established — only now are we allowed to read anything.
+  // Force a FULL pull only when there is genuinely nothing local to work from — the
+  // fresh-device case this whole path exists for. Where data is already present the
+  // normal incremental pull suffices; forcing would re-download ~8 MB on every single
+  // login, roughly a gigabyte a day across 142 employees, for no benefit.
+  const needFull = DB.load('employees', []).length === 0;
+  const pull = await DB.cloudPullAllSafe(needFull ? { force: true } : {});
+  if (!pull.ok) return { ok: false, reason: 'pull-failed: ' + (pull.errorDetail || pull.reason) };
+
+  const emp = DB.load('employees', []).find(e => e.id === empId);
+  // Authenticated but not (or no longer) an employee — do not leave a live session behind.
+  if (!emp || !emp.active) {
+   await supa.auth.signOut();
+   return { ok: false, reason: emp ? 'inactive' : 'no-employee-record' };
+  }
+
+  currentUser = emp;
+  sessionStorage.setItem('hr_currentUser', JSON.stringify(emp));
+  if (DB._localDirty) DB._localDirty = {};
+  if (DB._skipCount) DB._skipCount = {};
+  auditLog('login', 'user', emp.id, `Role: ${emp.role} (supabase-auth)`);
+  recordAuthProvisioned(empId, 'signin');
+  return { ok: true };
  } catch (e) {
   return { ok: false, reason: e.message };
  }
@@ -13732,18 +13784,32 @@ document.addEventListener('DOMContentLoaded', async () => {
  }
 
  const alreadyInitialized = DB.load('initialized', false);
+ // v1.5.31 (Phase 4a step 5): `bootBlocked` = fresh device with no local data AND the
+ // cloud pull did not succeed. Previously this branch called `return`, which aborted
+ // DOMContentLoaded *before the login form handler was registered* — leaving a page
+ // where nothing responds at all.
+ //
+ // That was survivable while anonymous reads were allowed, because the startup pull
+ // normally worked. After the step 6 policy flip an unauthenticated pull is EXPECTED
+ // to fail on a new device, and signing in is the only way to make a pull possible —
+ // so aborting here would make the app permanently unreachable from any new browser.
+ // Now we skip seeding and migrations (there is genuinely nothing to work on) but
+ // still wire up the UI so the user can authenticate.
+ let bootBlocked = false;
  if (!alreadyInitialized) {
  if (cloudSync && !pullResult.ok) {
- alert('⚠ Cloud sync ไม่สำเร็จ และเครื่องไม่มีข้อมูลเดิม\n\nกรุณาเช็คอินเทอร์เน็ต แล้ว refresh หน้าใหม่');
- return;
- }
+ bootBlocked = true;
+ console.warn('[Startup] No local data and cloud pull failed — waiting for the user to sign in');
+ } else {
  seedData();
  if (cloudSync) {
  console.log('[Startup] Fresh install detected — pushing initial seed to cloud');
  await DB.cloudPushAll();
  }
  }
+ }
 
+ if (!bootBlocked) {
  migrateSettings_v1_4_10();
  migrateLeaveQuota_v1_4_14();
  migratePayrollFields_v1_4_54();
@@ -13761,8 +13827,9 @@ document.addEventListener('DOMContentLoaded', async () => {
  })();
  migrateEmployeeUpdatedAt_v1_4_26();
  await migratePasswordsToHash_v1_4_28();
+ } // end if (!bootBlocked)
 
- if (restoreSession()) {
+ if (!bootBlocked && restoreSession()) {
  showApp();
  }
 
@@ -13770,14 +13837,35 @@ document.addEventListener('DOMContentLoaded', async () => {
  e.preventDefault();
  const id = document.getElementById('loginEmpId').value.trim().toUpperCase();
  const pass = document.getElementById('loginPassword').value;
- if (await login(id, pass)) {
+ const alertEl = document.getElementById('loginAlert');
+ alertEl.innerHTML = '<div class="alert alert-info">กำลังตรวจสอบ...</div>';
+
+ // v1.5.31 (Phase 4a step 5): Supabase Auth first, legacy hash second.
+ // Auth-first is what makes a brand-new device work after step 6 — it is the only
+ // path that can establish a session, and without a session there is nothing to pull.
+ let entered = false;
+ const viaAuth = await loginViaAuth(id, pass);
+ if (viaAuth.ok) {
+ entered = true;
+ } else if (viaAuth.reason === 'inactive') {
+ alertEl.innerHTML = '<div class="alert alert-error">บัญชีนี้ถูกปิดใช้งาน — ติดต่อ HR</div>';
+ return;
+ } else if (PHASE4_LEGACY_LOGIN) {
+ // Not provisioned yet (or offline). Fall back to the pre-Phase-4 check, which also
+ // triggers provisioning on success so the next login takes the path above.
+ if (viaAuth.reason !== 'no-cloud') console.log(`[Phase4a] auth login ไม่ผ่าน (${viaAuth.reason}) — ใช้กลไกเดิมแทน`);
+ entered = await login(id, pass);
+ }
+
+ if (entered) {
+ alertEl.innerHTML = '';
  if (currentUser.forceChangePassword) {
  showChangePasswordPage();
  } else {
  showApp();
  }
  } else {
- document.getElementById('loginAlert').innerHTML = '<div class="alert alert-error">รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง</div>';
+ alertEl.innerHTML = '<div class="alert alert-error">รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง</div>';
  }
  });
 

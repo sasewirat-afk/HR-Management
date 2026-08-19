@@ -6,6 +6,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.31] — 2026-08-20 (Phase 4a step 5: auth-first login)
+
+**Groundwork for closing anonymous access. Behaviour changes only for employees already provisioned — they now sign in through Supabase instead of a hash comparison in the browser.**
+
+### Fixed — a dead page on any new device
+The startup handler bailed out with `return` when a fresh install could not reach the cloud. That `return` ran **before the login form handler was registered**, so the page came up with a login box where pressing the button did nothing at all — not a failed login, an inert page.
+
+This was survivable while anonymous reads were allowed, because the startup pull normally worked. After the step 6 policy flip an unauthenticated pull is *expected* to fail on a new device, and signing in is the only thing that can make a pull possible — so the app would have been permanently unreachable from any new browser. Now the branch sets `bootBlocked`, skips seeding and migrations (there is nothing to work on), and still wires up the UI.
+
+### Changed — authentication comes before the download
+`loginViaAuth()` signs in through Supabase, *then* pulls, then resolves the profile from `employees` by id and checks `active`. This also retires the weakest part of the old design: the password used to be checked by comparing a hash in the browser against data the browser had just downloaded.
+
+- Legacy hash login remains as a fallback for anyone not yet provisioned, behind `PHASE4_LEGACY_LOGIN`. Set it to `false` at step 7 to close that door.
+- Authenticated but with no employee record, or inactive → immediate `signOut()`, so no live session is left behind for a non-employee.
+- The post-auth pull forces a full download only when `employees` is genuinely empty. Forcing it every login would re-download ~8 MB per sign-in — on the order of a gigabyte a day across 142 employees, for nothing.
+
+### Verified — 20 assertions across three scenarios
+Local-only (no cloud): `loginViaAuth` declines cleanly and the legacy path still logs in, i.e. no regression. New device with the cloud unreachable, simulating life after step 6: the form is registered, the button responds, and a real error is shown. The same scenario against the previous build as a control: pressing the button produces nothing, confirming the defect was real rather than theoretical.
+
+---
+
+## [1.5.30] — 2026-08-20 (Phase 4a: provision Supabase Auth accounts during login)
+
+**Does not change who can reach the database.** It creates the Supabase Auth accounts quietly, as people log in normally over a two-week transition window. The policy flip that actually locks anonymous access out is a separate later step.
+
+- Employees have no email field, so the auth identity is synthesised from the employee id (`emp001@hr.crochet.local`). No mailbox exists or is needed; recovery is by admin reset — which is also why "Confirm email" must stay off.
+- Supabase enforces a minimum password length; this app allows 4 and ships seed accounts with `1234`. Rather than force ~142 people to change their password to be migrated, the auth credential is derived from what they already type. No weaker than the typed password, and no stronger — raising the app's own password policy is still worth doing separately.
+- Provisioning is fire-and-forget and can never block or fail a login.
+- `changePassword` now moves the auth credential with it. Without that the auth account keeps the old password and the employee would lose access at the flip, days later, with no obvious cause.
+- `logout` signs out of Supabase too, so a shared machine does not keep an authenticated session alive.
+- A `signUp` that returns a user with no session means "Confirm email" is still on. That is reported as a configuration error rather than recorded as success, so the misconfiguration surfaces on the first login instead of silently producing ~142 dead accounts.
+- `authStatus()` in the console reports provisioning progress from the new `authProvisioned` key.
+
+### Note on the anon key
+Earlier notes said the fix was to rotate it. That put the weight in the wrong place: the anon key is a public JWT that only asserts `role = anon`, and it is meant to be published. The defect is that the policies grant privileges to that role. Once step 6 removes them, a request carrying only the anon key matches no policy and is refused, and the key already published on GitHub becomes inert — with no forced key change, and so none of the stale-client risk a rotation would have carried.
+
+---
+
 ## [1.5.29] — 2026-08-19 (Phase 3: leave and payroll calculation corrections)
 
 **Changes what employees are charged and paid. No stored record is modified — no backfill.**

@@ -7,3 +7,13 @@ node_modules/
 .env.local
 .vercel
 Thumbs.db
+
+# Local pre-deploy snapshots — large duplicates that also carry the Supabase key
+index.html.bak-*
+
+# Security remediation runbook. This repository is PUBLIC. db/ documents database
+# structure and vulnerabilities that are NOT fixed yet (Phase 4: the anon key is
+# still published and RLS still allows anon UPDATE), so publishing it would hand an
+# attacker a roadmap while those credentials are live.
+# Remove this rule only after Phase 4 is done, or move db/ to a private repo.
+db/

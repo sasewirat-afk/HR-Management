@@ -6,6 +6,56 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.28] — 2026-08-19 (CRITICAL: stale cache overwrote cloud — root cause of the LWW races)
+
+**Phase 1 of the 19 ส.ค. code review remediation. Client-side only — no schema change, no data migration, nothing written to Supabase by this release.**
+
+### Root cause
+`DB._cache` (added v1.4.49 to avoid repeat LZ decompression) was invalidated in exactly **two** places: `DB.save()` and the realtime handler. **Every cloud-pull path wrote `localStorage` directly and left the cache untouched.**
+
+Failure sequence:
+1. A page render calls `DB.load('leaveRequests')` → cache holds 500 items
+2. Another device adds one → cloud now has 501
+3. User returns to the tab → `_resyncOnFocus` → `cloudPullAllSafe({force:true})` → localStorage gets 501, **cache still holds 500**
+4. `renderPage()` → `DB.load()` → **cache hit → 500**. The new record is invisible
+5. Any subsequent `DB.save()` writes the 500-item array and upserts it
+6. **The other device's record is deleted from Supabase**
+
+Startup was never affected (cache is empty before the first pull). The window opened in **v1.5.24**, which introduced `_resyncOnFocus` — pulling at a moment when the cache *is* populated. v1.5.25's `manualRefreshCloud` widened it.
+
+This is very likely the **actual root cause** of the desync events that v1.5.26 and v1.5.27 were written to patch. Those releases treated the symptom (comp-off request and stock tables drifting apart); neither table was ever "lost by async upsert" — a stale cached array was pushed over the fresh one.
+
+### Fixed
+- **`DB._setRaw(key, str)`** — new single choke point that invalidates the cache before writing localStorage. All 8 direct-write sites now route through it:
+  - `cloudPullAllSafe` main pull loop ← *the primary leak*
+  - `cloudPullAllSafe` tombstone writes (`deletedEmployeeIds`, `employees`)
+  - `cloudPullAll`
+  - `_cloudUpsert` EMP-GUARD revert, LWW merge result, anti-data-loss guard
+  - employee delete tombstone write
+- **Employee resurrection bug** — the delete path wrote the new tombstone straight to localStorage, so `_cache` kept the pre-tombstone list; the next pull read the stale list, failed to apply the tombstone, and restored the deleted employee from cloud.
+- **Comp-off auto-heal now gated on `pullResult.ok`** — v1.5.27 ran it unconditionally right after `await cloudPullAllSafe()`, before `pullResult.ok` was ever checked. On a failed/offline pull it healed stale local data and queued a cloud upsert, pushing a stale `compOffRequests` array over the cloud. `compOffRequests` has no field-level LWW merge (only `employees` does), so the whole array was overwritten. Directly contradicted startup rule 3 in the comment block above it.
+
+### Fixed (Phase 2 — UI correctness, still zero DB impact)
+- **Skipped re-renders are no longer lost.** `_safeRerender` returned `false` and nothing ever retried, so a user who had a modal open during a cloud pull kept looking at pre-pull data — plain `onclick="closeModal()"` buttons never call `renderPage()`. Skips now set `_pendingRerender` and `closeModal()` / `cancelUploadAttendance()` flush it.
+- **Empty attendance file froze the whole session.** Guard 1 tested `&& _attendanceBuffer` — `[]` is truthy in JS, so a file that parsed to 0 rows blocked every realtime update and focus-resync until reload. Now tests `Array.isArray(...) && length > 0`.
+- **Leaving the upload page abandons the preview.** Only Confirm/Cancel cleared `_attendanceBuffer`; an admin who uploaded then clicked another menu item left it populated and hit the same freeze. `navigate()` now clears it.
+- **Reversed leave dates.** No `start <= end` check existed. `daysBetween()` returns a negative number, the quota gate `days > effectiveRemaining` passes trivially, and `used[key] += r.days` then **added** days to the employee's balance. Now rejected in `submitLeave()`, and `calcLeaveDays()` shows the reason in the form instead of a negative count.
+- **Comp-off auto-heal now leaves a trail.** It changed approval state with no `auditLog()` and no `notify()`, unlike every other approval path — there was no answer to "who approved this comp-off day?". Now writes an audit entry marked as a system repair (explicitly *not* a human approval) and notifies the employee.
+- **Version is single-source.** `APP_VERSION` was `'1.5.21'` while the login badge hardcoded `'v1.5.27'` and HEAD was v1.5.27 — three answers to "what is deployed?" in a shop whose rollback process is version-stamped. Badge now renders from `APP_VERSION`.
+
+### Not changed
+No calculation semantics, no stored records, no Supabase writes. Leave-day counting (weekends/holidays still counted), payroll cutoff attribution, quota pro-rating, and the pending-leave gap are untouched — those are Phase 3.
+
+### Safety net in place before this release
+An append-only snapshot trigger and a full point-in-time backup were installed and verified on the database on 19 ส.ค. before any code change, so every write this release affects is recoverable. Runbook kept internally.
+
+### Verified before release
+- Regression harness runs the real `DB` object against stub globals: 9/9 pass, including a control case that reproduces the old stale-cache behaviour to prove the harness detects it.
+- Replaying the data-loss sequence against the previous build pushes `r1, r2, r4` — the other device's `r3` is destroyed. This build pushes all four.
+- Boot check in an offline copy: no runtime errors, version banner and login badge both read `1.5.28`, `checkVersionForceSync` fires as intended.
+
+---
+
 ## [1.5.27] — 2026-07-31 (HOTFIX: auto-heal comp-off pending+stock LWW race)
 
 **HOTFIX — Auto-restore approved status when stock proves prior approval**

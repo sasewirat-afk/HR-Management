@@ -868,7 +868,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
  <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
- <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;">v1.5.27 <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
+ <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;"><span id="loginVersionLabel"></span> <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
  <div class="user-info">
  <strong id="userName">-</strong>
  <span id="userEmpId">-</span>
@@ -892,9 +892,20 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // ============================================================
 // APP VERSION
 // ============================================================
-const APP_VERSION = '1.5.21';
-const APP_RELEASE_DATE = '2026-06-21';
+// v1.5.28: single source of truth. Was '1.5.21' while the login badge said 'v1.5.27'
+// and HEAD was v1.5.27 — three different answers to "what is deployed?", in a shop
+// whose whole rollback process is version-stamped. The badge now reads from here.
+// Bumping this also matters operationally: checkVersionForceSync() below clears
+// hr__lastPullTimestamp on any version change, forcing every device to do one FULL
+// pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
+const APP_VERSION = '1.5.28';
+const APP_RELEASE_DATE = '2026-08-19';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
+// v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
+document.addEventListener('DOMContentLoaded', () => {
+ const _vl = document.getElementById('loginVersionLabel');
+ if (_vl) _vl.textContent = 'v' + APP_VERSION;
+});
 console.log(`Released: ${APP_RELEASE_DATE} — see CHANGELOG.md`);
 
 // ============================================================
@@ -959,6 +970,20 @@ const DB = {
  } else {
  this._cache.delete(key);
  }
+ },
+
+ // v1.5.28 CRITICAL: single choke point for every raw localStorage write.
+ // Bug (pre-v1.5.28): _cache was invalidated ONLY in save() and the realtime
+ // handler. Every cloud-pull path wrote localStorage directly and left _cache
+ // holding the pre-pull array, so DB.load() kept returning stale data — and the
+ // next DB.save() pushed that stale array back over the cloud, DELETING records
+ // written by other devices. Opened up in v1.5.24 when _resyncOnFocus started
+ // pulling at a time when the cache is already populated (startup was safe
+ // because the cache is empty then).
+ // Rule from now on: NEVER call localStorage.setItem('hr_'+key, …) directly.
+ _setRaw(key, str) {
+ this._cache.delete(key);
+ localStorage.setItem('hr_' + key, str);
  },
 
  load(key, def = []) {
@@ -1140,7 +1165,7 @@ const DB = {
  toast(`🛡️ ป้องกันข้อมูลถูกทับ: local (${val.length}) น้อยกว่า cloud (${cloudEmps.length}) มากผิดปกติ — ไม่ push`, 'error');
  }
  // Revert local to cloud to prevent further stale writes
- localStorage.setItem('hr_' + key, JSON.stringify(cloudEmps));
+ DB._setRaw(key, JSON.stringify(cloudEmps)); // v1.5.28: was localStorage.setItem — left _cache holding the rejected array
  return;
  }
  if (Array.isArray(cloudEmps) && cloudEmps.length > 0) {
@@ -1173,7 +1198,7 @@ const DB = {
  if (changed) {
  console.warn(`[EMP-LWW v1.4.26] Merged`, stats);
  val = merged;
- localStorage.setItem('hr_' + key, JSON.stringify(val));
+ DB._setRaw(key, JSON.stringify(val)); // v1.5.28: was localStorage.setItem — merged result never reached _cache
  if (typeof toast === 'function' && stats.cloudWins > 0) {
  toast(`ป้องกันข้อมูลถูกทับ: ${stats.cloudWins} คนใช้ค่า cloud ที่ใหม่กว่า`, 'success');
  }
@@ -1190,7 +1215,7 @@ const DB = {
  if (existing && Array.isArray(existing.value) && existing.value.length > 0) {
  console.error(`[CloudUpsert] REFUSED to push empty array for '${key}' — cloud has ${existing.value.length} items`);
  if (typeof toast === 'function') toast(`ป้องกันข้อมูลหาย: ดึง '${key}' จาก cloud (${existing.value.length} รายการ)`, 'error');
- localStorage.setItem('hr_' + key, JSON.stringify(existing.value));
+ DB._setRaw(key, JSON.stringify(existing.value)); // v1.5.28: was localStorage.setItem — renderPage below then re-read the stale cache
  if (typeof renderPage === 'function' && typeof currentUser !== 'undefined' && currentUser) renderPage();
  return;
  }
@@ -1266,7 +1291,7 @@ const DB = {
  // v1.4.46: use compression helper + graceful quota handling for mobile iOS Safari
  try {
  const stored = DB._compressForStorage(row.value);
- localStorage.setItem('hr_' + row.key, stored);
+ DB._setRaw(row.key, stored); // v1.5.28 CRITICAL: was localStorage.setItem — this is THE line that let stale cache overwrite the cloud
  pulled++;
  } catch (e) {
  if (e.name === 'QuotaExceededError' || (e.message && e.message.toLowerCase().includes('quota'))) {
@@ -1315,7 +1340,7 @@ const DB = {
  // Clear stale tombstones (persist)
  if (staleTombs.length > 0) {
  console.log(`[cloudPullAllSafe] Cleared ${staleTombs.length} stale tombstone(s) (re-added):`, staleTombs.map(t => t.id));
- localStorage.setItem('hr_deletedEmployeeIds', JSON.stringify(validTombs));
+ DB._setRaw('deletedEmployeeIds', JSON.stringify(validTombs)); // v1.5.28: was localStorage.setItem
  if (cloudSync) DB._cloudUpsert('deletedEmployeeIds', validTombs);
  }
  // Apply valid tombstones — remove those employees from local
@@ -1323,7 +1348,7 @@ const DB = {
  const filtered = emps.filter(e => !tombIds.has(e.id));
  if (filtered.length !== emps.length) {
  console.log(`[cloudPullAllSafe] Applied ${emps.length - filtered.length} tombstone(s), removing deleted employees`);
- localStorage.setItem('hr_employees', JSON.stringify(filtered));
+ DB._setRaw('employees', JSON.stringify(filtered)); // v1.5.28: was localStorage.setItem — deleted employees stayed visible via cache
  }
  }
  } catch (e) { console.warn('[cloudPullAllSafe] tombstone apply failed:', e); }
@@ -1371,7 +1396,7 @@ const DB = {
  }
  const json = JSON.stringify(row.value);
  if (json === undefined) { skipped++; return; }
- localStorage.setItem('hr_' + row.key, json);
+ DB._setRaw(row.key, json); // v1.5.28: was localStorage.setItem
  pulled++;
  });
  console.log(` Pulled ${pulled} keys from cloud (${skipped} skipped)`);
@@ -1497,24 +1522,41 @@ function setupCloudRealtime() {
 // v1.5.25: focus/realtime re-render clobbered upload preview + open modals.
 // _safeRerender() checks in-progress state before calling renderPage.
 // ============================================================
+// v1.5.28: a skipped re-render used to be lost forever — the guards returned false
+// and nothing ever retried, so the user kept looking at pre-pull data with no hint
+// it was stale. That is the exact symptom v1.5.24 was built to remove. Now every
+// skip is recorded here and flushed the moment the blocking condition clears.
+let _pendingRerender = false;
 function _safeRerender(reason) {
  // Guard 1: attendance upload preview in progress
- if (typeof _attendanceBuffer !== 'undefined' && _attendanceBuffer) {
+ // v1.5.28: was `&& _attendanceBuffer` — an empty array is truthy, so a file that
+ // parsed to 0 rows froze every re-render for the rest of the session.
+ if (typeof _attendanceBuffer !== 'undefined' && Array.isArray(_attendanceBuffer) && _attendanceBuffer.length > 0) {
   console.warn(`[SafeRerender:${reason}] SKIP — attendance upload preview in progress (${_attendanceBuffer.length} records buffered)`);
+  _pendingRerender = true;
   return false;
  }
  // Guard 2: modal open (edit form, confirm dialog, etc.)
  const modalContainer = document.getElementById('modalContainer');
  if (modalContainer && modalContainer.innerHTML.trim().length > 0) {
   console.warn(`[SafeRerender:${reason}] SKIP — modal open`);
+  _pendingRerender = true;
   return false;
  }
  // Safe to re-render
+ _pendingRerender = false;
  if (typeof currentUser !== 'undefined' && currentUser) {
   if (typeof renderNav === 'function') renderNav();
   if (typeof renderPage === 'function') renderPage();
  }
  return true;
+}
+
+// v1.5.28: call after any blocking condition clears (modal closed, upload finished).
+function _flushPendingRerender(reason) {
+ if (!_pendingRerender) return false;
+ console.log(`[SafeRerender] flushing deferred re-render (${reason})`);
+ return _safeRerender(reason);
 }
 
 let _lastFocusPullTs = 0;
@@ -1578,6 +1620,19 @@ function healCompOffPendingWithStock() {
    req.approvedDate = req.approvedDate || today();
    req.approverNote = req.approverNote || '[auto-healed v1.5.27 — LWW race repair]';
    console.warn(`   ↳ ${req.employeeId} req=${req.id} workDate=${req.workDate} → approved (stock ${stock.id})`);
+   // v1.5.28: every other approval path writes an audit entry and notifies the
+   // employee (approveRequest, bulkApproveApprovals). This one changed approval
+   // state silently, leaving no answer to "who approved this comp-off day?" —
+   // the audit log is the compliance artifact for MTP.CC.HR.WI.001 and the UAT report.
+   if (typeof auditLog === 'function') {
+    auditLog('comp-off-autoheal', 'comp-off', req.id,
+     `${req.employeeId} ${req.workDate} pending → approved (หลักฐาน: stock ${stock.id}) [ระบบซ่อมอัตโนมัติ v1.5.28 ไม่ใช่การอนุมัติโดยบุคคล]`);
+   }
+   if (typeof notify === 'function') {
+    notify(req.employeeId,
+     `ระบบกู้สถานะคำขอสะสมวันหยุด (${formatDate(req.workDate)}) กลับเป็น "อนุมัติแล้ว" — สิทธิ์ของคุณไม่ได้หายไป`,
+     'comp-off', req.id);
+   }
   });
   DB.save('compOffRequests', cos);
   console.warn(`[v1.5.27 auto-heal] ${toHeal.length} request(s) restored to approved status`);
@@ -2735,6 +2790,10 @@ function showModal(title, body, footer) {
 
 function closeModal() {
  document.getElementById('modalContainer').innerHTML = '';
+ // v1.5.28: a cloud pull that arrived while this modal was open had its re-render
+ // skipped by _safeRerender guard 2. Plain `onclick="closeModal()"` buttons never
+ // call renderPage(), so the page underneath stayed on pre-pull data silently.
+ _flushPendingRerender('modal-closed');
 }
 
 function toast(message, type = 'success') {
@@ -2836,6 +2895,15 @@ function navLink(page, label, badge) {
 }
 
 function navigate(page) {
+ // v1.5.28: leaving the upload page abandons the preview — clear the buffer.
+ // Previously only the Confirm/Cancel buttons cleared it, so an admin who uploaded
+ // a file and then clicked another menu item left _attendanceBuffer populated, and
+ // _safeRerender's guard 1 then blocked every realtime update and focus-resync for
+ // the rest of the session.
+ if (page !== 'upload-attendance' && typeof _attendanceBuffer !== 'undefined' && _attendanceBuffer) {
+  console.warn(`[v1.5.28] Leaving upload page — discarding ${_attendanceBuffer.length} buffered attendance record(s)`);
+  _attendanceBuffer = null;
+ }
  currentPage = page;
  renderNav();
  renderPage();
@@ -3221,6 +3289,11 @@ function calcLeaveDays() {
  const e = document.getElementById('leaveEnd').value;
  const h = document.getElementById('leaveHalfDay').value;
  if (!s || !e) return;
+ // v1.5.28: show the problem in the form instead of a negative day count
+ if (e < s) {
+  document.getElementById('leaveDays').value = 'วันที่สิ้นสุดก่อนวันที่เริ่ม';
+  return;
+ }
  let days = daysBetween(s, e);
  if (h && s === e) days = 0.5;
  document.getElementById('leaveDays').value = days + ' วัน';
@@ -3290,7 +3363,23 @@ async function submitLeave(e, editId) {
  startDate = document.getElementById('leaveStart').value;
  endDate = document.getElementById('leaveEnd').value;
  halfDay = document.getElementById('leaveHalfDay').value || null;
+ // v1.5.28: no start<=end check existed. daysBetween() returns a NEGATIVE number when
+ // the dates are reversed, the quota gate `days > effectiveRemaining` then passes
+ // trivially, and getLeaveBalance does `used[key] += r.days` — so a reversed range
+ // ADDED leave days to the employee's balance. Only the 'unpaid' branch caught it.
+ if (!startDate || !endDate) {
+  toast('กรุณาระบุวันที่เริ่มและวันที่สิ้นสุด', 'error');
+  return;
+ }
+ if (endDate < startDate) {
+  toast('วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มลา', 'error');
+  return;
+ }
  days = daysBetween(startDate, endDate);
+ if (days <= 0) {
+  toast('จำนวนวันลาไม่ถูกต้อง', 'error');
+  return;
+ }
  if (halfDay && startDate === endDate) days = 0.5;
 
  const _settings = DB.load('settings');
@@ -6446,7 +6535,7 @@ function deleteEmployee(id) {
  // v1.4.23: add tombstone BEFORE removing — prevents resurrection by stale devices
  const tombstones = DB.load('deletedEmployeeIds', []); // v1.4.47: was JSON.parse, LZ: safe now
  tombstones.push({ id, deletedAt: new Date().toISOString(), deletedBy: currentUser?.id });
- localStorage.setItem('hr_deletedEmployeeIds', JSON.stringify(tombstones));
+ DB._setRaw('deletedEmployeeIds', JSON.stringify(tombstones)); // v1.5.28: was localStorage.setItem — _cache kept the pre-tombstone list, so the next pull failed to apply it and resurrected the employee
  if (cloudSync) DB._cloudUpsert('deletedEmployeeIds', tombstones);
  // Cascade delete
  DB.save('employees', DB.load('employees').filter(e => e.id !== id));
@@ -7554,6 +7643,7 @@ function confirmUploadAttendance() {
  auditLog('attendance-upload', 'attendance', uniqueDates.join(','),
  `${currentUser.role === 'admin' ? 'Admin' : 'Delegate'} upload · ${newRecords.length} records · ${uniqueDates.length} วัน`);
  _attendanceBuffer = null;
+ _pendingRerender = false; // v1.5.28: renderPage() below satisfies any skipped re-render
  toast(`บันทึก ${newRecords.length} records สำเร็จ`);
  renderPage();
 }
@@ -7562,6 +7652,8 @@ function cancelUploadAttendance() {
  _attendanceBuffer = null;
  document.getElementById('attPreview').innerHTML = '';
  document.getElementById('attFile').value = '';
+ // v1.5.28: guard 1 is clear now — replay any re-render that was skipped while the preview was open
+ _flushPendingRerender('upload-cancelled');
 }
 
 function clearAttendance() {
@@ -13312,7 +13404,12 @@ document.addEventListener('DOMContentLoaded', async () => {
  pullResult = await DB.cloudPullAllSafe();
  setupCloudRealtime();
  setupFocusResync(); // v1.5.24: iOS Safari suspend guard
- healCompOffPendingWithStock(); // v1.5.27: auto-repair LWW race inconsistency
+ // v1.5.28: gate on pullResult.ok — heal ends in DB.save('compOffRequests', …) which
+ // queues a cloud upsert. Running it on data we failed to pull means pushing a stale
+ // array over the cloud, exactly what startup rule 3 above forbids. compOffRequests has
+ // no field-level LWW merge (only employees does), so the whole array gets overwritten.
+ if (pullResult.ok) healCompOffPendingWithStock(); // v1.5.27: auto-repair LWW race inconsistency
+ else console.warn('[v1.5.28] Skipping comp-off auto-heal — cloud pull failed, local data may be stale');
 
  if (pullResult.ok) {
  loadingDiv.innerHTML = pullResult.count > 0 ? ` ซิงค์จาก Cloud สำเร็จ (${pullResult.count} รายการ)` : ' Cloud พร้อม (ว่าง)';

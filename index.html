@@ -898,8 +898,8 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.5.29';
-const APP_RELEASE_DATE = '2026-08-19';
+const APP_VERSION = '1.5.30';
+const APP_RELEASE_DATE = '2026-08-20';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
 document.addEventListener('DOMContentLoaded', () => {
@@ -2273,6 +2273,132 @@ async function hashPassword(pw) {
  .map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+// ============================================================
+// v1.5.30 (Phase 4a): SUPABASE AUTH — transitional provisioning
+// ============================================================
+// Goal: stop anonymous internet visitors from reading and overwriting the whole
+// HR database. The fix is NOT rotating the anon key — that key is a public JWT
+// that only says "role = anon", and it is meant to be published. The bug is that
+// the RLS policies grant privileges TO anon. Once every policy targets
+// `authenticated` instead, a request carrying only the anon key matches no policy
+// and is refused, and the key already published on GitHub becomes inert.
+//
+// This step does NOT flip the policies yet. It only creates the Supabase Auth
+// accounts, silently, as people log in normally over the transition window
+// (2 weeks, decided 20 ส.ค. 2026). Nobody has to set a new password and nobody
+// is locked out. `db/phase4/10_add_authenticated_policies.sql` must already have
+// run — see the note in provisionSupabaseAuth().
+//
+// Employees have no email field, so we synthesise one from the employee id.
+// No mailbox exists or is needed; password recovery is by admin reset (decided
+// 20 ส.ค. 2026), which is also why email confirmation must be OFF in Supabase.
+const AUTH_EMAIL_DOMAIN = 'hr.crochet.local';
+
+function authEmailFor(empId) {
+ return `${String(empId || '').trim().toLowerCase()}@${AUTH_EMAIL_DOMAIN}`;
+}
+
+// Supabase enforces a minimum password length (6 by default); this app allows 4
+// and ships seed accounts with '1234'. Rather than force ~142 people to change
+// their password to be migrated, derive a fixed 64-char credential from what they
+// already type. This is no weaker than the typed password — it is the same secret,
+// just stretched to a length the auth service accepts — and no stronger, which is
+// why raising the app's own password policy is still worth doing separately.
+async function deriveAuthPassword(empId, password) {
+ const enc = new TextEncoder().encode(`${empId}::${password}::crochet_hr_auth_v1`);
+ const buf = await crypto.subtle.digest('SHA-256', enc);
+ return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+// NEVER throws and never blocks login. During the transition the app still runs
+// entirely on the anon policies, so a failure here costs nothing today — it just
+// means this employee needs an admin reset before the policies are flipped.
+//
+// IMPORTANT: signing in changes the client's Postgres role from `anon` to
+// `authenticated`. If the authenticated policies are missing, every request from
+// this browser starts failing RLS. That is why step 1.5 (10_add_authenticated_policies.sql)
+// has to be applied to the database BEFORE this code reaches production.
+async function provisionSupabaseAuth(empId, password) {
+ if (!cloudSync || !supa || !supa.auth) return { ok: false, reason: 'no-cloud' };
+ try {
+  const email = authEmailFor(empId);
+  const pw = await deriveAuthPassword(empId, password);
+  // Already provisioned and the password still matches → just establish the session.
+  const si = await supa.auth.signInWithPassword({ email, password: pw });
+  if (!si.error) return { ok: true, mode: 'signin' };
+  // Not provisioned yet → create the account with the credential they just proved.
+  const su = await supa.auth.signUp({ email, password: pw });
+  if (!su.error) {
+   // If "Confirm email" is still ON in Supabase, signUp returns a user but NO session,
+   // and that account can never sign in — these addresses are synthetic and have no
+   // mailbox to receive the confirmation link. Left undetected this would quietly
+   // manufacture ~142 dead accounts across the transition window and only surface at
+   // step 6, when everyone loses access at once. Fail loudly on day one instead.
+   if (!su.data || !su.data.session) {
+    return { ok: false, configError: true,
+     reason: 'ต้องปิด "Confirm email" ใน Supabase ก่อน — บัญชีที่สร้างจะ login ไม่ได้เพราะ email สังเคราะห์ไม่มีกล่องจดหมายจริง' };
+   }
+   return { ok: true, mode: 'signup' };
+  }
+  // Account exists but the derived password no longer matches — the app password was
+  // changed at some point without the auth side following. Admin reset handles these.
+  return { ok: false, reason: su.error.message };
+ } catch (e) {
+  return { ok: false, reason: e.message };
+ }
+}
+
+// Progress marker so an admin can tell when it is safe to flip the policies.
+// auth.users is not readable with the anon key, so track it in hr_data instead.
+// Idempotent — writes once per employee, on their first successful provision.
+function recordAuthProvisioned(empId, mode) {
+ try {
+  const list = DB.load('authProvisioned', []);
+  if (list.some(x => x.id === empId)) return;
+  list.push({ id: empId, at: new Date().toISOString(), mode });
+  DB.save('authProvisioned', list);
+ } catch (e) { console.warn('[Phase4a] could not record provisioning:', e.message); }
+}
+
+// Keep the auth credential in step with the app password. Without this, changing
+// the password in the app silently strands the auth account on the old one.
+async function syncAuthPassword(empId, oldPassword, newPassword) {
+ if (!cloudSync || !supa || !supa.auth) return { ok: false, reason: 'no-cloud' };
+ try {
+  const newPw = await deriveAuthPassword(empId, newPassword);
+  const { data: sess } = await supa.auth.getSession();
+  if (!sess || !sess.session) {
+   // not signed in — sign in with the OLD credential first
+   const si = await supa.auth.signInWithPassword({
+    email: authEmailFor(empId), password: await deriveAuthPassword(empId, oldPassword)
+   });
+   if (si.error) return { ok: false, reason: si.error.message };
+  }
+  const up = await supa.auth.updateUser({ password: newPw });
+  return up.error ? { ok: false, reason: up.error.message } : { ok: true };
+ } catch (e) {
+  return { ok: false, reason: e.message };
+ }
+}
+
+// Admin diagnostic — run authStatus() in the console to decide when to flip.
+window.authStatus = function () {
+ const emps = DB.load('employees', []).filter(e => e.active);
+ const done = DB.load('authProvisioned', []);
+ const doneIds = new Set(done.map(x => x.id));
+ const missing = emps.filter(e => !doneIds.has(e.id)).map(e => e.id);
+ const out = {
+  activeEmployees: emps.length,
+  provisioned: done.length,
+  remaining: missing.length,
+  percent: emps.length ? Math.round(100 * done.length / emps.length) + '%' : '-',
+  missingIds: missing
+ };
+ console.table([{ ...out, missingIds: missing.length }]);
+ console.log('ยังไม่ได้ provision:', missing);
+ return out;
+};
+
 // v1.4.28: login() now async — computes hash of input password, matches against stored hash OR legacy plaintext
 async function login(empId, password) {
  const emps = DB.load('employees');
@@ -2292,6 +2418,24 @@ async function login(empId, password) {
  if (DB._localDirty) DB._localDirty = {};
  if (DB._skipCount) DB._skipCount = {};
  auditLog('login', 'user', user.id, `Role: ${user.role}`);
+ // v1.5.30 (Phase 4a): provision the Supabase Auth account in the background using
+ // the password the employee just proved they know. Deliberately not awaited — login
+ // must succeed and the UI must appear whether or not this works.
+ provisionSupabaseAuth(empId, password).then(r => {
+  if (r.ok) {
+   console.log(`[Phase4a] auth ${r.mode} ok for ${empId}`);
+   recordAuthProvisioned(empId, r.mode);
+  } else if (r.configError) {
+   // Misconfiguration, not a per-employee problem — every provision will fail the same
+   // way. Surface it to whoever is on screen instead of hiding it in the console.
+   console.error(`[Phase4a] ตั้งค่า Supabase ผิด: ${r.reason}`);
+   if (currentUser?.role === 'admin' && typeof toast === 'function') {
+    toast('⚠️ Phase 4a: ต้องปิด "Confirm email" ใน Supabase — ตอนนี้บัญชีที่สร้างใช้ไม่ได้', 'error');
+   }
+  } else if (r.reason !== 'no-cloud') {
+   console.warn(`[Phase4a] auth provisioning skipped for ${empId}: ${r.reason} — จะต้องให้ admin reset ก่อนสลับ policy`);
+  }
+ });
  return true;
  }
  return false;
@@ -2301,6 +2445,12 @@ function logout() {
  auditLog('logout', 'user', currentUser?.id);
  currentUser = null;
  sessionStorage.removeItem('hr_currentUser');
+ // v1.5.30 (Phase 4a): end the Supabase session too. It lives in localStorage and
+ // survives a reload, so without this a shared machine would keep an authenticated
+ // session open after the employee logged out of the app.
+ try {
+  if (cloudSync && supa && supa.auth) { supa.auth.signOut().finally(() => location.reload()); return; }
+ } catch (e) { console.warn('[Phase4a] signOut failed:', e.message); }
  location.reload();
 }
 
@@ -13700,6 +13850,16 @@ document.addEventListener('DOMContentLoaded', async () => {
  delete currentUser.password;
  currentUser.forceChangePassword = false;
  sessionStorage.setItem('hr_currentUser', JSON.stringify(currentUser));
+
+ // v1.5.30 (Phase 4a): move the Supabase Auth credential along with the app password.
+ // Without this the auth account keeps the OLD password, and once the policies are
+ // flipped to `authenticated` this employee can no longer reach any data — the failure
+ // would surface days later, at the worst possible moment. Not fatal here: if it fails
+ // the app password change still stands and the employee needs an admin reset.
+ syncAuthPassword(currentUser.id, currentP, p1).then(r => {
+  if (r.ok) { console.log('[Phase4a] auth password synced'); recordAuthProvisioned(currentUser.id, 'password-change'); }
+  else if (r.reason !== 'no-cloud') console.warn('[Phase4a] auth password NOT synced:', r.reason, '— ต้องให้ admin reset ก่อนสลับ policy');
+ });
 
  alertDiv.innerHTML = '<div class="alert alert-success"> เปลี่ยนรหัสผ่านสำเร็จ</div>';
  setTimeout(() => {

@@ -898,7 +898,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.5.28';
+const APP_VERSION = '1.5.29';
 const APP_RELEASE_DATE = '2026-08-19';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2320,8 +2320,14 @@ function uid(prefix) {
  return prefix + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
 }
 
+// v1.5.29 (Phase 3): was `new Date().toISOString().split('T')[0]` — toISOString() is UTC,
+// and Thailand is UTC+7, so from local midnight until 06:59 this returned YESTERDAY.
+// Used in 39 places: requestDate/approvedDate stamps, the default date on every request
+// form, and getPayrollMonth(today()) which decides which payroll cycle counts as
+// "current" — so a request filed at 06:30 on the 22nd landed in the previous cycle.
 function today() {
- return new Date().toISOString().split('T')[0];
+ const d = new Date();
+ return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function formatDate(d) {
@@ -2546,6 +2552,64 @@ function daysBetween(start, end) {
  return Math.floor((e - s) / (1000 * 60 * 60 * 24)) + 1;
 }
 
+// ============================================================
+// v1.5.29 (Phase 3): LEAVE DAY COUNTING
+// ============================================================
+// daysBetween() is a raw calendar span. Using it as the quota-consuming day count
+// meant a Fri–Mon leave cost 4 days instead of 2, and an unpaid Fri–Mon deducted
+// 4 days of salary. It also ignored settings.companyHolidays entirely, so Songkran
+// was billed in full.
+//
+// Day-off resolution mirrors the priority ladder in resolveAttendanceStatus()
+// (ADR-0002) so leave counting and attendance agree:
+//   1. a shift record exists for that employee+date → 'O'/'off' is a day off,
+//      anything else is a working day (shift staff DO work weekends)
+//   2. no shift record → Sat/Sun is a day off, and companyHolidays is a day off
+//
+// NOTE: existing leave records keep whatever `days` value they were stored with.
+// No backfill (decision 19 ส.ค. 2026 — HR: ไม่คืนสิทธิ์ย้อนหลัง). The new rule
+// applies only to leave submitted from v1.5.29 onward.
+
+// TZ-safe day of week — `new Date('2026-08-22').getDay()` parses as UTC and reads
+// back in local time, which is the same bug class as the old today().
+function _dowFromISO(dateStr) {
+ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(dateStr));
+ if (!m) return null;
+ return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).getUTCDay(); // 0=Sun .. 6=Sat
+}
+
+function isNonWorkingDay(employeeId, dateStr, ctx) {
+ const shifts = ctx?.shifts || DB.load('shifts', []);
+ const shiftForDay = shifts.find(s => s.employeeId === employeeId && s.date === dateStr);
+ if (shiftForDay) return shiftForDay.type === 'O' || shiftForDay.type === 'off';
+ const dow = _dowFromISO(dateStr);
+ if (dow === 0 || dow === 6) return true;
+ const holidays = ctx?.companyHolidays || new Set(DB.load('settings', {}).companyHolidays || []);
+ return holidays.has(dateStr);
+}
+
+// Every countable (working) date in [start, end] for this employee.
+function leaveDatesInRange(employeeId, start, end) {
+ const out = [];
+ if (!start || !end || end < start) return out;
+ const ctx = { shifts: DB.load('shifts', []), companyHolidays: new Set(DB.load('settings', {}).companyHolidays || []) };
+ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(start));
+ if (!m) return out;
+ let cur = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+ let guard = 0;
+ while (guard++ < 1000) {
+  const iso = cur.toISOString().slice(0, 10);
+  if (iso > end) break;
+  if (!isNonWorkingDay(employeeId, iso, ctx)) out.push(iso);
+  cur.setUTCDate(cur.getUTCDate() + 1);
+ }
+ return out;
+}
+
+function workingDaysBetween(employeeId, start, end) {
+ return leaveDatesInRange(employeeId, start, end).length;
+}
+
 function isProbation(employee) {
  const start = new Date(employee.startDate);
  const probEnd = new Date(start.getTime() + (DB.load('settings').probationDays * 86400000));
@@ -2672,7 +2736,15 @@ function getLeaveBalance(employeeId) {
 
  // Pro-rate for new hires — VACATION only (personal ไม่ pro-rate ตามกฎหมาย)
  if (startYear === year && !prob) {
- const monthsRemaining = 12 - probEnd.getMonth();
+ // v1.5.29 (Phase 3): was `12 - probEnd.getMonth()`, which reads only the month and
+ // ignores the year. A hire on 15 พ.ย. 2026 with 90-day probation has probEnd in
+ // ก.พ. 2027 → getMonth() = 1 → 11 months credited for 2026, a year in which they
+ // worked six weeks, all of it on probation. If probation ends in a later year the
+ // employee earns no vacation for this year at all.
+ const probEndYear = probEnd.getFullYear();
+ const monthsRemaining = probEndYear > year ? 0
+  : probEndYear < year ? 12
+  : 12 - probEnd.getMonth();
  if (ov.vacation === undefined) vacationQuota = Math.round((vacationQuota * monthsRemaining / 12) * 10) / 10;
  }
 
@@ -2691,11 +2763,25 @@ function getLeaveBalance(employeeId) {
  const used = {
  personal: 0, vacation: 0, sick: 0, maternity: 0, ordination: 0, unpaid: 0, 'comp-off': 0
  };
+ const _quotaKey = t => (t === 'sick-with-cert' || t === 'sick-without-cert') ? 'sick' : t;
  requests.forEach(r => {
  // Map both sick subtypes into 'sick' for quota tracking
- const key = (r.type === 'sick-with-cert' || r.type === 'sick-without-cert') ? 'sick' : r.type;
- used[key] = (used[key] || 0) + r.days;
+ used[_quotaKey(r.type)] = (used[_quotaKey(r.type)] || 0) + r.days;
  });
+
+ // v1.5.29 (Phase 3): PENDING requests consume no quota anywhere in the old flow —
+ // getLeaveBalance counted only 'approved', and approveRequest never re-checked. An
+ // employee could submit four 6-day requests against the same 6-day balance, all four
+ // pass the client gate, and a manager approving them all pushed used to 24/6.
+ // Exposed separately so callers can gate on (remaining - pending) without changing
+ // what "used" means on any existing screen.
+ const pending = {
+ personal: 0, vacation: 0, sick: 0, maternity: 0, ordination: 0, unpaid: 0, 'comp-off': 0
+ };
+ DB.load('leaveRequests')
+ .filter(r => r.employeeId === employeeId && r.status === 'pending' &&
+   new Date(r.startDate).getFullYear() === year)
+ .forEach(r => { pending[_quotaKey(r.type)] = (pending[_quotaKey(r.type)] || 0) + r.days; });
 
  // Comp-off balance from accumulated holidays
  const compOffs = DB.load('accumulatedHolidays').filter(a =>
@@ -2712,13 +2798,15 @@ function getLeaveBalance(employeeId) {
  isProbation: prob,
  probationEnd: probationEndDate(emp),
  yearsOfService,
- personal: { quota: personalQuota, used: used.personal, remaining: personalQuota - used.personal },
- vacation: { quota: vacationQuota, used: used.vacation, remaining: vacationQuota - used.vacation },
- sick: { quota: ov.sick ?? settings.leaveQuotas.sick, used: used.sick, remaining: (ov.sick ?? settings.leaveQuotas.sick) - used.sick },
- maternity: { quota: ov.maternity ?? settings.leaveQuotas.maternity, used: used.maternity, remaining: (ov.maternity ?? settings.leaveQuotas.maternity) - used.maternity },
- ordination: { quota: ov.ordination ?? ordinationQuota, used: used.ordination, remaining: (ov.ordination ?? ordinationQuota) - used.ordination, available: emp.gender === 'male' },
- unpaid: { used: used.unpaid }, // no quota - tracked only
- compOff: { quota: compOffBalance, used: used['comp-off'], remaining: compOffBalance - used['comp-off'] }
+ // v1.5.29: `pending` added per type. `remaining` keeps its old meaning (quota − approved)
+ // so every existing screen reads the same; use `remaining - pending` to gate new requests.
+ personal: { quota: personalQuota, used: used.personal, pending: pending.personal, remaining: personalQuota - used.personal },
+ vacation: { quota: vacationQuota, used: used.vacation, pending: pending.vacation, remaining: vacationQuota - used.vacation },
+ sick: { quota: ov.sick ?? settings.leaveQuotas.sick, used: used.sick, pending: pending.sick, remaining: (ov.sick ?? settings.leaveQuotas.sick) - used.sick },
+ maternity: { quota: ov.maternity ?? settings.leaveQuotas.maternity, used: used.maternity, pending: pending.maternity, remaining: (ov.maternity ?? settings.leaveQuotas.maternity) - used.maternity },
+ ordination: { quota: ov.ordination ?? ordinationQuota, used: used.ordination, pending: pending.ordination, remaining: (ov.ordination ?? ordinationQuota) - used.ordination, available: emp.gender === 'male' },
+ unpaid: { used: used.unpaid, pending: pending.unpaid }, // no quota - tracked only
+ compOff: { quota: compOffBalance, used: used['comp-off'], pending: pending['comp-off'], remaining: compOffBalance - used['comp-off'] }
  };
 }
 
@@ -3294,9 +3382,22 @@ function calcLeaveDays() {
   document.getElementById('leaveDays').value = 'วันที่สิ้นสุดก่อนวันที่เริ่ม';
   return;
  }
- let days = daysBetween(s, e);
+ // v1.5.29 (Phase 3): preview must match what submitLeave() will actually store —
+ // working days only, resolved against the same owner the form will submit for.
+ const _ownerId = (currentUser.role === 'admin' && document.getElementById('leaveOwnerId')?.value)
+  || document.getElementById('leaveOwnerIdHidden')?.value
+  || currentUser.id;
+ let days = workingDaysBetween(_ownerId, s, e);
+ const calendarDays = daysBetween(s, e);
  if (h && s === e) days = 0.5;
- document.getElementById('leaveDays').value = days + ' วัน';
+ const el = document.getElementById('leaveDays');
+ if (days <= 0) {
+  el.value = 'ไม่มีวันทำงานในช่วงนี้ (วันหยุดทั้งหมด)';
+  return;
+ }
+ // Show the skipped days so the employee understands why 4 calendar days = 2 leave days
+ const skipped = calendarDays - (h && s === e ? 1 : days);
+ el.value = days + ' วัน' + (skipped > 0 ? ` (ไม่นับวันหยุด ${skipped} วัน)` : '');
 }
 
 function updateLeaveFormUI() {
@@ -3375,9 +3476,12 @@ async function submitLeave(e, editId) {
   toast('วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มลา', 'error');
   return;
  }
- days = daysBetween(startDate, endDate);
+ // v1.5.29 (Phase 3): count working days only — was daysBetween() (raw calendar span),
+ // which billed weekends and company holidays against the quota and, for unpaid leave,
+ // against salary. Existing records keep their stored value; no backfill.
+ days = workingDaysBetween(ownerId, startDate, endDate);
  if (days <= 0) {
-  toast('จำนวนวันลาไม่ถูกต้อง', 'error');
+  toast('ช่วงวันที่เลือกไม่มีวันทำงานเลย (เป็นวันหยุด/วันหยุดบริษัททั้งหมด)', 'error');
   return;
  }
  if (halfDay && startDate === endDate) days = 0.5;
@@ -3415,8 +3519,18 @@ async function submitLeave(e, editId) {
  // Refund the original days from used → add to remaining
  effectiveRemaining += editReq.days;
  }
- if (days > effectiveRemaining) {
- toast(`สิทธิ์ไม่พอ! คงเหลือ ${effectiveRemaining} วัน`, 'error');
+ // v1.5.29 (Phase 3): subtract days already committed by OTHER pending requests.
+ // Without this, four 6-day requests submitted back to back all passed against the
+ // same 6-day balance and a manager approving them all pushed used to 24/6.
+ let otherPending = b[balMap[type]].pending || 0;
+ if (editReq && editReq.status === 'pending' && balMap[editReq.type] === balMap[type]) {
+ otherPending -= editReq.days; // this request is already inside `pending` — don't double count it
+ }
+ const availableNow = effectiveRemaining - Math.max(0, otherPending);
+ if (days > availableNow) {
+ toast(otherPending > 0
+  ? `สิทธิ์ไม่พอ! คงเหลือ ${effectiveRemaining} วัน แต่มีคำขอรออนุมัติอยู่แล้ว ${otherPending} วัน → ขอได้อีก ${Math.max(0, availableNow)} วัน`
+  : `สิทธิ์ไม่พอ! คงเหลือ ${effectiveRemaining} วัน`, 'error');
  return;
  }
  }
@@ -6383,6 +6497,25 @@ function approveRequest(type, id, approve) {
  const reqs = DB.load(key);
  const r = reqs.find(x => x.id === id);
  if (!r) return;
+
+ // v1.5.29 (Phase 3): re-check the quota at approval time. The submit-time check is
+ // advisory only — it runs against the balance as it looked when the employee filed,
+ // and several requests can be filed before any is approved. This is the gate that
+ // actually holds. Warn rather than hard-block: the approver may legitimately want to
+ // grant it, but they must see that it goes over quota.
+ if (type === 'leave' && approve) {
+ const _bal = getLeaveBalance(r.employeeId);
+ const _map = { personal:'personal', vacation:'vacation', 'sick-with-cert':'sick',
+   'sick-without-cert':'sick', maternity:'maternity', ordination:'ordination', 'comp-off':'compOff' };
+ const _slot = _map[r.type] && _bal[_map[r.type]];
+ if (_slot && r.days > _slot.remaining) {
+  const _emp = getEmployee(r.employeeId);
+  const _name = _emp ? `${_emp.firstName} ${_emp.lastName}` : r.employeeId;
+  if (!confirm(`⚠️ อนุมัติแล้วจะเกินสิทธิ์\n\nพนักงาน: ${_name}\nประเภท: ${getLeaveTypeName(r.type)}\nขอลา: ${r.days} วัน\nคงเหลือจริง: ${_slot.remaining} วัน\nจะเกินไป: ${(r.days - _slot.remaining).toFixed(1)} วัน\n\nยืนยันอนุมัติทั้งที่เกินสิทธิ์?`)) return;
+  auditLog('leave-approve-over-quota', 'leave', r.id,
+   `${_name} ${getLeaveTypeName(r.type)} ${r.days} วัน · คงเหลือ ${_slot.remaining} · เกิน ${(r.days - _slot.remaining).toFixed(1)} วัน · อนุมัติโดย ${currentUser?.id}`);
+ }
+ }
 
  r.status = approve ? 'approved' : 'rejected';
  r.approverNote = note;
@@ -9422,23 +9555,37 @@ function calculatePaySlip(employeeId, year, month) {
  let unpaidDaysThisMonth = 0; // new — count by days (รองรับครึ่งวัน)
  let unpaidHoursLegacy = 0; // backward-compat for old hourly records
  // v1.4.52: filter by PAYROLL month (was calendar) — check each leave day against payroll cutoff
+ // v1.5.29 (Phase 3): share of a leave request that falls inside this payroll cycle.
+ // Returns a fraction of r.days, so the amounts across all cycles always sum back to
+ // exactly r.days — no money is created or lost by the split, and it works for both
+ // pre-v1.5.29 records (days = calendar span) and new ones (days = working days).
+ const _cycleShare = (r) => {
+ if (!r.startDate) return 0;
+ const end = r.endDate || r.startDate;
+ if (r.startDate === end) return getPayrollMonth(r.startDate) === monthStr ? 1 : 0;
+ const dates = leaveDatesInRange(r.employeeId, r.startDate, end);
+ if (dates.length === 0) return getPayrollMonth(r.startDate) === monthStr ? 1 : 0;
+ const inCycle = dates.filter(d => getPayrollMonth(d) === monthStr).length;
+ return inCycle / dates.length;
+ };
  leaves.forEach(r => {
- if (r.type === 'unpaid' && getPayrollMonth(r.startDate) === monthStr) {
+ if (r.type === 'unpaid') {
+ // v1.5.29: was `getPayrollMonth(r.startDate) === monthStr` for the WHOLE request,
+ // while paid leave was already counted per day. An unpaid leave 19–24 ก.ค. with
+ // cutoff 21 charged all 6 days to the July slip even though 22–24 belong to the
+ // August cycle — over-deducting salary in July and under-deducting in August.
+ const share = _cycleShare(r);
+ if (share <= 0) return;
  if (r.unpaidHours && r.unpaidHours > 0) {
- // Legacy hourly record
- unpaidHoursLegacy += r.unpaidHours;
+ unpaidHoursLegacy += r.unpaidHours * share; // Legacy hourly record
  } else {
- // New day-based record (รวมครึ่งวัน via r.days = 0.5)
- unpaidDaysThisMonth += r.days || 0;
+ unpaidDaysThisMonth += (r.days || 0) * share; // day-based (ครึ่งวัน = 0.5)
  }
  return;
  }
- const start = new Date(r.startDate);
- const end = new Date(r.endDate);
- for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+ const dates = leaveDatesInRange(r.employeeId, r.startDate, r.endDate || r.startDate);
  // v1.4.52: use payroll month for per-day counting (multi-day leaves may span cutoff)
- if (getPayrollMonth(d.toISOString().slice(0,10)) === monthStr) leaveDays++;
- }
+ leaveDays += dates.filter(d => getPayrollMonth(d) === monthStr).length;
  });
 
  // Salary calculation
@@ -9484,8 +9631,15 @@ function calculatePaySlip(employeeId, year, month) {
  }
  return false;
  });
- const hasLateThisMonth = attendance.some(r => r.checkIn && r.checkIn >= diligenceLateThreshold);
- const hasAbsentThisMonth = attendance.some(r => !r.checkIn);
+ // v1.5.29 (Phase 3): exclude approved Field Work days, matching lateRecords above.
+ // Per ADR-0002 Q3 B a field-work day is protected from late/absent detection, but the
+ // diligence gate ignored that — an employee working off-site whose scan came in late
+ // kept their late deduction waived yet still lost the ฿500 bonus.
+ // The day-agnostic threshold is deliberate (v1.5.0 note: per-day would over-complicate
+ // an "any late = no bonus" gate) and is left as-is.
+ const _protectedDay = r => r._fieldWork || cycleFieldWorkDates.has(r.date);
+ const hasLateThisMonth = attendance.some(r => !_protectedDay(r) && r.checkIn && r.checkIn >= diligenceLateThreshold);
+ const hasAbsentThisMonth = attendance.some(r => !_protectedDay(r) && !r.checkIn);
  // v1.4.54 Q4.2 B: diligence gate uses CYCLE workDays (consistent with late/absent scoping)
  const eligibleForDiligence = !hasLeaveThisMonth && !hasLateThisMonth && !hasAbsentThisMonth && _workDaysCycle > 0;
  const diligenceAmount = eligibleForDiligence ? diligenceBonus : 0;

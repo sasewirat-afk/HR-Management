@@ -6,6 +6,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.29] — 2026-08-19 (Phase 3: leave and payroll calculation corrections)
+
+**Changes what employees are charged and paid. No stored record is modified — no backfill.**
+
+### Decision on record
+HR ruled on 19 ส.ค. 2026: **ไม่คืนสิทธิ์ย้อนหลัง.** Existing leave records keep the `days` value they were stored with. The new counting rule applies only to leave submitted from v1.5.29 onward. Employees will therefore see two conventions in their own history for the 2026 leave year; that is intentional.
+
+### Fixed
+- **`today()` returned yesterday between 00:00 and 07:00.** It derived the date from `toISOString()`, which is UTC, while Thailand is UTC+7. Used in 39 places — request date stamps, every form's default date, and `getPayrollMonth(today())`, which decides the "current" payroll cycle. A request filed at 06:30 on the 22nd landed in the previous cycle.
+- **Leave days counted weekends and company holidays.** `daysBetween()` is a raw calendar span; a Fri–Mon leave cost 4 days of quota instead of 2, and an unpaid Fri–Mon deducted 4 days of salary. Songkran was billed in full. New `workingDaysBetween()` resolves days off through the same priority ladder as `resolveAttendanceStatus()` (ADR-0002): an explicit shift record wins (so shift staff who work Saturdays are counted correctly, and an `'O'` weekday is a day off), otherwise weekend and `settings.companyHolidays` apply. The leave form now shows how many days were skipped.
+- **Pending requests consumed no quota.** `getLeaveBalance` counted only `approved` and `approveRequest` never re-checked, so four 6-day requests filed back to back all passed against the same 6-day balance and approving them all pushed used to 24/6. `getLeaveBalance` now returns `pending` per type, `submitLeave` gates on `remaining - pending` (excluding the request being edited), and `approveRequest` re-checks at approval time — warning with an explicit over-quota confirmation and an audit entry rather than silently allowing it.
+- **Unpaid leave spanning the cutoff was billed to one cycle.** It was attributed by `getPayrollMonth(r.startDate)` for the whole request while paid leave was already counted per day. An unpaid leave 19–24 ก.ค. with cutoff 21 charged all of it to the July slip although 22–24 belong to the August cycle. Now split proportionally, so the amounts across cycles sum back to exactly `r.days` — the split can neither create nor lose money, and it works for pre-v1.5.29 records too.
+- **New-hire vacation pro-rating ignored the year.** `12 - probEnd.getMonth()` reads only the month, so a hire on 15 พ.ย. 2026 whose probation ends ก.พ. 2027 was credited 11/12 of a full year's vacation for 2026 — a year in which they worked six weeks, all on probation.
+- **Diligence bonus ignored the field-work exemption.** Per ADR-0002 Q3 B an approved field-work day is protected from late and absent detection, and `lateRecords` honours that — but the diligence gate did not. An employee working off-site whose scan came in late kept the late deduction waived yet still lost the ฿500 bonus. The day-agnostic threshold is deliberate (v1.5.0) and is left alone.
+
+### Verified
+31 assertions in an offline copy with Supabase disconnected, then the copy deleted: local-date `today()`; Fri→Mon = 2 days; company holiday excluded; shift `'O'` weekday off and shift Saturday working; pending counted and the fourth request blocked where the old gate allowed it; editing a pending request not double-counted; unpaid 19–24 ก.ค. split 2 + 3 with the total conserved to the baht; pro-rating 0 months when probation ends next year; and a late scan on a field-work day no longer costing the bonus while still costing no deduction.
+
+---
+
 ## [1.5.28] — 2026-08-19 (CRITICAL: stale cache overwrote cloud — root cause of the LWW races)
 
 **Phase 1 of the 19 ส.ค. code review remediation. Client-side only — no schema change, no data migration, nothing written to Supabase by this release.**

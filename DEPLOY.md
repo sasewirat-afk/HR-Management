@@ -68,7 +68,10 @@ git push -u origin main
    - **Build Command:** (ปล่อยว่าง)
    - **Output Directory:** (ปล่อยว่าง)
 4. กด **Deploy**
-5. รอประมาณ 30 วินาที → ได้ URL เช่น `https://crochet-hr.vercel.app` 🎉
+5. รอประมาณ 30 วินาที → Vercel จะให้ URL มา 🎉
+
+> **URL production ที่ใช้งานจริงตอนนี้:** https://hr-management-iota-ashy.vercel.app/
+> (เอกสารเวอร์ชันก่อนหน้ายกตัวอย่างเป็น `crochet-hr.vercel.app` ซึ่งไม่มีอยู่จริง — ตอบ 404)
 
 ### วิธีที่ 2: ใช้ Vercel CLI
 

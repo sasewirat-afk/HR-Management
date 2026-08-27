@@ -6,6 +6,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.32] — 2026-08-27 (INCIDENT: data destroyed when localStorage was full)
+
+**141 leave and OT requests were destroyed between 20 and 27 ส.ค. 2026. All were recovered from the Phase 0 history table. This release fixes the cause.**
+
+### What happened
+Attachments pushed the database past iOS Safari's ~5 MB localStorage ceiling — 8.1 MB on 19 ส.ค., 12.5 MB by 27 ส.ค., with 91% of that growth being base64 images inside `otRequests`, `leaveRequests` and `timeCertRequests`.
+
+On a device at the ceiling:
+
+1. the cloud pull fetched the current data
+2. `_setRaw` cleared the cache, then `localStorage.setItem` threw QuotaExceededError
+3. every caller swallowed that error and moved on
+4. `DB.load()` fell back to whatever stale copy localStorage still held — days old
+5. the app rendered and operated on it
+6. the next `DB.save()` pushed that stale array over the cloud
+
+Step 6 deleted every record anyone else had written since that stale snapshot. Observed shrinks: −52, −39, −31, −16, −9 and −4 records in single writes. It also explains the reports of approved requests returning to pending — the stale array carried the older status.
+
+**v1.5.28 introduced `_setRaw` and fixed the path where setItem succeeds. It did not address the path where setItem fails, and that became the common path once the data outgrew the quota.** The v1.5.28 entry described it as a single choke point that closed the data-loss hole; that claim was never tested against a full localStorage and was wrong.
+
+### Fixed
+- **`_setRaw(key, str, freshValue)`** — when the write fails on quota, the freshly pulled value is kept in the in-memory cache, so the session still reads cloud-correct data instead of falling back to a stale copy. `cloudPullAllSafe` now passes `row.value` for this.
+- **Unsafe-key tracking** — if the write fails and no fresh value is available, the key is marked untrustworthy and `_cloudUpsert` refuses to push it, telling the user to reopen the app. A later clean write clears the mark.
+- **`DB.save()` under quota** — the value being saved is now placed in the cache. Previously the cache was cleared, the write failed, and the user's own edit vanished from subsequent reads.
+
+### Also deployed (database side, no app release needed)
+A `hr_data_guard` BEFORE UPDATE trigger rejects any write that shrinks a transactional array by 3 or more records. Legitimate deletes remove one at a time; every write in this incident removed 4 or more. It took effect for all devices at once without waiting for anyone to reload, and can be bypassed deliberately with `SET LOCAL hr.allow_bulk_delete = 'on'`.
+
+### Verified
+9 assertions against a stubbed localStorage that throws QuotaExceededError, plus the same suite against the previous build as a control. The control reproduces the incident exactly: the app reads 2 stale records instead of 3, and the push sends `r1, r2, r4` — destroying `r3`, which another device had written. This build sends all four.
+
+### Still open
+Attachments are still stored as base64 inside the synced arrays and still account for ~69% of the database. Client-side image compression is the next change; moving attachments to Supabase Storage is the durable fix.
+
+---
+
 ## [1.5.31] — 2026-08-20 (Phase 4a step 5: auth-first login)
 
 **Groundwork for closing anonymous access. Behaviour changes only for employees already provisioned — they now sign in through Supabase instead of a hash comparison in the browser.**

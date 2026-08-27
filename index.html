@@ -898,8 +898,8 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.5.31';
-const APP_RELEASE_DATE = '2026-08-20';
+const APP_VERSION = '1.5.32';
+const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
 document.addEventListener('DOMContentLoaded', () => {
@@ -981,9 +981,47 @@ const DB = {
  // pulling at a time when the cache is already populated (startup was safe
  // because the cache is empty then).
  // Rule from now on: NEVER call localStorage.setItem('hr_'+key, …) directly.
- _setRaw(key, str) {
+ // v1.5.32 INCIDENT FIX: `freshValue` is the parsed value being written, when the caller
+ // has it. It matters only when localStorage is FULL.
+ //
+ // What went wrong 20–27 ส.ค. 2026 (141 requests destroyed):
+ // attachments pushed the database past iOS Safari's ~5 MB localStorage ceiling. On a
+ // full device setItem throws — but the cache had already been cleared on the line
+ // above, and every caller simply swallowed the error and moved on. DB.load() then fell
+ // back to whatever stale copy localStorage still held (days old), the app rendered and
+ // operated on it, and the next DB.save() pushed that stale array over the cloud —
+ // deleting every record other people had written since.
+ //
+ // v1.5.28 introduced this choke point and fixed the path where setItem SUCCEEDS. It
+ // did not address the path where it fails, which became the common case once the data
+ // outgrew the quota. Two defences now:
+ //   1. keep the fresh value in memory, so this session still reads cloud-correct data
+ //   2. if we have no fresh value, mark the key unsafe — _cloudUpsert refuses to push it
+ _setRaw(key, str, freshValue) {
  this._cache.delete(key);
- localStorage.setItem('hr_' + key, str);
+ try {
+  localStorage.setItem('hr_' + key, str);
+  if (this._quotaFailed) this._quotaFailed.delete(key); // wrote cleanly — key is trustworthy again
+ } catch (e) {
+  const isQuota = e.name === 'QuotaExceededError' ||
+                  (e.message && e.message.toLowerCase().includes('quota'));
+  if (isQuota) {
+   this._quotaFailed = this._quotaFailed || new Set();
+   if (freshValue !== undefined) {
+    this._cache.set(key, freshValue);      // reads stay correct for this session
+    this._quotaFailed.delete(key);
+   } else {
+    this._quotaFailed.add(key);            // cannot trust local copy — block pushes
+    console.error(`[DB v1.5.32] '${key}' ไม่สามารถ cache ได้ (localStorage เต็ม) และไม่มีค่าสดในหน่วยความจำ — ห้าม push key นี้`);
+   }
+  }
+  throw e; // callers still count/report the failure
+ }
+ },
+
+ // v1.5.32: is this key's local copy known to be untrustworthy?
+ _isUnsafe(key) {
+ return !!(this._quotaFailed && this._quotaFailed.has(key));
  },
 
  load(key, def = []) {
@@ -1092,6 +1130,13 @@ const DB = {
  if (typeof toast === 'function') {
  toast(`⚠️ localStorage เต็ม — '${key}' (${(stored.length/1024).toFixed(0)}KB)`, 'error');
  }
+ // v1.5.32: the cache was cleared at the top of save() and the write just failed, so
+ // localStorage still holds an OLDER copy. Without this line the next DB.load() would
+ // hand back that stale copy — silently discarding the change the user just made and
+ // re-arming the same stale-overwrite that destroyed 141 records in ส.ค. 2026.
+ // `val` IS the correct current state here, so keep it in memory.
+ this._cache.set(key, val);
+ if (this._quotaFailed) this._quotaFailed.delete(key);
  // Continue — cloud upsert will still fire
  } else {
  throw e;
@@ -1139,6 +1184,18 @@ const DB = {
  async _cloudUpsert(key, val) {
  if (val === undefined) {
  console.warn(`[CloudUpsert] refused undefined for '${key}'`);
+ return;
+ }
+ // v1.5.32 INCIDENT FIX: never push a key whose cloud copy this device failed to cache.
+ // localStorage is full, so the local array is an older snapshot; pushing it deletes
+ // everything written by anyone else since. This is the write that destroyed 141 leave
+ // and OT requests between 20 and 27 ส.ค. 2026. The database now also refuses such a
+ // write via the hr_data_guard trigger — this is the client-side half of that defence.
+ if (this._isUnsafe(key)) {
+ console.error(`[CloudUpsert v1.5.32] ปฏิเสธการ push '${key}' — เครื่องนี้ cache ข้อมูลจาก cloud ไม่สำเร็จ ข้อมูลในเครื่องเก่ากว่าจริง`);
+ if (typeof toast === 'function') {
+  toast('⚠️ พื้นที่ในเบราว์เซอร์เต็ม — ระบบหยุดบันทึกไว้เพื่อไม่ให้ข้อมูลของคนอื่นหาย กรุณาปิดแอปแล้วเปิดใหม่', 'error');
+ }
  return;
  }
  // v1.4.11: outer try/finally GUARANTEES dirty counter is always decremented,
@@ -1291,7 +1348,9 @@ const DB = {
  // v1.4.46: use compression helper + graceful quota handling for mobile iOS Safari
  try {
  const stored = DB._compressForStorage(row.value);
- DB._setRaw(row.key, stored); // v1.5.28 CRITICAL: was localStorage.setItem — this is THE line that let stale cache overwrite the cloud
+ // v1.5.32: pass row.value so that if localStorage is full, the freshly pulled cloud
+ // data still lands in the in-memory cache instead of the app falling back to a stale copy
+ DB._setRaw(row.key, stored, row.value);
  pulled++;
  } catch (e) {
  if (e.name === 'QuotaExceededError' || (e.message && e.message.toLowerCase().includes('quota'))) {

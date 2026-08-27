@@ -898,7 +898,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.5.32';
+const APP_VERSION = '1.5.33';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -1325,19 +1325,53 @@ const DB = {
  }
  }
  try {
- let query = supa.from('hr_data').select('*');
+ // v1.5.33: fetch a MANIFEST first (key + updated_at only, no values), then pull the
+ // values one key at a time.
+ //
+ // `select('*')` returned every key's value in a single response. Once attachments took
+ // the database past ~20 MB that statement stopped finishing inside Supabase's statement
+ // timeout, and the whole app failed to load with "canceling statement due to statement
+ // timeout" — a total outage, because this pull runs before anything else at startup.
+ //
+ // Per-key requests keep each statement small however large the database grows, and the
+ // manifest lets us skip unchanged keys so the common case gets cheaper too. A single
+ // oversized key can still fail, but it now fails alone instead of taking the other 22
+ // down with it.
  let mode = 'FULL';
+ let cutoff = null;
  if (lastPullStr && !force) {
  // v1.4.40: subtract 60-second safety margin from watermark before querying.
  // Catches records written by another device between our last watermark and this query.
  // Pulled records are idempotent (localStorage.setItem overwrites with same value = no-op).
  const SAFE_MARGIN_MS = 60 * 1000;
- const safeCutoff = new Date(Math.max(0, new Date(lastPullStr).getTime() - SAFE_MARGIN_MS)).toISOString();
- query = query.gt('updated_at', safeCutoff);
+ cutoff = new Date(Math.max(0, new Date(lastPullStr).getTime() - SAFE_MARGIN_MS)).toISOString();
  mode = 'INCREMENTAL';
  }
- const { data, error } = await query;
- if (error) throw error;
+
+ let manifestQ = supa.from('hr_data').select('key,updated_at');
+ if (cutoff) manifestQ = manifestQ.gt('updated_at', cutoff);
+ const { data: manifest, error: manifestErr } = await manifestQ;
+ if (manifestErr) throw manifestErr;
+
+ const data = [];
+ const failedKeys = [];
+ for (const row of (manifest || [])) {
+ const { data: one, error: oneErr } = await supa
+  .from('hr_data').select('value').eq('key', row.key).maybeSingle();
+ if (oneErr) {
+  // One key failing must not abort the whole pull — the others are still usable.
+  console.error(`[cloudPullAllSafe v1.5.33] ดึง '${row.key}' ไม่สำเร็จ: ${oneErr.message}`);
+  failedKeys.push(row.key);
+  continue;
+ }
+ if (one) data.push({ key: row.key, value: one.value, updated_at: row.updated_at });
+ }
+ if (failedKeys.length > 0 && data.length === 0) {
+ throw new Error('ดึงข้อมูลไม่สำเร็จทุก key: ' + failedKeys.join(', '));
+ }
+ if (failedKeys.length > 0 && typeof toast === 'function') {
+ toast(`⚠️ ดึงข้อมูลบางส่วนไม่สำเร็จ (${failedKeys.join(', ')}) — ข้อมูลอาจไม่ครบ`, 'error');
+ }
  let pulled = 0;
  let quotaExceededKeys = [];
  if (data && data.length > 0) {

@@ -6,6 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.33] — 2026-08-27 (OUTAGE: startup pull exceeded the database statement timeout)
+
+**The app stopped loading for everyone. `SELECT * FROM hr_data` no longer finished inside Supabase's statement timeout.**
+
+### What happened
+Recovering the 141 destroyed records brought their attachments back with them — `otRequests` 475 → 595, `leaveRequests` 201 → 222, roughly +10 MB. The startup pull fetched every key's value in one statement, and past ~20 MB that statement began returning `canceling statement due to statement timeout`. Because the pull runs before anything else at startup, the failure presented as a total outage rather than as missing data.
+
+Two contributing decisions, both mine:
+- The recovery scripts restored full records without considering that the same attachments which caused the original incident would double the database.
+- The pull had always been a single `select('*')`. That was survivable at 8 MB and is not at 23 MB, and nothing in the design degraded gracefully as the data grew.
+
+### Fixed
+- **Manifest-then-per-key pull.** `cloudPullAllSafe` now fetches `key,updated_at` for the changed rows — a few hundred bytes — and then requests each key's value individually. Every statement stays small no matter how large the database grows.
+- **One key failing no longer takes the app down.** A key that errors is logged, reported to the user, and skipped; the remaining keys still load and the app still starts. Previously any failure aborted the whole pull.
+- Incremental mode is unchanged in behaviour: the cutoff now filters the manifest, so unchanged keys are never fetched at all — the common case gets cheaper too.
+
+### Also done (database side)
+`statement_timeout` raised to 60s for `anon` and `authenticated` to restore service immediately. That is a stopgap, not a fix — reversible with `ALTER ROLE anon RESET statement_timeout;` once the data is back to a sane size.
+
+### Verified
+13 assertions against a stubbed Supabase client, plus the same suite against the previous build as a control. The control confirms the old path issued `select('*')` and pulled nothing when the response failed. The new path never issues `select('*')`, fetches one key at a time, and — with a key deliberately made to time out — still loads the other three and reports success.
+
+### Still open
+Attachments remain base64 inside the synced arrays and are now ~69% of a much larger database. Nothing here reduces the data; it only stops the size from breaking the app. Moving attachments to Supabase Storage is the fix that matters.
+
+---
+
 ## [1.5.32] — 2026-08-27 (INCIDENT: data destroyed when localStorage was full)
 
 **141 leave and OT requests were destroyed between 20 and 27 ส.ค. 2026. All were recovered from the Phase 0 history table. This release fixes the cause.**

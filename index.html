@@ -898,7 +898,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.5.33';
+const APP_VERSION = '1.5.34';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2615,6 +2615,77 @@ function uid(prefix) {
  return prefix + '_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
 }
 
+// ============================================================
+// v1.5.34: ATTACHMENTS LIVE OUTSIDE hr_data
+// ============================================================
+// Base64 attachments stored inside the request arrays have now broken this system
+// twice. In v1.4.57 otRequests reached 3.73 MB and cloud sync failed; the response
+// then was to delete every attachment. Nothing changed on the WRITE path, so they
+// grew straight back — 23.4 MB by 27 ส.ค. 2026, which exceeded the browser storage
+// quota, let stale data overwrite the cloud (141 requests destroyed), and finally
+// stopped the app loading at all.
+//
+// Deleting them again would only start a third cycle. Attachments now live in their
+// own table and are fetched only when someone actually opens one. The request record
+// keeps `attachmentName` plus a `hasAttachment` flag — tens of bytes instead of
+// hundreds of kilobytes.
+//
+// Reads are backward compatible: a record still carrying an inline `attachment`
+// renders straight from it, so this works whether or not the data migration has run.
+
+async function uploadAttachment(recordId, sourceKey, dataUrl, fileName) {
+ if (!cloudSync || !supa) return { ok: false, reason: 'no-cloud' };
+ try {
+  const { error } = await supa.from('hr_attachments').upsert({
+   id: recordId, source_key: sourceKey,
+   attachment: dataUrl, attachment_name: fileName || null
+  }, { onConflict: 'id' });
+  return error ? { ok: false, reason: error.message } : { ok: true };
+ } catch (e) { return { ok: false, reason: e.message }; }
+}
+
+const _attachmentCache = new Map();
+
+async function openAttachment(recordId, fallbackName) {
+ try {
+  let rec = _attachmentCache.get(recordId);
+  if (!rec) {
+   if (!cloudSync || !supa) { toast('ต้องเชื่อมต่ออินเทอร์เน็ตเพื่อเปิดไฟล์แนบ', 'error'); return; }
+   toast('กำลังโหลดไฟล์แนบ...', 'info');
+   const { data, error } = await supa.from('hr_attachments')
+    .select('attachment,attachment_name').eq('id', recordId).maybeSingle();
+   if (error || !data || !data.attachment) { toast('ไม่พบไฟล์แนบ', 'error'); return; }
+   rec = data;
+   _attachmentCache.set(recordId, rec);
+  }
+  const a = document.createElement('a');
+  a.href = rec.attachment;
+  a.download = rec.attachment_name || fallbackName || 'attachment';
+  a.target = '_blank';
+  document.body.appendChild(a); a.click(); a.remove();
+ } catch (e) {
+  toast('เปิดไฟล์แนบไม่สำเร็จ: ' + e.message, 'error');
+ }
+}
+
+// One renderer for every place that shows an attachment link, so legacy inline records
+// and new out-of-band ones both work without each call site knowing the difference.
+function attachmentLinkHtml(r, prefix) {
+ const name = r.attachmentName || 'ไฟล์แนบ';
+ const pre = prefix === undefined ? '📎 ' : prefix;
+ if (r.attachment) {
+  return `<a href="${r.attachment}" target="_blank" download="${esc(name)}">${pre}${esc(name)}</a>`;
+ }
+ if (r.hasAttachment) {
+  return `<a href="#" onclick="openAttachment('${esc(r.id)}','${esc(name)}');return false;">${pre}${esc(name)}</a>`;
+ }
+ return '';
+}
+
+function hasAnyAttachment(r) {
+ return !!(r && (r.attachment || r.hasAttachment));
+}
+
 // v1.5.29 (Phase 3): was `new Date().toISOString().split('T')[0]` — toISOString() is UTC,
 // and Thailand is UTC+7, so from local midnight until 06:59 this returned YESTERDAY.
 // Used in 39 places: requestDate/approvedDate stamps, the default date on every request
@@ -3648,7 +3719,7 @@ function showLeaveForm(editId, presetEmployeeId) {
  <label id="attachLabel">แนบไฟล์ (ไม่จำเป็น)</label>
  <input type="file" id="leaveFile" accept="image/*,application/pdf">
  <div id="attachHint" class="text-sm" style="margin-top:4px;"></div>
- ${editReq?.attachment ? `<div class="text-sm" style="margin-top:6px;"> ไฟล์เดิม: <a href="${editReq.attachment}" target="_blank" download="${esc(editReq.attachmentName)}">${esc(editReq.attachmentName)}</a> <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
+ ${hasAnyAttachment(editReq) ? `<div class="text-sm" style="margin-top:6px;"> ไฟล์เดิม: ${attachmentLinkHtml(editReq, '')} <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
  </div>
  </form>
  `;
@@ -3791,7 +3862,7 @@ async function submitLeave(e, editId) {
  toast(`ลาป่วยมีใบรับรองแพทย์ ต้องลามากกว่า ${sickThreshold} วัน`, 'error');
  return;
  }
- if (type === 'sick-with-cert' && !file && !editReq?.attachment) {
+ if (type === 'sick-with-cert' && !file && !hasAnyAttachment(editReq)) {
  toast('ลาป่วยมีใบรับรองแพทย์ ต้องแนบไฟล์ใบรับรอง', 'error');
  return;
  }
@@ -3836,19 +3907,25 @@ async function submitLeave(e, editId) {
  }
 
  // Handle file
- let attachment = editReq?.attachment || null;
+ let attachment = editReq?.attachment || null;        // legacy inline blob, carried forward untouched
  let attachmentName = editReq?.attachmentName || null;
+ let hasAttachment = !!(editReq?.hasAttachment || attachment);
+ let _newAttachmentData = null;                        // v1.5.34: held aside, never enters the record
  if (file) {
  if (file.size > 2 * 1024 * 1024) {
  toast('ไฟล์ใหญ่เกิน 2MB', 'error');
  return;
  }
- attachment = await new Promise(r => {
+ _newAttachmentData = await new Promise(r => {
  const reader = new FileReader();
  reader.onload = () => r(reader.result);
  reader.readAsDataURL(file);
  });
  attachmentName = file.name;
+ // v1.5.34: the blob must NOT go into the synced array. Storing it here is what
+ // grew otRequests to 3.73 MB in v1.4.57 and to 23.4 MB again in ส.ค. 2026.
+ attachment = null;
+ hasAttachment = true;
  }
 
  if (editReq) {
@@ -3859,13 +3936,19 @@ async function submitLeave(e, editId) {
  ...editReq,
  startDate, endDate, days, halfDay,
  unpaidHours: 0, // deprecated — now uses days field
- reason, attachment, attachmentName,
+ reason, attachment, attachmentName, hasAttachment,
  status: 'pending', // reset to pending after edit
  approverNote: wasApproved ? '(แก้ไขใหม่หลังอนุมัติ — รออนุมัติใหม่)' : editReq.approverNote,
  approvedDate: null,
  lastEditedAt: new Date().toISOString(),
  editCount: (editReq.editCount || 0) + 1
  };
+ // v1.5.34: store the blob out of band BEFORE saving, so a failed upload does not
+ // leave a record claiming an attachment that cannot be opened.
+ if (_newAttachmentData) {
+ const up = await uploadAttachment(editId, 'leaveRequests', _newAttachmentData, attachmentName);
+ if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
+ }
  DB.save('leaveRequests', reqs);
 
  if (editReq.managerId) {
@@ -3888,7 +3971,7 @@ async function submitLeave(e, editId) {
  type, startDate, endDate, days,
  halfDay,
  unpaidHours: 0, // deprecated — now uses days field
- reason, attachment, attachmentName,
+ reason, attachment, attachmentName, hasAttachment,
  status: isAdminCreating ? 'approved' : 'pending',
  requestDate: today(),
  managerId: owner.managerId,
@@ -3896,6 +3979,12 @@ async function submitLeave(e, editId) {
  approvedDate: isAdminCreating ? today() : null,
  approvedBy: isAdminCreating ? currentUser.id : null
  };
+
+ // v1.5.34: upload before saving — a record must never claim an attachment that is not there
+ if (_newAttachmentData) {
+ const up = await uploadAttachment(req.id, 'leaveRequests', _newAttachmentData, attachmentName);
+ if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
+ }
 
  reqs.push(req);
  DB.save('leaveRequests', reqs);
@@ -3964,7 +4053,7 @@ function showLeaveDetail(id) {
  <tr><td><strong>สถานะ:</strong></td><td>${getStatusBadge(r.status)}</td></tr>
  ${r.approverNote ? `<tr><td><strong>หมายเหตุ:</strong></td><td>${esc(r.approverNote)}</td></tr>` : ''}
  ${r.approvedDate ? `<tr><td><strong>วันที่อนุมัติ:</strong></td><td>${formatDate(r.approvedDate)}</td></tr>` : ''}
- ${r.attachment ? `<tr><td><strong>ไฟล์แนบ:</strong></td><td><a href="${r.attachment}" download="${esc(r.attachmentName)}" target="_blank">${esc(r.attachmentName)}</a></td></tr>` : ''}
+ ${hasAnyAttachment(r) ? `<tr><td><strong>ไฟล์แนบ:</strong></td><td>` + attachmentLinkHtml(r, '') + `</td></tr>` : ''}
  </table>
  `;
  const canEdit = currentUser.role === 'admin' && r.status !== 'rejected';
@@ -4049,7 +4138,7 @@ function renderMyOT() {
  <td>${formatDate(r.date)}</td>
  <td>${r.startTime} - ${r.endTime}</td>
  <td>${r.hours} ชม.</td>
- <td style="max-width:200px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎 ${esc(r.attachmentName)}</a>` : ''}</td>
+ <td style="max-width:200px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, "📎 ") : ''}</td>
  <td>${getStatusBadge(r.status)}</td>
  <td style="white-space:nowrap;">
  ${r.status !== 'rejected' ? `<button class="btn btn-sm btn-primary" onclick="showOTForm('${r.id}')">แก้ไข</button>` : ''}
@@ -4105,7 +4194,7 @@ function showOTForm(editId) {
  <label>แนบรูป/เอกสารประกอบ (ไม่จำเป็น)</label>
  <input type="file" id="otFile" accept="image/*,application/pdf">
  <div class="text-sm" style="margin-top:4px;color:var(--gray-500);">ภาพ JPG/PNG หรือ PDF — ขนาดไม่เกิน 2 MB · ใช้แนบหลักฐานงาน เช่น email, ภาพหน้าจอ, ใบ work order</div>
- ${editReq?.attachment ? `<div class="text-sm" style="margin-top:8px;padding:8px 12px;background:var(--gray-100);border-radius:6px;">📎 ไฟล์เดิม: <a href="${editReq.attachment}" target="_blank" download="${esc(editReq.attachmentName)}">${esc(editReq.attachmentName)}</a> <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
+ ${hasAnyAttachment(editReq) ? `<div class="text-sm" style="margin-top:8px;padding:8px 12px;background:var(--gray-100);border-radius:6px;">📎 ไฟล์เดิม: ${attachmentLinkHtml(editReq, '')} <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
  </div>
  </form>
  `;
@@ -4169,19 +4258,25 @@ async function submitOT(e, editId) {
  const file = document.getElementById('otFile')?.files[0];
 
  // Handle attachment
- let attachment = editReq?.attachment || null;
+ let attachment = editReq?.attachment || null;        // legacy inline blob, carried forward untouched
  let attachmentName = editReq?.attachmentName || null;
+ let hasAttachment = !!(editReq?.hasAttachment || attachment);
+ let _newAttachmentData = null;                        // v1.5.34: held aside, never enters the record
  if (file) {
  if (file.size > 2 * 1024 * 1024) {
  toast('ไฟล์ใหญ่เกิน 2 MB', 'error');
  return;
  }
- attachment = await new Promise(r => {
+ _newAttachmentData = await new Promise(r => {
  const reader = new FileReader();
  reader.onload = () => r(reader.result);
  reader.readAsDataURL(file);
  });
  attachmentName = file.name;
+ // v1.5.34: this is the exact line that grew otRequests to 23.4 MB — the blob
+ // stays out of the synced array now.
+ attachment = null;
+ hasAttachment = true;
  }
 
  const [sh, sm] = startTime.split(':').map(Number);
@@ -4197,13 +4292,18 @@ async function submitOT(e, editId) {
  reqs[idx] = {
  ...editReq,
  date, startTime, endTime, hours, reason,
- attachment, attachmentName,
+ attachment, attachmentName, hasAttachment,
  status: 'pending',
  approverNote: wasApproved ? '(แก้ไขใหม่หลังอนุมัติ — รออนุมัติใหม่)' : editReq.approverNote,
  approvedDate: null,
  lastEditedAt: new Date().toISOString(),
  editCount: (editReq.editCount || 0) + 1
  };
+ // v1.5.34: upload before saving — never record an attachment that is not there
+ if (_newAttachmentData) {
+ const up = await uploadAttachment(editId, 'otRequests', _newAttachmentData, attachmentName);
+ if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
+ }
  DB.save('otRequests', reqs);
 
  if (editReq.managerId) {
@@ -4221,11 +4321,17 @@ async function submitOT(e, editId) {
  const req = {
  id: uid('OT'), employeeId: currentUser.id,
  date, startTime, endTime, hours, reason,
- attachment, attachmentName,
+ attachment, attachmentName, hasAttachment,
  status: 'pending', requestDate: today(),
  managerId: currentUser.managerId,
  approverNote: '', approvedDate: null
  };
+
+ // v1.5.34: upload before saving — never record an attachment that is not there
+ if (_newAttachmentData) {
+ const up = await uploadAttachment(req.id, 'otRequests', _newAttachmentData, attachmentName);
+ if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
+ }
 
  reqs.push(req);
  DB.save('otRequests', reqs);
@@ -4268,7 +4374,7 @@ function renderMyTimeCert() {
  <td>${formatDate(r.date)}</td>
  <td><strong>${r.claimedCheckIn}</strong></td>
  <td>${r.claimedCheckOut || '-'}</td>
- <td style="max-width:200px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎 ${esc(r.attachmentName)}</a>` : ''}</td>
+ <td style="max-width:200px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, "📎 ") : ''}</td>
  <td>${getStatusBadge(r.status)}</td>
  <td style="white-space:nowrap;">
  ${r.status === 'pending' ? `<button class="btn btn-sm btn-primary" onclick="showTimeCertForm('${r.id}')">แก้ไข</button>` : ''}
@@ -4311,7 +4417,7 @@ function showTimeCertForm(editId) {
  <label>แนบหลักฐาน (ไม่จำเป็น)</label>
  <input type="file" id="tcFile" accept="image/*,application/pdf">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ภาพ JPG/PNG หรือ PDF — ไม่เกิน 2 MB · เช่น email, screenshot, ภาพถ่ายในที่ทำงาน</div>
- ${editReq?.attachment ? `<div class="text-sm" style="margin-top:8px;">📎 ไฟล์เดิม: <a href="${editReq.attachment}" target="_blank" download="${esc(editReq.attachmentName)}">${esc(editReq.attachmentName)}</a></div>` : ''}
+ ${hasAnyAttachment(editReq) ? `<div class="text-sm" style="margin-top:8px;">📎 ไฟล์เดิม: ${attachmentLinkHtml(editReq, '')}</div>` : ''}
  </div>
  </form>
  `;
@@ -4336,21 +4442,35 @@ async function submitTimeCert(e, editId) {
  toast('เวลาเลิกงานต้องอยู่หลังเวลาเข้างาน', 'error'); return;
  }
 
- let attachment = editReq?.attachment || null;
+ let attachment = editReq?.attachment || null;        // legacy inline blob, carried forward untouched
  let attachmentName = editReq?.attachmentName || null;
+ let hasAttachment = !!(editReq?.hasAttachment || attachment);
+ let _newAttachmentData = null;                        // v1.5.34: held aside, never enters the record
  if (file) {
  if (file.size > 2 * 1024 * 1024) { toast('ไฟล์ใหญ่เกิน 2 MB', 'error'); return; }
- attachment = await new Promise(r => { const reader = new FileReader(); reader.onload = () => r(reader.result); reader.readAsDataURL(file); });
+ _newAttachmentData = await new Promise(r => { const reader = new FileReader(); reader.onload = () => r(reader.result); reader.readAsDataURL(file); });
  attachmentName = file.name;
+ attachment = null;      // v1.5.34: blob stays out of the synced array
+ hasAttachment = true;
  }
 
  if (editReq) {
  const idx = reqs.findIndex(r => r.id === editId);
- reqs[idx] = { ...editReq, date, claimedCheckIn, claimedCheckOut, reason, attachment, attachmentName, status: 'pending', lastEditedAt: new Date().toISOString() };
+ // v1.5.34: upload before saving — never record an attachment that is not there
+ if (_newAttachmentData) {
+ const up = await uploadAttachment(editId, 'timeCertRequests', _newAttachmentData, attachmentName);
+ if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
+ }
+ reqs[idx] = { ...editReq, date, claimedCheckIn, claimedCheckOut, reason, attachment, attachmentName, hasAttachment, status: 'pending', lastEditedAt: new Date().toISOString() };
  } else {
+ const _tcId = uid('TC');
+ if (_newAttachmentData) {
+ const up = await uploadAttachment(_tcId, 'timeCertRequests', _newAttachmentData, attachmentName);
+ if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
+ }
  reqs.push({
- id: uid('TC'), employeeId: currentUser.id,
- date, claimedCheckIn, claimedCheckOut, reason, attachment, attachmentName,
+ id: _tcId, employeeId: currentUser.id,
+ date, claimedCheckIn, claimedCheckOut, reason, attachment, attachmentName, hasAttachment,
  status: 'pending', requestDate: today(),
  managerId: currentUser.managerId,
  approverNote: '', approvedDate: null
@@ -6699,7 +6819,7 @@ function drawApprovalList() {
  <td>${getLeaveTypeName(r.type)}</td>
  <td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? '<br>- ' + formatDate(r.endDate) : ''}${r.halfDay ? '<br>(' + (r.halfDay === 'morning' ? 'เช้า' : 'บ่าย') + ')' : ''}</td>
  <td>${r.days} วัน</td>
- <td style="max-width:200px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}"> ${esc(r.attachmentName)}</a>` : ''}</td>
+ <td style="max-width:200px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, " ") : ''}</td>
  <td>${_apvActionButtons('leave', r.id)}</td>
  </tr>`;
  }).join('')}</tbody></table></div></div>` : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
@@ -6718,7 +6838,7 @@ function drawApprovalList() {
  <td>${formatDate(r.date)}</td>
  <td>${r.startTime} - ${r.endTime}</td>
  <td>${r.hours} ชม.</td>
- <td style="max-width:250px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎 ${esc(r.attachmentName)}</a>` : ''}</td>
+ <td style="max-width:250px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, "📎 ") : ''}</td>
  <td>${_apvActionButtons('ot', r.id)}</td>
  </tr>`;
  }).join('')}</tbody></table></div></div>` : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
@@ -6773,7 +6893,7 @@ function drawApprovalList() {
  <td>${formatDate(r.date)}</td>
  <td><strong>${r.claimedCheckIn}</strong></td>
  <td>${r.claimedCheckOut || '-'}</td>
- <td style="max-width:200px;">${esc(r.reason)}${r.attachment ? `<br><a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎 ${esc(r.attachmentName)}</a>` : ''}</td>
+ <td style="max-width:200px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, "📎 ") : ''}</td>
  <td style="font-size:12px;">${scan ? `เข้า ${scan.checkIn || '-'}<br>ออก ${scan.checkOut || '-'}` : '<span style="color:var(--gray-500);">ไม่พบในระบบ</span>'}</td>
  <td style="white-space:nowrap;">${_apvActionButtons('time-cert', r.id)}</td>
  </tr>`;
@@ -11446,7 +11566,7 @@ function drawReport() {
  <td>${getStatusBadge(r.status)}</td>
  <td>${r.approvedDate ? formatDate(r.approvedDate) : '-'}</td>
  <td style="max-width:160px;font-size:12px;">${r.approverNote || '-'}</td>
- <td>${r.attachment ? `<a href="${r.attachment}" target="_blank" download="${esc(r.attachmentName)}">📎</a>` : '-'}</td>
+ <td>${hasAnyAttachment(r) ? attachmentLinkHtml(r, '').replace(/>[^<]*</, '>📎<') : '-'}</td>
  <td style="white-space:nowrap;">
  ${currentUser.role === 'admin' ? `<button class="btn btn-sm btn-danger" onclick="deleteTimeCert('${r.id}')">ลบ</button>` : ''}
  </td>
@@ -11908,7 +12028,7 @@ function exportTimeCertXLSX() {
  statusLabel[r.status] || r.status,
  r.approvedDate || '-',
  r.approverNote || '-',
- r.attachment ? 'มี' : '-'
+ hasAnyAttachment(r) ? 'มี' : '-'
  ]);
  });
  const ws1 = XLSX.utils.aoa_to_sheet(rows);

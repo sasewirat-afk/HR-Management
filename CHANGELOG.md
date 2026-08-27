@@ -6,6 +6,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.34] — 2026-08-27 (attachments move out of hr_data — breaking the cycle)
+
+**This is the third time base64 attachments have broken this system. The first two responses treated the symptom; this one changes the write path.**
+
+- **v1.4.57** — `otRequests` reached 3.73 MB and cloud sync failed. The fix deleted every attachment. The write path was untouched.
+- **27 ส.ค. 2026** — `otRequests` reached 23.4 MB. It exceeded the browser storage quota, which let stale data overwrite the cloud and destroyed 141 requests, then grew far enough to stop the app loading at all.
+
+Deleting them a second time would only have started a third cycle.
+
+### Changed
+- **Attachments are written to their own `hr_attachments` table**, never into the synced arrays. The request record keeps `attachmentName` and a `hasAttachment` flag — tens of bytes instead of hundreds of kilobytes. All three upload paths (leave, OT, time certificate) were changed, on both create and edit.
+- **The upload happens before the record is saved.** If it fails, the save is abandoned, so no record can claim an attachment that is not there.
+- **`openAttachment()` fetches a file only when someone opens it**, and caches it for the session. Previously every device downloaded every attachment ever uploaded, on every sync.
+- **`attachmentLinkHtml()` is now the single renderer** for all nine display sites. A record still carrying an inline `attachment` renders straight from it, so this release is correct whether or not the data migration has run.
+
+### Deploy order
+`db/incident/60_extract_attachments.sql` creates the `hr_attachments` table and must run **before** this release, otherwise new uploads have nowhere to go. That script also moves existing attachments out and is what actually shrinks the database.
+
+### Verified
+18 assertions: legacy inline records still render without a fetch; migrated records emit no blob in the markup and fetch lazily; uploads land in `hr_attachments` with the right source key; the session cache means opening a file twice hits the network once; and a scan of the source confirms all three write sites hold the blob aside, none assigns it to `attachment`, and all six create/edit paths upload out of band.
+
+---
+
 ## [1.5.33] — 2026-08-27 (OUTAGE: startup pull exceeded the database statement timeout)
 
 **The app stopped loading for everyone. `SELECT * FROM hr_data` no longer finished inside Supabase's statement timeout.**

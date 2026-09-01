@@ -17,3 +17,14 @@ index.html.bak-*
 # attacker a roadmap while those credentials are live.
 # Remove this rule only after Phase 4 is done, or move db/ to a private repo.
 db/
+
+# Production data pulled out of Supabase for analysis. This repository is PUBLIC and
+# these files carry employee PII — names, leave and OT records, shift rosters.
+# They are working files, not source; nothing here should ever be committed.
+backups/
+reports/
+
+# Internal remediation notes and work instructions — same reason as db/ above.
+ISSUE_REMEDIATION_ROADMAP.md
+*.docx
+v1.4.46-diff.txt

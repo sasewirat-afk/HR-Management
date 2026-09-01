@@ -6,6 +6,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.5.35] — 2026-09-01 (the realtime path never had the v1.5.32 protection)
+
+**v1.5.32 fixed the quota failure that destroyed 141 requests. It fixed it in `DB._setRaw()` and `DB.save()`. The realtime handler wrote to `localStorage` directly and went through neither — so the same failure was still reachable, on the most frequent write path in the app.**
+
+`setupCloudRealtime()` did this on every incoming change:
+
+```js
+DB._cache.delete(row.key);                        // cache cleared first
+localStorage.setItem('hr_' + row.key, newVal);    // can throw — nothing caught it
+```
+
+That is the August sequence verbatim. When the write throws on a full quota the callback dies with the cache empty and `localStorage` still holding an older copy, so `DB.load()` hands back stale data and the next `DB.save()` pushes it over the cloud. This path fires on every write by every other user, so it had more chances to trigger than the pull path that was actually blamed.
+
+### Fixed
+- **Realtime updates go through `DB._setRaw()`**, which keeps the freshly received cloud value in `_cache` when the disk write fails. Reads stay correct for the rest of the session instead of silently falling back to a stale copy.
+- **The write is wrapped**, so one full quota can no longer kill the subscription callback. The re-render still runs, so the UI shows the new data even when it could not be persisted.
+- **Realtime now stores the same LZ-compressed form as every other write path.** It was writing raw JSON, which broke the echo check two lines above it — that check compared a compressed string against a raw one, never matched, and so rewrote and re-rendered on *every* echo. Raw JSON also consumes several times the quota, on the one path with no quota protection.
+
+### Unchanged
+The local-dirty skip, the auto-recovery after 5 consecutive skips, and the `_safeRerender` call are untouched. The DB-side guard trigger rejecting writes that shrink an array by 3 or more is untouched.
+
+### Verified
+5 assertions, each run against v1.5.34 first as a control. The control fails exactly two: under a simulated `QuotaExceededError` the handler throws out of the callback and `DB.load()` returns the stale 2-record array instead of the fresh 3-record one, and an identical payload still triggers a write. Both pass on v1.5.35, while the three behaviour-preservation assertions pass on both builds.
+
+---
+
 ## [1.5.34] — 2026-08-27 (attachments move out of hr_data — breaking the cycle)
 
 **This is the third time base64 attachments have broken this system. The first two responses treated the symptom; this one changes the write path.**

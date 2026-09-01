@@ -898,7 +898,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.5.34';
+const APP_VERSION = '1.5.35';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -1574,20 +1574,51 @@ function setupCloudRealtime() {
  }
  if (payload.eventType === 'DELETE') {
  DB._cache.delete(row.key); // v1.4.49: invalidate before mutating localStorage
- localStorage.removeItem('hr_' + row.key);
+ try {
+  localStorage.removeItem('hr_' + row.key);
+ } catch (e) {
+  console.warn(`[Realtime v1.5.35] removeItem failed for '${row.key}':`, e.message);
+ }
  } else {
  // Guard: cloud row.value might be undefined/null — don't corrupt localStorage
  if (row.value === undefined || row.value === null) {
  console.warn(`[Realtime] '${row.key}' has empty value, skipping`);
  return;
  }
+ // v1.5.35: store the SAME representation every other write path uses.
+ // This path wrote raw JSON while DB.save() and cloudPullAllSafe() write the
+ // LZ-compressed form, which broke the echo check below — it compared a compressed
+ // string against a raw one, never matched, and so rewrote + re-rendered on every
+ // echo. Raw JSON also consumes far more quota, on the one path that had no quota
+ // protection at all.
+ let stored;
+ try {
+  stored = DB._compressForStorage(row.value);
+ } catch (e) {
+  console.error(`[Realtime v1.5.35] compress failed for '${row.key}':`, e.message);
+  return; // never write something we could not encode
+ }
+ if (typeof stored !== 'string' || stored.length === 0) return;
  // Skip if this came from our own recent write (avoid loop)
  const existing = localStorage.getItem('hr_' + row.key);
- const newVal = JSON.stringify(row.value);
- if (newVal === undefined) return; // JSON.stringify returned undefined (e.g. for functions)
- if (existing === newVal) return;
- DB._cache.delete(row.key); // v1.4.49: invalidate before mutating localStorage
- localStorage.setItem('hr_' + row.key, newVal);
+ if (existing === stored) return;
+ // v1.5.35: route through _setRaw instead of localStorage.setItem.
+ // Before: this cleared _cache and then called setItem directly. When the write threw
+ // on a full quota the callback died with _cache empty and localStorage still holding
+ // a STALE copy — so DB.load() returned stale data and the next DB.save() pushed it
+ // over the cloud. That is the exact sequence that destroyed 141 records in ส.ค. 2026.
+ // v1.5.32 closed it in _setRaw and DB.save(), but this path went through neither,
+ // and it is the highest-frequency write path in the app (fires on every write by
+ // every other user).
+ try {
+  DB._setRaw(row.key, stored, row.value);
+ } catch (e) {
+  // _setRaw already put row.value — the fresh cloud data — into _cache, so reads
+  // stay correct for this session even though the write to disk failed. Swallow here
+  // so one full quota cannot kill the subscription callback, and fall through to the
+  // re-render below so the UI still shows the new data.
+  console.error(`[Realtime v1.5.35] '${row.key}' เขียนลงเครื่องไม่สำเร็จ (${e.name}) — ใช้ข้อมูลสดจากคลาวด์ในหน่วยความจำแทน`);
+ }
  }
  // v1.5.25: use _safeRerender to skip clobbering in-progress form state
  if (typeof currentUser !== 'undefined' && currentUser) {

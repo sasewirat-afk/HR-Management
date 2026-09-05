@@ -921,7 +921,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.2';
+const APP_VERSION = '1.6.3';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -10294,6 +10294,12 @@ function calculatePaySlip(employeeId, year, month) {
  totalEarnings, totalDeductions,
  netPayRaw, netPay, deferredDeduction,
  deductionWarnings,
+ // v1.6.3: ยังไม่ได้กรอกเงินเดือนของพนักงานคนนี้
+ //
+ // ทุกอย่างบนสลิปคิดจากเงินเดือน — hourlyRate = เงินเดือน / วันทำงาน / ชั่วโมง
+ // เงินเดือน 0 จึงทำให้ค่า OT เป็น 0 · หักขาดงานเป็น 0 · หักลาไม่รับเงินเป็น 0
+ // และประกันสังคมตกไปใช้ฐานขั้นต่ำแทนฐานจริง สลิปทั้งใบจึงไม่มีความหมาย
+ missingSalary: !(_baseSalary > 0),
  generatedAt: new Date().toISOString()
  };
 }
@@ -10839,7 +10845,10 @@ function renderPaySlipAdmin() {
 
  <div class="card">
  <div class="card-header">
- <h3>คำนวณสลิป ${formatSlipMonth(_slipMonth)}</h3>
+ <h3>คำนวณสลิป ${formatSlipMonth(_slipMonth)}${(() => {
+  const n = emps.filter(e => !(Number(e.monthlySalary) > 0)).length;
+  return n ? ` <small style="color:var(--danger);font-weight:600;">· ยังไม่ได้กรอกเงินเดือน ${n} คน</small>` : '';
+ })()}</h3>
  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
  <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--gray-600);">
   <input type="checkbox" ${_slipShowInactive ? 'checked' : ''} onchange="_slipShowInactive=this.checked; renderPaySlipAdmin();">
@@ -10896,6 +10905,7 @@ function renderPaySlipAdmin() {
    ${locked
      ? `<span class="status-badge status-approved" title="ปิดรอบเมื่อ ${esc(saved.paidAt||'')}">ปิดรอบแล้ว</span>${saved.docNo ? `<br><small style="color:var(--gray-500);">${esc(saved.docNo)}</small>` : ''}${drift ? `<br><small style="color:var(--warning);">ส่วนต่าง ${drift > 0 ? '+' : ''}${drift.toLocaleString()} จะยกไปรอบถัดไป</small>` : ''}`
      : (saved ? '<span class="status-badge status-pending">บันทึกแล้ว</span>' : '<span style="color:var(--gray-500);font-size:12px;">ยังไม่บันทึก</span>')}
+   ${slip.missingSalary ? `<br><small style="color:var(--danger);font-weight:600;" title="ทุกยอดบนสลิปคิดจากเงินเดือน — ยังไม่กรอกจึงได้ 0 ทั้งใบ">⚠️ ยังไม่ได้กรอกเงินเดือน</small>` : ''}
    ${(slip.deductionWarnings||[]).length ? `<br><small style="color:var(--danger);" title="${esc(slip.deductionWarnings.join(' · '))}">⚠️ หักเกินเพดาน</small>` : ''}
  </td>
  <td style="white-space:nowrap;">
@@ -11012,6 +11022,25 @@ function markPayrollPaid() {
  const slips = DB.load('paySlips', []) || [];
  const target = slips.filter(s => s.monthStr === _slipMonth && !s.paid);
  if (target.length === 0) { toast('รอบนี้ไม่มีสลิปที่ยังไม่ปิด', 'info'); return; }
+ // v1.6.3: ห้ามปิดรอบถ้ายังมีคนที่ไม่ได้กรอกเงินเดือน
+ //
+ // ปิดรอบ = ออกเลขที่เอกสารและล็อกถาวร สลิปของคนที่เงินเดือนเป็น 0 จะกลายเป็น
+ // เอกสารทางการที่เขียนว่าได้เงินเดือน 0 บาท ซึ่งแย่กว่าไม่ออกเอกสารเลย
+ // บันทึกร่างยังทำได้ตามปกติ — ที่ห้ามคือขั้นที่ย้อนกลับไม่ได้
+ const noSalary = target.filter(sl => sl.missingSalary || !(Number(sl.baseSalary) > 0));
+ if (noSalary.length > 0) {
+  const names = noSalary.slice(0, 5).map(sl => {
+   const e = getEmployee(sl.employeeId);
+   return e ? `${e.firstName} ${e.lastName}` : sl.employeeId;
+  });
+  alert(`ปิดรอบไม่ได้ — ยังมี ${noSalary.length} คนที่ไม่ได้กรอกเงินเดือน\n\n` +
+   names.map(n => '· ' + n).join('\n') +
+   (noSalary.length > 5 ? `\n· และอีก ${noSalary.length - 5} คน` : '') +
+   `\n\nสลิปของคนกลุ่มนี้จะออกมาเป็นเงินเดือน 0 บาท ค่า OT 0 บาท และไม่มีรายการหักใดๆ\n` +
+   `กรอกเงินเดือนในหน้าจัดการพนักงานก่อน แล้วกดสร้างสลิปใหม่อีกครั้ง\n\n` +
+   `(บันทึกสลิปเป็นร่างยังทำได้ตามปกติ)`);
+  return;
+ }
  if (!confirm('ยืนยันปิดรอบ ' + formatSlipMonth(_slipMonth) + '?\n\n' +
   '• สลิป ' + target.length + ' ใบจะถูกล็อก แก้ไขไม่ได้อีก\n' +
   '• ระบบจะออกเลขที่เอกสารให้ทุกใบ\n' +
@@ -11053,6 +11082,12 @@ function previewPaySlip(empId, year, month) {
  const emp = getEmployee(empId);
  if (!slip || !emp) { toast('ไม่พบข้อมูลสลิป', 'error'); return; }
  const monthName = formatSlipMonth(slip.monthStr);
+ const noSal = slip.missingSalary ? `
+   <div class="alert alert-error mb-3" style="font-size:13px;">
+    <strong>⚠️ ยังไม่ได้กรอกเงินเดือนของพนักงานคนนี้</strong><br>
+    ทุกยอดบนสลิปคิดจากเงินเดือน — ค่า OT รายการหัก และฐานประกันสังคม จึงยังไม่ใช่ตัวเลขจริง
+    กรอกเงินเดือนในหน้าจัดการพนักงานก่อน แล้วกดสร้างสลิปใหม่
+   </div>` : '';
  const warn = (slip.deductionWarnings && slip.deductionWarnings.length) ? `
    <div class="alert alert-error mb-3" style="font-size:13px;">
     <strong>⚠️ รายการหักเกินเพดานตามมาตรา 76</strong>
@@ -11064,7 +11099,7 @@ function previewPaySlip(empId, year, month) {
     <strong>${slip.deferredDeduction.toLocaleString()} บาท</strong> จะยกไปหักในรอบถัดไปเมื่อปิดรอบนี้
    </div>` : '';
  showModal(`ตัวอย่างสลิป — ${esc(emp.firstName)} ${esc(emp.lastName)}`,
-  warn + defer + `<div style="overflow:auto;max-height:70vh;background:#fff;padding:8px;">${buildPaySlipHTML(slip, emp, monthName)}</div>`);
+  noSal + warn + defer + `<div style="overflow:auto;max-height:70vh;background:#fff;padding:8px;">${buildPaySlipHTML(slip, emp, monthName)}</div>`);
 }
 
 function savePaySlip(empId, year, month) {

@@ -898,7 +898,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.0';
+const APP_VERSION = '1.6.1';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -12502,76 +12502,67 @@ function exportTimeCertXLSX() {
 // ============================================================
 // SETTINGS
 // ============================================================
+// v1.6.1: หน้าตั้งค่าแบ่งเป็นแท็บ
+//
+// ทุกแผงถูก render ไว้ในหน้าเดียวแล้วซ่อนด้วย hidden — ไม่ re-render เวลาสลับแท็บ
+// เหตุผล: saveSettings() อ่านค่าด้วย getElementById ตรงๆ หลายสิบช่อง ถ้า render
+// เฉพาะแท็บที่เปิดอยู่ ช่องของแท็บอื่นจะหายไปจาก DOM แล้วการบันทึกจะพังทั้งหน้า
+let _settingsTab = 'payroll';
+
+function switchSettingsTab(tab) {
+ _settingsTab = tab;
+ document.querySelectorAll('.tab[data-settab]').forEach(t =>
+  t.classList.toggle('active', t.dataset.settab === tab));
+ document.querySelectorAll('.settings-panel').forEach(pnl =>
+  pnl.hidden = pnl.dataset.settab !== tab);
+ window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
 function renderSettings() {
  // v1.6.0: ประเภทการลาที่ยกเว้นเบี้ยขยัน — ใช้ในแผงตั้งค่าด้านล่าง
  const _dilEx = new Set((DB.load('settings', {}).diligenceExemptLeaveTypes) || ['comp-off']);
  const s = DB.load('settings');
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header"><h1> ตั้งค่าระบบ</h1></div>
+ <div class="tabs" style="margin-bottom:18px;flex-wrap:wrap;">
+ <div class="tab active" data-settab="payroll" onclick="switchSettingsTab('payroll')">เงินเดือน</div>
+ <div class="tab" data-settab="leave" onclick="switchSettingsTab('leave')">การลา & วันหยุด</div>
+ <div class="tab" data-settab="attendance" onclick="switchSettingsTab('attendance')">เวลาเข้างาน</div>
+ <div class="tab" data-settab="company" onclick="switchSettingsTab('company')">บริษัท</div>
+ <div class="tab" data-settab="system" onclick="switchSettingsTab('system')">ระบบ</div>
+ </div>
+ <div class="settings-panel" data-settab="payroll">
+  <div class="text-sm" style="color:var(--gray-500);margin:-4px 0 14px 4px;">คำนวณค่าจ้าง เบี้ยขยัน และเงินสมทบ</div>
  <div class="card">
- <div class="card-header"><h3>วันหยุดบริษัท</h3></div>
- <div class="card-body">
- <div class="form-group">
- <label>เพิ่มวันหยุด</label>
- <div class="flex"><input type="date" id="newHoliday" style="flex:1;"><button class="btn btn-primary" onclick="addHoliday()">เพิ่ม</button></div>
- </div>
- <div>
- ${s.companyHolidays.length ? s.companyHolidays.sort().map(d =>
- `<span class="status-badge status-pending" style="margin:2px;">${formatDate(d)} <a onclick="removeHoliday('${d}')" style="cursor:pointer;color:var(--danger);margin-left:4px;">×</a></span>`
- ).join('') : '<div class="text-sm">ยังไม่มีวันหยุด</div>'}
- </div>
- </div>
- </div>
- <div class="card">
- <div class="card-header"><h3>สิทธิ์การลาเริ่มต้น (Default ทั้งระบบ)</h3></div>
+ <div class="card-header"><h3> เวลาทำงาน และ การคำนวณเงินเดือน</h3></div>
  <div class="card-body">
  <div class="form-row">
- <div class="form-group"><label>ลากิจ (วัน/ปี)</label><input type="number" id="qPersonal" value="${s.leaveQuotas.personal}"></div>
- <div class="form-group"><label>ลาพักร้อน (วัน/ปี) — ปีที่ 1 หลังผ่านทดลอง</label><input type="number" id="qVacation" value="${s.leaveQuotas.vacation}"></div>
+ <div class="form-group"><label>เวลาเริ่มงาน (เกินถือว่าหลังเวลา)</label><input type="time" id="qWorkStart" value="${s.workStartTime || '08:45'}"></div>
+ <div class="form-group"><label>เวลาที่ถือว่ามาสาย</label><input type="time" id="qLateThreshold" value="${s.lateThreshold || '09:01'}"></div>
+ <div class="form-group"><label>ระยะเวลาผ่อนผัน — Grace Period (นาที) <small style="color:var(--gray-500);">(v1.4.65)</small></label><input type="number" id="qGraceMinutes" min="0" max="120" step="1" value="${s.defaultGracePeriodMinutes ?? 16}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใช้กับพนักงานที่มี custom start time (เช่น บอย 10:00) → ปล่อยผ่านได้ X นาที ก่อนนับสาย · Default 16 นาที (= 08:45→09:01)</div></div>
  </div>
  <div class="form-row">
- <div class="form-group"><label>ลาป่วย (วัน/ปี)</label><input type="number" id="qSick" value="${s.leaveQuotas.sick}"></div>
- <div class="form-group"><label>ลาคลอด (วัน/รอบ)</label><input type="number" id="qMat" value="${s.leaveQuotas.maternity}"></div>
+ <div class="form-group"><label>OT Multiplier — วันทำการปกติ (เท่า)</label><input type="number" step="0.1" min="1" id="qOtMult" value="${s.otMultiplier ?? 1.5}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">มาตรฐานกฎหมายแรงงานไทย: 1.5× ของค่าจ้างต่อชั่วโมง</div></div>
+ <div class="form-group"><label>OT Multiplier — วันหยุด (เท่า)</label><input type="number" step="0.1" min="1" id="qOtMultHoliday" value="${s.otMultiplierHoliday ?? 3}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">วันหยุดประจำสัปดาห์ (เสาร์-อาทิตย์) + วันหยุดบริษัท · มาตรฐานกฎหมาย: 3×</div></div>
+ <div class="form-group">
+ <label>โหมดคำนวณค่าหักสาย</label>
+ <select id="qLateMode">
+ <option value="occurrence" ${s.lateCalculationMode === 'occurrence' ? 'selected' : ''}>ต่อครั้งที่มาสาย</option>
+ <option value="minute" ${s.lateCalculationMode === 'minute' ? 'selected' : ''}>ต่อนาที</option>
+ <option value="hour" ${s.lateCalculationMode === 'hour' ? 'selected' : ''}>ต่อชั่วโมง</option>
+ </select>
+ </div>
  </div>
  <div class="form-row">
- <div class="form-group"><label>ลาบวช (วัน, ชายเท่านั้น)</label><input type="number" id="qOrdination" value="${s.leaveQuotas.ordination || 15}"></div>
- <div class="form-group"><label>ระยะทดลองงาน (วัน)</label><input type="number" id="qProb" value="${s.probationDays}"></div>
+ <div class="form-group"><label>ค่าหักมาสาย (บาท/หน่วย ตามโหมด — ตั้ง 0 = ไม่หักทั้งบริษัท)</label><input type="number" id="qLateDeduct" min="0" step="1" value="${s.lateDeduction ?? 50}"></div>
+ <div class="form-group"><label>เบี้ยขยัน (บาท/เดือน)</label><input type="number" id="qDiligence" value="${s.diligenceBonus || 500}"></div>
  </div>
- <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
  <div class="form-row">
- <div class="form-group">
- <label>สิทธิ์ลากิจในช่วงทดลองงาน (วัน)</label>
- <input type="number" id="qProbPersonalCap" min="0" step="0.5" value="${s.probationPersonalCap ?? 3}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ตั้ง 0 = ไม่มีสิทธิ์ลากิจช่วงทดลองงาน</div>
+ <div class="form-group"><label>วันทำงาน/เดือน (สำหรับคำนวณเรทรายวัน)</label><input type="number" id="qWorkDays" value="${s.workDaysPerMonth || 22}"></div>
+ <div class="form-group"><label>ชั่วโมงทำงาน/วัน</label><input type="number" id="qWorkHours" value="${s.workHoursPerDay || 8}"></div>
  </div>
- <div class="form-group">
- <label>อายุของวันสะสมหยุด (เดือน)</label>
- <input type="number" id="qCompOffExpire" min="1" max="60" step="1" value="${s.compOffExpireMonths ?? 12}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">วันสะสมหยุดจะหมดอายุภายในกี่เดือนหลังได้รับ (default 12 เดือน)</div>
- </div>
- </div>
- <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
- <div class="form-row">
- <div class="form-group">
- <label>ลาป่วยเกินกี่วันต้องแนบใบรับรองแพทย์</label>
- <input type="number" id="qSickCertThreshold" min="0" step="0.5" value="${s.sickCertThreshold ?? 2}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ลาเกินตัวเลขนี้ → ต้องเลือกประเภท "ลาป่วยมีใบรับรอง" และแนบไฟล์ใบรับรองแพทย์</div>
- </div>
- <div class="form-group">
- <label>ห้ามยื่นลาย้อนหลังเกิน (วัน)</label>
- <input type="number" id="qBackDatedMax" min="0" step="1" value="${s.backDatedLeaveMaxDays ?? 7}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใช้แสดงในนโยบายลา (ป้องกันทุจริต)</div>
- </div>
- </div> <div class="form-row">
- <div class="form-group">
- <label>ยกยอดวันลาข้ามปี — สูงสุด (วัน)</label>
- <input type="number" id="qCarryOverMax" min="0" step="0.5" value="${s.leaveCarryOverMax ?? 5}">
- </div>
- <div class="form-group">
- <label>ตัดยอดยกข้ามปี (MM-DD)</label>
- <input type="text" id="qCarryOverCutoff" placeholder="03-31" pattern="\\d{2}-\\d{2}" value="${s.leaveCarryOverCutoff ?? '03-31'}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">รูปแบบ MM-DD (เช่น 03-31 = 31 มี.ค.)</div>
- </div>
+ <div class="alert alert-info" style="font-size:13px;">
+ <strong>เบี้ยขยัน</strong> — ได้เฉพาะเมื่อพนักงานไม่ขาด ไม่สาย และไม่ลาในประเภทที่ตั้งค่าให้ตัดสิทธิ์ ตลอดทั้งรอบ
  </div>
  </div>
  </div>
@@ -12614,72 +12605,7 @@ function renderSettings() {
  </div>
  </div>
 
- <div class="card">
- <div class="card-header"><h3>กฎการรับรองเวลา & ขาดงานอัตโนมัติ</h3></div>
- <div class="card-body">
- <div class="form-group">
- <label>มาสายเกินกี่นาที → ระบบบันทึก "ขาดงาน" อัตโนมัติ</label>
- <input type="number" id="qAutoAbsentLate" min="0" step="1" value="${s.autoAbsentLateMinutes ?? 240}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
- นับจากเวลามาสาย (<strong>${s.lateThreshold || '09:01'}</strong>) — เช่น ตั้ง 240 นาที = 4 ชม.<br>
- → ใครเข้างานหลัง <strong>${(() => { const [h,m]=(s.lateThreshold||'09:01').split(':').map(Number); const total=h*60+m+(s.autoAbsentLateMinutes??240); return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`; })()}</strong> ในวันใด ระบบจะนับเป็นขาดงานของวันนั้น (ใช้ทั้งในรายงานและการคำนวณเงินเดือน)
- </div>
- </div>
- <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
- <label class="ios-toggle">
- <input type="checkbox" id="qTimeCertEnabled" ${s.timeCertEnabled !== false ? 'checked' : ''}>
- <span>เปิดใช้งานฟังก์ชั่นรับรองเวลา (Time Certification)</span>
- </label>
- <div class="text-sm" style="margin-top:8px;color:var(--gray-500);">
- พนักงานที่<strong>ไม่ได้สแกนหน้าเข้างานช่วงเช้า</strong> แต่<strong>มีการสแกนช่วงบ่าย</strong> สามารถยื่นคำขอ "รับรองเวลา" ระบุเวลาเข้างานจริง พร้อมเหตุผล/หลักฐาน → หัวหน้างานอนุมัติ → ระบบจะนำเวลานี้มาใช้แทนข้อมูลสแกนหน้า
- </div>
- </div>
- </div>
 
- <div class="card">
- <div class="card-header"><h3>สิทธิ์ลาพักร้อนเพิ่มตามอายุงาน (Accrual)</h3></div>
- <div class="card-body">
- <div class="alert alert-info mb-3" style="font-size:13px;">
- <strong>กฎ:</strong> เพดานสิทธิ์ลาพักร้อนจะเพิ่มขึ้นตามอายุงานของพนักงาน<br>
- <strong>ตัวอย่าง:</strong> Base 6 วัน · เริ่มเพิ่มที่ปี 2 · +1 วัน/ปี · สูงสุด 15 วัน<br>
- → ปี 1 = 6 วัน, ปี 2 = 7 วัน, ปี 3 = 8 วัน, ... ปี 11 ขึ้นไป = 15 วัน (เพดาน)
- </div>
- <div style="margin-bottom:14px;">
- <label class="ios-toggle">
- <input type="checkbox" id="qVacAccrualEnabled" ${s.vacationAccrual?.enabled ? 'checked' : ''}>
- <span>เปิดใช้งานกฎเพิ่มสิทธิ์ลาพักร้อนตามอายุงาน</span>
- </label>
- </div>
- <div class="form-row">
- <div class="form-group">
- <label>Base (วัน/ปี)</label>
- <input type="number" id="qVacAccrualBase" min="0" step="0.5" value="${s.vacationAccrual?.base ?? 6}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">สิทธิ์ลาพักร้อนปีที่ 1 (หลังผ่านทดลองงาน)</div>
- </div>
- <div class="form-group">
- <label>เริ่มเพิ่มที่อายุงาน (ปี)</label>
- <input type="number" id="qVacAccrualStartYear" min="1" value="${s.vacationAccrual?.startYear ?? 2}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">เช่น 2 = เริ่มเพิ่มเมื่ออายุงานเกิน 1 ปีเต็ม</div>
- </div>
- </div>
- <div class="form-row">
- <div class="form-group">
- <label>เพิ่ม (วัน/ปี ที่ผ่านไป)</label>
- <input type="number" id="qVacAccrualIncrement" min="0" step="0.5" value="${s.vacationAccrual?.incrementPerYear ?? 1}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">จำนวนวันที่เพิ่มขึ้นต่อปีอายุงานที่เพิ่ม</div>
- </div>
- <div class="form-group">
- <label>เพดานสูงสุด (วัน)</label>
- <input type="number" id="qVacAccrualMax" min="0" step="0.5" value="${s.vacationAccrual?.maxDays ?? 15}">
- <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">เพดานสิทธิ์ลาพักร้อนสูงสุดต่อปี ไม่ว่าทำงานนานเท่าไหร่</div>
- </div>
- </div>
- <div id="vacAccrualPreview" style="margin-top:14px;padding:12px;background:var(--gray-100);border-radius:8px;font-size:13px;">
- <strong>ตัวอย่างการคำนวณ:</strong>
- <div id="vacAccrualPreviewBody" style="margin-top:8px;color:var(--gray-700);"></div>
- </div>
- </div>
- </div>
  <div class="card">
  <div class="card-header"><h3> เบี้ยขยัน · ขาดงาน · เพดานการหัก <small style="color:var(--gray-500);font-weight:400;">(v1.6.0)</small></h3></div>
  <div class="card-body">
@@ -12760,40 +12686,7 @@ function renderSettings() {
  </div>
  </div>
 
- <div class="card">
- <div class="card-header"><h3> เวลาทำงาน และ การคำนวณเงินเดือน</h3></div>
- <div class="card-body">
- <div class="form-row">
- <div class="form-group"><label>เวลาเริ่มงาน (เกินถือว่าหลังเวลา)</label><input type="time" id="qWorkStart" value="${s.workStartTime || '08:45'}"></div>
- <div class="form-group"><label>เวลาที่ถือว่ามาสาย</label><input type="time" id="qLateThreshold" value="${s.lateThreshold || '09:01'}"></div>
- <div class="form-group"><label>ระยะเวลาผ่อนผัน — Grace Period (นาที) <small style="color:var(--gray-500);">(v1.4.65)</small></label><input type="number" id="qGraceMinutes" min="0" max="120" step="1" value="${s.defaultGracePeriodMinutes ?? 16}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใช้กับพนักงานที่มี custom start time (เช่น บอย 10:00) → ปล่อยผ่านได้ X นาที ก่อนนับสาย · Default 16 นาที (= 08:45→09:01)</div></div>
- </div>
- <div class="form-row">
- <div class="form-group"><label>OT Multiplier — วันทำการปกติ (เท่า)</label><input type="number" step="0.1" min="1" id="qOtMult" value="${s.otMultiplier ?? 1.5}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">มาตรฐานกฎหมายแรงงานไทย: 1.5× ของค่าจ้างต่อชั่วโมง</div></div>
- <div class="form-group"><label>OT Multiplier — วันหยุด (เท่า)</label><input type="number" step="0.1" min="1" id="qOtMultHoliday" value="${s.otMultiplierHoliday ?? 3}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">วันหยุดประจำสัปดาห์ (เสาร์-อาทิตย์) + วันหยุดบริษัท · มาตรฐานกฎหมาย: 3×</div></div>
- <div class="form-group">
- <label>โหมดคำนวณค่าหักสาย</label>
- <select id="qLateMode">
- <option value="occurrence" ${s.lateCalculationMode === 'occurrence' ? 'selected' : ''}>ต่อครั้งที่มาสาย</option>
- <option value="minute" ${s.lateCalculationMode === 'minute' ? 'selected' : ''}>ต่อนาที</option>
- <option value="hour" ${s.lateCalculationMode === 'hour' ? 'selected' : ''}>ต่อชั่วโมง</option>
- </select>
- </div>
- </div>
- <div class="form-row">
- <div class="form-group"><label>ค่าหักมาสาย (บาท/หน่วย ตามโหมด — ตั้ง 0 = ไม่หักทั้งบริษัท)</label><input type="number" id="qLateDeduct" min="0" step="1" value="${s.lateDeduction ?? 50}"></div>
- <div class="form-group"><label>เบี้ยขยัน (บาท/เดือน)</label><input type="number" id="qDiligence" value="${s.diligenceBonus || 500}"></div>
- </div>
- <div class="form-row">
- <div class="form-group"><label>วันทำงาน/เดือน (สำหรับคำนวณเรทรายวัน)</label><input type="number" id="qWorkDays" value="${s.workDaysPerMonth || 22}"></div>
- <div class="form-group"><label>ชั่วโมงทำงาน/วัน</label><input type="number" id="qWorkHours" value="${s.workHoursPerDay || 8}"></div>
- </div>
- <div class="alert alert-info" style="font-size:13px;">
- <strong>เบี้ยขยัน 500 บาท/เดือน</strong> — ได้เฉพาะเมื่อพนักงาน <strong>ไม่ขาด, ไม่ลา, ไม่สาย</strong> ตลอดทั้งเดือน
- </div>
- <button class="btn btn-primary" onclick="saveSettings()">บันทึกการตั้งค่าทั้งหมด</button>
- </div>
- </div>
+
  <div class="card">
  <div class="card-header"><h3> ประกันสังคม (ตามกฎหมายไทย)</h3></div>
  <div class="card-body">
@@ -12821,6 +12714,154 @@ function renderSettings() {
  </div>
  </div>
  </div>
+
+ </div>
+ <div class="settings-panel" data-settab="leave" hidden>
+  <div class="text-sm" style="color:var(--gray-500);margin:-4px 0 14px 4px;">สิทธิ์การลา วันหยุดบริษัท และการสะสมสิทธิ์</div>
+ <div class="card">
+ <div class="card-header"><h3>วันหยุดบริษัท</h3></div>
+ <div class="card-body">
+ <div class="form-group">
+ <label>เพิ่มวันหยุด</label>
+ <div class="flex"><input type="date" id="newHoliday" style="flex:1;"><button class="btn btn-primary" onclick="addHoliday()">เพิ่ม</button></div>
+ </div>
+ <div>
+ ${s.companyHolidays.length ? s.companyHolidays.sort().map(d =>
+ `<span class="status-badge status-pending" style="margin:2px;">${formatDate(d)} <a onclick="removeHoliday('${d}')" style="cursor:pointer;color:var(--danger);margin-left:4px;">×</a></span>`
+ ).join('') : '<div class="text-sm">ยังไม่มีวันหยุด</div>'}
+ </div>
+ </div>
+ </div>
+
+ <div class="card">
+ <div class="card-header"><h3>สิทธิ์การลาเริ่มต้น (Default ทั้งระบบ)</h3></div>
+ <div class="card-body">
+ <div class="form-row">
+ <div class="form-group"><label>ลากิจ (วัน/ปี)</label><input type="number" id="qPersonal" value="${s.leaveQuotas.personal}"></div>
+ <div class="form-group"><label>ลาพักร้อน (วัน/ปี) — ปีที่ 1 หลังผ่านทดลอง</label><input type="number" id="qVacation" value="${s.leaveQuotas.vacation}"></div>
+ </div>
+ <div class="form-row">
+ <div class="form-group"><label>ลาป่วย (วัน/ปี)</label><input type="number" id="qSick" value="${s.leaveQuotas.sick}"></div>
+ <div class="form-group"><label>ลาคลอด (วัน/รอบ)</label><input type="number" id="qMat" value="${s.leaveQuotas.maternity}"></div>
+ </div>
+ <div class="form-row">
+ <div class="form-group"><label>ลาบวช (วัน, ชายเท่านั้น)</label><input type="number" id="qOrdination" value="${s.leaveQuotas.ordination || 15}"></div>
+ <div class="form-group"><label>ระยะทดลองงาน (วัน)</label><input type="number" id="qProb" value="${s.probationDays}"></div>
+ </div>
+ <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
+ <div class="form-row">
+ <div class="form-group">
+ <label>สิทธิ์ลากิจในช่วงทดลองงาน (วัน)</label>
+ <input type="number" id="qProbPersonalCap" min="0" step="0.5" value="${s.probationPersonalCap ?? 3}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ตั้ง 0 = ไม่มีสิทธิ์ลากิจช่วงทดลองงาน</div>
+ </div>
+ <div class="form-group">
+ <label>อายุของวันสะสมหยุด (เดือน)</label>
+ <input type="number" id="qCompOffExpire" min="1" max="60" step="1" value="${s.compOffExpireMonths ?? 12}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">วันสะสมหยุดจะหมดอายุภายในกี่เดือนหลังได้รับ (default 12 เดือน)</div>
+ </div>
+ </div>
+ <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
+ <div class="form-row">
+ <div class="form-group">
+ <label>ลาป่วยเกินกี่วันต้องแนบใบรับรองแพทย์</label>
+ <input type="number" id="qSickCertThreshold" min="0" step="0.5" value="${s.sickCertThreshold ?? 2}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ลาเกินตัวเลขนี้ → ต้องเลือกประเภท "ลาป่วยมีใบรับรอง" และแนบไฟล์ใบรับรองแพทย์</div>
+ </div>
+ <div class="form-group">
+ <label>ห้ามยื่นลาย้อนหลังเกิน (วัน)</label>
+ <input type="number" id="qBackDatedMax" min="0" step="1" value="${s.backDatedLeaveMaxDays ?? 7}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใช้แสดงในนโยบายลา (ป้องกันทุจริต)</div>
+ </div>
+ </div> <div class="form-row">
+ <div class="form-group">
+ <label>ยกยอดวันลาข้ามปี — สูงสุด (วัน)</label>
+ <input type="number" id="qCarryOverMax" min="0" step="0.5" value="${s.leaveCarryOverMax ?? 5}">
+ </div>
+ <div class="form-group">
+ <label>ตัดยอดยกข้ามปี (MM-DD)</label>
+ <input type="text" id="qCarryOverCutoff" placeholder="03-31" pattern="\\d{2}-\\d{2}" value="${s.leaveCarryOverCutoff ?? '03-31'}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">รูปแบบ MM-DD (เช่น 03-31 = 31 มี.ค.)</div>
+ </div>
+ </div>
+ </div>
+ </div>
+
+
+ <div class="card">
+ <div class="card-header"><h3>สิทธิ์ลาพักร้อนเพิ่มตามอายุงาน (Accrual)</h3></div>
+ <div class="card-body">
+ <div class="alert alert-info mb-3" style="font-size:13px;">
+ <strong>กฎ:</strong> เพดานสิทธิ์ลาพักร้อนจะเพิ่มขึ้นตามอายุงานของพนักงาน<br>
+ <strong>ตัวอย่าง:</strong> Base 6 วัน · เริ่มเพิ่มที่ปี 2 · +1 วัน/ปี · สูงสุด 15 วัน<br>
+ → ปี 1 = 6 วัน, ปี 2 = 7 วัน, ปี 3 = 8 วัน, ... ปี 11 ขึ้นไป = 15 วัน (เพดาน)
+ </div>
+ <div style="margin-bottom:14px;">
+ <label class="ios-toggle">
+ <input type="checkbox" id="qVacAccrualEnabled" ${s.vacationAccrual?.enabled ? 'checked' : ''}>
+ <span>เปิดใช้งานกฎเพิ่มสิทธิ์ลาพักร้อนตามอายุงาน</span>
+ </label>
+ </div>
+ <div class="form-row">
+ <div class="form-group">
+ <label>Base (วัน/ปี)</label>
+ <input type="number" id="qVacAccrualBase" min="0" step="0.5" value="${s.vacationAccrual?.base ?? 6}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">สิทธิ์ลาพักร้อนปีที่ 1 (หลังผ่านทดลองงาน)</div>
+ </div>
+ <div class="form-group">
+ <label>เริ่มเพิ่มที่อายุงาน (ปี)</label>
+ <input type="number" id="qVacAccrualStartYear" min="1" value="${s.vacationAccrual?.startYear ?? 2}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">เช่น 2 = เริ่มเพิ่มเมื่ออายุงานเกิน 1 ปีเต็ม</div>
+ </div>
+ </div>
+ <div class="form-row">
+ <div class="form-group">
+ <label>เพิ่ม (วัน/ปี ที่ผ่านไป)</label>
+ <input type="number" id="qVacAccrualIncrement" min="0" step="0.5" value="${s.vacationAccrual?.incrementPerYear ?? 1}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">จำนวนวันที่เพิ่มขึ้นต่อปีอายุงานที่เพิ่ม</div>
+ </div>
+ <div class="form-group">
+ <label>เพดานสูงสุด (วัน)</label>
+ <input type="number" id="qVacAccrualMax" min="0" step="0.5" value="${s.vacationAccrual?.maxDays ?? 15}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">เพดานสิทธิ์ลาพักร้อนสูงสุดต่อปี ไม่ว่าทำงานนานเท่าไหร่</div>
+ </div>
+ </div>
+ <div id="vacAccrualPreview" style="margin-top:14px;padding:12px;background:var(--gray-100);border-radius:8px;font-size:13px;">
+ <strong>ตัวอย่างการคำนวณ:</strong>
+ <div id="vacAccrualPreviewBody" style="margin-top:8px;color:var(--gray-700);"></div>
+ </div>
+ </div>
+ </div>
+
+ </div>
+ <div class="settings-panel" data-settab="attendance" hidden>
+  <div class="text-sm" style="color:var(--gray-500);margin:-4px 0 14px 4px;">กฎการรับรองเวลาและการนับขาดงาน</div>
+ <div class="card">
+ <div class="card-header"><h3>กฎการรับรองเวลา & ขาดงานอัตโนมัติ</h3></div>
+ <div class="card-body">
+ <div class="form-group">
+ <label>มาสายเกินกี่นาที → ระบบบันทึก "ขาดงาน" อัตโนมัติ</label>
+ <input type="number" id="qAutoAbsentLate" min="0" step="1" value="${s.autoAbsentLateMinutes ?? 240}">
+ <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
+ นับจากเวลามาสาย (<strong>${s.lateThreshold || '09:01'}</strong>) — เช่น ตั้ง 240 นาที = 4 ชม.<br>
+ → ใครเข้างานหลัง <strong>${(() => { const [h,m]=(s.lateThreshold||'09:01').split(':').map(Number); const total=h*60+m+(s.autoAbsentLateMinutes??240); return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`; })()}</strong> ในวันใด ระบบจะนับเป็นขาดงานของวันนั้น (ใช้ทั้งในรายงานและการคำนวณเงินเดือน)
+ </div>
+ </div>
+ <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
+ <label class="ios-toggle">
+ <input type="checkbox" id="qTimeCertEnabled" ${s.timeCertEnabled !== false ? 'checked' : ''}>
+ <span>เปิดใช้งานฟังก์ชั่นรับรองเวลา (Time Certification)</span>
+ </label>
+ <div class="text-sm" style="margin-top:8px;color:var(--gray-500);">
+ พนักงานที่<strong>ไม่ได้สแกนหน้าเข้างานช่วงเช้า</strong> แต่<strong>มีการสแกนช่วงบ่าย</strong> สามารถยื่นคำขอ "รับรองเวลา" ระบุเวลาเข้างานจริง พร้อมเหตุผล/หลักฐาน → หัวหน้างานอนุมัติ → ระบบจะนำเวลานี้มาใช้แทนข้อมูลสแกนหน้า
+ </div>
+ </div>
+ </div>
+
+
+ </div>
+ <div class="settings-panel" data-settab="company" hidden>
+  <div class="text-sm" style="color:var(--gray-500);margin:-4px 0 14px 4px;">บริษัทในเครือที่ใช้ออกสลิปและรายงาน</div>
  <div class="card">
  <div class="card-header">
  <h3>บริษัท / Department ในเครือ</h3>
@@ -12866,11 +12907,33 @@ function renderSettings() {
  </div>
  </div>
  </div>
+
+ </div>
+ <div class="settings-panel" data-settab="system" hidden>
+  <div class="text-sm" style="color:var(--gray-500);margin:-4px 0 14px 4px;">ข้อมูลเวอร์ชันและการรีเซ็ตข้อมูล</div>
+ <div class="card">
+ <div class="card-header"><h3>สรุปการตั้งค่าที่ใช้อยู่</h3></div>
+ <div class="card-body">
+  <div class="text-sm" style="color:var(--gray-600);line-height:2;">
+   เวอร์ชันระบบ <strong>v${typeof APP_VERSION !== 'undefined' ? APP_VERSION : '-'}</strong><br>
+   วันตัดรอบเงินเดือน วันที่ <strong>${s.payrollCutoffDay || 21}</strong> ของทุกเดือน<br>
+   อัตราหักค่ามาสาย <strong>${(s.lateDeduction ?? 50).toLocaleString()} บาท</strong> ต่อ${({occurrence:'ครั้ง', minute:'นาที', hour:'ชั่วโมง'})[s.lateCalculationMode || 'occurrence']}<br>
+   หักค่าขาดงานเท่าค่าแรงรายวัน <strong>${s.absentDeductionEnabled === false ? 'ปิดอยู่' : 'เปิดอยู่'}</strong><br>
+   ฐานประกันสังคมรวมค่า OT <strong>${s.ssoIncludeOT ? 'เปิดอยู่' : 'ปิดอยู่'}</strong><br>
+   เตือนเมื่อรายการหักเกิน <strong>${s.deductionWarnPercent ?? 10}%</strong> ของเงินได้
+  </div>
+ </div>
+ </div>
  <div class="card">
  <div class="card-header"><h3 style="color:var(--danger);"> Danger Zone</h3></div>
  <div class="card-body">
  <button class="btn btn-danger" onclick="if(confirm('รีเซ็ตข้อมูลทั้งหมด?')) { DB.reset(); location.reload(); }">รีเซ็ตข้อมูลทั้งระบบ</button>
  </div>
+ </div>
+ </div>
+ <div style="position:sticky;bottom:0;margin-top:20px;padding:14px 16px;background:var(--card-bg,#fff);border-top:1px solid var(--gray-300);display:flex;gap:12px;align-items:center;flex-wrap:wrap;box-shadow:0 -4px 12px rgba(0,0,0,.06);z-index:5;">
+  <button class="btn btn-primary" onclick="saveSettings()">บันทึกการตั้งค่าทั้งหมด</button>
+  <span class="text-sm" style="color:var(--gray-500);">บันทึกทุกแท็บพร้อมกัน ไม่ต้องกดทีละแท็บ</span>
  </div>
  `;
 
@@ -12881,6 +12944,8 @@ function renderSettings() {
  if (el) el.addEventListener('input', updateVacAccrualPreview);
  });
  updateVacAccrualPreview();
+ // คงแท็บเดิมไว้หลัง render ใหม่ เช่น หลังกดบันทึก
+ if (_settingsTab !== 'payroll') switchSettingsTab(_settingsTab);
 }
 
 function updateVacAccrualPreview() {

@@ -898,7 +898,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.5.35';
+const APP_VERSION = '1.6.0';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2331,16 +2331,29 @@ function seedData() {
  otMultiplierHoliday: 3,
  lateDeduction: 50,
  lateCalculationMode: 'occurrence', // 'occurrence' | 'minute' | 'hour'
+ // v1.6.0: ขาดงานหักเท่าค่าแรงรายวัน. หน้าตั้งค่าเคยประกาศว่ากฎขาดงานอัตโนมัติ
+ // "ใช้ในการคำนวณเงินเดือน" มาตลอด แต่ไม่มีรายการหักอยู่ในสูตรเลย
+ absentDeductionEnabled: true,
  workDaysPerMonth: 22,
  workHoursPerDay: 8,
  diligenceBonus: 500,
  diligenceLateThreshold: '09:01',
+ // v1.6.0: ประเภทการลาที่ "ไม่" ตัดเบี้ยขยัน. ค่าเริ่มต้นคือกลุ่มที่มีเอกสารรับรอง
+ // หรือเป็นสิทธิ์ตามกฎหมาย — ลาคลอด 98 วันไม่ควรทำให้เสียเบี้ยขยันทุกเดือนที่ลา
+ diligenceExemptLeaveTypes: ['comp-off', 'maternity', 'ordination', 'sick-with-cert'],
  unpaidLeaveLimitPerMonth: 0,
  // Social Security (ประกันสังคม) - ตามกฎหมายไทย
  ssoEnabled: true,
  ssoRate: 5, // 5% ของเงินเดือน
  ssoMinBase: 1650,
  ssoMaxBase: 15000,
+ // v1.6.0: ฐานเงินสมทบรวมค่าล่วงเวลาหรือไม่ — รอฝ่ายบัญชียืนยัน จึงคงพฤติกรรมเดิมไว้
+ // เปลี่ยนเป็น true ได้ทันทีเมื่อได้คำตอบ. มีผลเฉพาะคนที่เงินเดือนต่ำกว่าเพดาน
+ ssoIncludeOT: false,
+ // v1.6.0: เตือนเมื่อรายการหักตามมาตรา 76 (2)-(5) เกินร้อยละนี้ของเงินได้
+ // ประกันสังคมและ กยศ ไม่นับ เพราะเป็นเงินที่กฎหมายบัญญัติตาม (1)
+ deductionWarnPercent: 10,
+ payslipDocPrefix: 'PS',
  // Probation Evaluation
  probationEvalDays: 120,
  evalCriteria: [
@@ -3388,6 +3401,25 @@ function navigate(page) {
  if (page !== 'upload-attendance' && typeof _attendanceBuffer !== 'undefined' && _attendanceBuffer) {
   console.warn(`[v1.5.28] Leaving upload page — discarding ${_attendanceBuffer.length} buffered attendance record(s)`);
   _attendanceBuffer = null;
+ }
+ // v1.6.0: เดิมเปลี่ยนหน้าโดยไม่ดู role เลย เมนูแค่ซ่อนลิงก์ไว้ — พิมพ์
+ // navigate('payslip-admin') ใน console ก็เห็นเงินเดือนทุกคนและกดสร้างสลิปได้
+ // (นี่คือการกันคนกดพลาดและกันการเข้าถึงโดยบังเอิญ ไม่ใช่การป้องกันที่แท้จริง
+ //  ตราบใดที่ข้อมูลเงินยังถูกดึงลงเครื่องทุกคน — ดูแผนแยกตารางในรายงานทบทวน)
+ const _pageRoles = {
+  'payslip-admin':    ['admin', 'accountant'],
+  'payroll-export':   ['admin', 'accountant'],
+  'commissions':      ['admin', 'accountant'],
+  employees:          ['admin'],
+  settings:           ['admin'],
+  'audit-log':        ['admin'],
+  'org-chart-admin':  ['admin'],
+  onboarding:         ['admin']
+ };
+ const _allowed = _pageRoles[page];
+ if (_allowed && !_allowed.includes(currentUser?.role)) {
+  toast('ไม่มีสิทธิ์เข้าหน้านี้', 'error');
+  return;
  }
  currentPage = page;
  renderNav();
@@ -7126,7 +7158,9 @@ function deleteEmployee(id) {
  DB.save('accumulatedHolidays', DB.load('accumulatedHolidays').filter(a => a.employeeId !== id));
  DB.save('notifications', DB.load('notifications').filter(n => n.recipientId !== id));
  DB.save('attendanceRecords', DB.load('attendanceRecords').filter(a => a.employeeId !== id));
- DB.save('paySlips', DB.load('paySlips').filter(p => p.employeeId !== id));
+ // v1.6.0: ไม่ลบสลิปเงินเดือนอีกต่อไป — กฎหมายกำหนดให้เก็บเอกสารการจ่ายค่าจ้าง
+ // ไว้หลายปี และพนักงานเก่าอาจกลับมาขอสลิปย้อนหลังเพื่อยื่นกู้หรือยื่นภาษี
+ // (เดิม: DB.save('paySlips', ...filter(p => p.employeeId !== id)) — ลบถาวร)
  DB.save('commissions', DB.load('commissions').filter(c => c.employeeId !== id));
 
  toast(`ลบพนักงาน "${esc(emp.firstName)}" สำเร็จ`);
@@ -9751,18 +9785,28 @@ function _doRangeExport(scope) {
 function exportPayrollXLSX() {
  if (!_xlsxCheck()) return;
  const [y, m] = _slipMonth.split('-').map(Number);
- const emps = DB.load('employees').filter(e => e.active);
- if (!emps.length) { toast('ไม่มีพนักงานที่ Active', 'error'); return; }
+ // v1.6.0: รวมพนักงานที่ลาออกแล้วแต่มีสลิปในรอบนี้ เพื่อให้รอบสุดท้ายส่งออกได้ครบ
+ const _expSlips = DB.load('paySlips', []) || [];
+ const _expMonth = `${y}-${String(m).padStart(2,'0')}`;
+ const emps = DB.load('employees').filter(e =>
+  e.active || _expSlips.some(s => s.employeeId === e.id && s.monthStr === _expMonth));
+ if (!emps.length) { toast('ไม่มีพนักงานในรอบนี้', 'error'); return; }
 
- const header = ['รหัส','ชื่อ-นามสกุล','แผนก','บริษัท','เงินเดือน','OT (ชม.)','ค่า OT','คอมมิชชั่น','เบี้ยขยัน','วันมาทำงาน','วันมาสาย','หักมาสาย','ลาไม่รับค่าจ้าง (วัน)','หักลา','ประกันสังคม','รวมรายได้','รวมรายหัก','เงินสุทธิ'];
+ // v1.6.0: เพิ่มคอลัมน์ที่ขาด — เดิม "รวมรายหัก" ไม่รวมรายการหักพิเศษ แต่ "เงินสุทธิ"
+ // รวม ทำให้ รายได้ ลบ รายหัก ไม่เท่ากับเงินสุทธิ และไม่มีคอลัมน์ไหนอธิบายส่วนที่หายไป
+ const header = ['รหัส','ชื่อ-นามสกุล','แผนก','บริษัท','เงินเดือน','OT (ชม.)','ค่า OT','คอมมิชชั่น','เบี้ยขยัน','ยกยอดจากรอบก่อน','วันทำงาน (ปฏิทิน)','วันทำงาน (รอบคิดเงิน)','วันมาสาย','หักมาสาย','วันขาดงาน','หักขาดงาน','ลาไม่รับค่าจ้าง (วัน)','หักลา','ประกันสังคม','หักพิเศษ','รวมรายได้','รวมรายหัก','เงินสุทธิ','เลขที่เอกสาร','สถานะ'];
  const companyLabel = (id) => getCompanyLabel(id);
  const rows = [header];
- let totals = { base:0, ot:0, comm:0, dil:0, late:0, unp:0, sso:0, net:0 };
+ let totals = { base:0, ot:0, comm:0, dil:0, carry:0, late:0, absent:0, unp:0, sso:0, custom:0, earn:0, ded:0, net:0 };
  emps.forEach(e => {
- const s = calculatePaySlip(e.id, y, m);
+ // v1.6.0: รอบที่ปิดแล้วส่งออกยอดที่ล็อกไว้ ไม่ใช่ยอดสด
+ const s = resolvePaySlip(e.id, y, m);
  if (!s) return;
- const earn = s.baseSalary + s.otPay + s.commissionTotal + s.diligenceAmount;
- const ded = s.lateDeducTotal + s.unpaidDeduction + s.sso.amount;
+ const saved = getSavedSlip(e.id, `${y}-${String(m).padStart(2,'0')}`);
+ // ยอดถูกปัดเป็นจำนวนเต็มมาแล้วจาก calculatePaySlip จึงบวกตรงนี้ได้เลย
+ // และแถวรวมจะเท่ากับผลบวกของแถวข้างบนเสมอ
+ const earn = s.totalEarnings;
+ const ded = s.totalDeductions;
  rows.push([
  e.id,
  `${esc(e.firstName)} ${esc(e.lastName)}`,
@@ -9770,28 +9814,40 @@ function exportPayrollXLSX() {
  getCompanyLabel(e.company) || '-',
  s.baseSalary,
  s.otHours,
- Math.round(s.otPay),
+ s.otPay,
  s.commissionTotal,
  s.diligenceAmount,
+ s.carryOverTotal || 0,
  s.workDays,
+ s.workDaysCycle ?? '',
  s.lateDays,
  s.lateDeducTotal,
+ s.absentDays || 0,
+ s.absentDeduction || 0,
  // Show in days for new records; legacy hourly records are converted from unpaidHours/8 in payslip return
  s.unpaidDays || (s.unpaidHours ? Math.round((s.unpaidHours/8) * 100) / 100 : 0),
- Math.round(s.unpaidDeduction),
- Math.round(s.sso.amount),
- Math.round(earn),
- Math.round(ded),
- Math.round(s.netPay)
+ s.unpaidDeduction,
+ s.sso.amount,
+ s.customDeductionsTotal || 0,
+ earn,
+ ded,
+ s.netPay,
+ (saved && saved.docNo) || '',
+ isSlipLocked(saved) ? 'ปิดรอบแล้ว' : (saved ? 'บันทึกแล้ว' : 'ยังไม่บันทึก')
  ]);
  totals.base += s.baseSalary; totals.ot += s.otPay; totals.comm += s.commissionTotal;
- totals.dil += s.diligenceAmount; totals.late += s.lateDeducTotal; totals.unp += s.unpaidDeduction;
- totals.sso += s.sso.amount; totals.net += s.netPay;
+ totals.dil += s.diligenceAmount; totals.carry += (s.carryOverTotal || 0);
+ totals.late += s.lateDeducTotal; totals.absent += (s.absentDeduction || 0);
+ totals.unp += s.unpaidDeduction; totals.sso += s.sso.amount;
+ totals.custom += (s.customDeductionsTotal || 0);
+ totals.earn += earn; totals.ded += ded; totals.net += s.netPay;
  });
  rows.push([]);
- rows.push(['รวม','','','', Math.round(totals.base),'',Math.round(totals.ot),Math.round(totals.comm),Math.round(totals.dil),'','',Math.round(totals.late),'',Math.round(totals.unp),Math.round(totals.sso),'','',Math.round(totals.net)]);
+ rows.push(['รวม','','','', totals.base,'',totals.ot,totals.comm,totals.dil,totals.carry,
+  '','','',totals.late,'',totals.absent,'',totals.unp,totals.sso,totals.custom,
+  totals.earn,totals.ded,totals.net,'','']);
 
- const colWidths = [12,22,16,14,12,8,12,12,10,10,10,12,16,10,12,14,14,14];
+ const colWidths = [12,22,16,14,12,8,12,12,10,16,16,18,10,12,10,12,16,10,12,12,14,14,14,16,12];
  // v1.4.54: filename uses formatSlipMonth (Q1 B) — calendar-month emphasis with cycle detail
  const slipLabel = formatSlipMonth(_slipMonth).replace(/[()]/g, '').replace(/[/:]/g, '-').replace(/\s+/g, '_');
  _xlsxSaveSheet(rows, `Payroll ${_slipMonth}`, `Payroll-${_slipMonth}-${slipLabel}.xlsx`, colWidths);
@@ -9897,11 +9953,16 @@ function calculatePaySlip(employeeId, year, month) {
  const otMultiplier = settings.otMultiplier || 1.5;
  const otMultiplierHoliday = settings.otMultiplierHoliday || 3;
  const companyHolidays = new Set(settings.companyHolidays || []);
+ // v1.6.0: "วันหยุด" สำหรับตัวคูณ OT ยึดตารางกะรายคนก่อน แล้วจึงดูเสาร์-อาทิตย์
+ // และวันหยุดบริษัท — ตรรกะเดียวกับ isNonWorkingDay() ที่ใช้นับวันลาตั้งแต่ v1.5.29
+ //
+ // เดิมนับเสาร์-อาทิตย์เป็นวันหยุดเสมอ ทำให้พนักงานครัวและ รปภ. ที่ทำงานเสาร์-อาทิตย์
+ // เป็นกะปกติได้ OT 3 เท่า ส่วนคนที่หยุดวันธรรมดาได้เพียง 1.5 เท่าในวันหยุดจริงของตัวเอง
+ // และเดิมยังใช้ new Date(str).getDay() ซึ่งเลิกใช้ไปแล้วเพราะเพี้ยนข้ามโซนเวลา
+ const _holidayCtx = { shifts: DB.load('shifts', []), companyHolidays };
  const isHolidayDate = (dStr) => {
  if (!dStr) return false;
- if (companyHolidays.has(dStr)) return true;
- const dow = new Date(dStr).getDay();
- return dow === 0 || dow === 6; // เสาร์ อาทิตย์
+ return isNonWorkingDay(employeeId, dStr, _holidayCtx);
  };
  const lateDeduction = settings.lateDeduction ?? 50;
  const lateCalculationMode = settings.lateCalculationMode || 'occurrence';
@@ -9989,9 +10050,12 @@ function calculatePaySlip(employeeId, year, month) {
  const otReqs = DB.load('otRequests').filter(r =>
  r.employeeId === employeeId && r.status === 'approved' && getPayrollMonth(r.date) === monthStr
  );
- const otHours = otReqs.reduce((sum, r) => sum + r.hours, 0);
- const otHoursNormal = otReqs.filter(r => !isHolidayDate(r.date)).reduce((sum, r) => sum + r.hours, 0);
- const otHoursHoliday = otReqs.filter(r => isHolidayDate(r.date)).reduce((sum, r) => sum + r.hours, 0);
+ // v1.6.0: Number()||0 — ใบเดียวที่ hours เป็น null/สตริงว่าง เคยทำให้ otHours
+ // กลายเป็น NaN แล้วลามไปทั้ง netPay ของสลิปใบนั้น
+ const _otH = (r) => Number(r.hours) || 0;
+ const otHours = otReqs.reduce((sum, r) => sum + _otH(r), 0);
+ const otHoursNormal = otReqs.filter(r => !isHolidayDate(r.date)).reduce((sum, r) => sum + _otH(r), 0);
+ const otHoursHoliday = otReqs.filter(r => isHolidayDate(r.date)).reduce((sum, r) => sum + _otH(r), 0);
 
  // Leave for this month
  const leaves = DB.load('leaveRequests').filter(r =>
@@ -10062,16 +10126,37 @@ function calculatePaySlip(employeeId, year, month) {
  // - New (day-based): days × dailyRate (รองรับ 0.5 = ครึ่งวัน)
  // - Legacy (hourly): hours × hourlyRate
  const dailyRate = hourlyRate * workHoursPerDay;
+
+ // v1.6.0: หักค่าขาดงานเท่าค่าแรงรายวัน
+ //
+ // เดิมไม่มีรายการนี้เลย ทั้งที่หน้าตั้งค่าเขียนไว้ว่ากฎขาดงานอัตโนมัติ "ใช้ทั้งในรายงาน
+ // และการคำนวณเงินเดือน" ผลข้างเคียงคือคนที่มาสายเกินเกณฑ์จะหลุดจาก presentInMonth
+ // จึงไม่ถูกหักค่ามาสายด้วย — มาสาย 4 ชั่วโมงเคยถูกกว่ามาสาย 2 นาที
+ //
+ // ตั้งใจไม่หักค่ามาสายซ้ำในวันที่ถูกนับว่าขาดงาน: หักค่าแรงทั้งวันแล้วยังหักค่ามาสาย
+ // ของวันเดียวกันอีกคือการหักซ้อนวันเดียวสองครั้ง แรงจูงใจที่บิดเบี้ยวหายไปด้วยตัว
+ // การหักรายวันอยู่แล้ว (682 บาท มากกว่า 50 บาทอยู่มาก)
+ const absentDays = settings.absentDeductionEnabled === false ? 0 : autoAbsentDays;
+ const absentDeduction = absentDays * dailyRate;
  const unpaidDeduction = unpaidDaysThisMonth * dailyRate + unpaidHoursLegacy * hourlyRate;
  const unpaidHoursThisMonth = unpaidDaysThisMonth * workHoursPerDay + unpaidHoursLegacy; // total hours for display compat
 
  // Diligence bonus - eligibility check
  // v1.4.11: comp-off (ลาสะสมวันหยุด) = สลับวันหยุด ไม่ใช่ลาจริง → ไม่ตัดเบี้ยขยัน
  // v1.4.52: use PAYROLL month (was calendar) for diligence eligibility check
+ // v1.6.0: ประเภทที่ยกเว้นตั้งค่าได้ในหน้า Settings แทนการฝัง comp-off ไว้ตัวเดียว
+ // ค่าเริ่มต้นยกเว้นกลุ่มที่มีเอกสารรับรองหรือเป็นสิทธิ์ตามกฎหมาย
+ const _dilExempt = new Set(settings.diligenceExemptLeaveTypes || ['comp-off']);
  const hasLeaveThisMonth = leaves.some(r => {
- if (r.type === 'comp-off') return false; // exclude — comp-off คือสลับวันหยุด
- if (r.type === 'unpaid' && getPayrollMonth(r.startDate) === monthStr) return true;
- const s = new Date(r.startDate), e = new Date(r.endDate);
+ if (_dilExempt.has(r.type)) return false;
+ // v1.6.0: ลาไม่รับค่าจ้างเคยเช็กจากเดือนของ "ทั้งใบ" ขณะที่การหักเงินแบ่งราย
+ // วันด้วย _cycleShare มาตั้งแต่ v1.5.29 — ใบที่คร่อมรอบตัดจึงตัดสิทธิ์ผิดรอบ
+ if (r.type === 'unpaid') return _cycleShare(r) > 0;
+ // v1.6.0: กัน endDate หาย แบบเดียวกับที่ _cycleShare กันอยู่แล้ว
+ const _end = r.endDate || r.startDate;
+ if (!r.startDate) return false;
+ const s = new Date(r.startDate), e = new Date(_end);
+ if (isNaN(s) || isNaN(e)) return false;
  for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
  if (getPayrollMonth(d.toISOString().slice(0,10)) === monthStr) return true;
  }
@@ -10098,10 +10183,12 @@ function calculatePaySlip(employeeId, year, month) {
  const commissions = DB.load('commissions').filter(c =>
  c.employeeId === employeeId && c.monthStr === monthStr
  );
- const commissionTotal = commissions.reduce((sum, c) => sum + (c.amount || 0), 0);
+ const commissionTotal = Math.round(commissions.reduce((sum, c) => sum + (Number(c.amount) || 0), 0));
 
  // Social Security (ประกันสังคม)
- const sso = calculateSSO(emp, settings);
+ // v1.6.0: ส่งค่าจ้างส่วนเพิ่มไปด้วย เผื่อฝ่ายบัญชียืนยันว่าฐานต้องรวม OT
+ // มีผลเฉพาะคนที่เงินเดือนต่ำกว่าเพดาน 15,000 — คนอื่นถูกตัดที่เพดานอยู่แล้ว
+ const sso = calculateSSO(emp, settings, settings.ssoIncludeOT ? otPay + commissionTotal : 0);
 
  // v1.4.34 Feature 3: Custom deductions per employee per month (Admin adjust)
  // Examples: กยศ, ประกันชีวิต, กองทุนสำรอง, เงินยืม, อื่นๆ
@@ -10110,21 +10197,80 @@ function calculatePaySlip(employeeId, year, month) {
  );
  const customDeductionsTotal = customDeductions.reduce((sum, d) => sum + (Number(d.amount) || 0), 0);
 
- const netPay = baseSalary + otPay + diligenceAmount + commissionTotal
- - lateDeducTotal - unpaidDeduction - sso.amount - customDeductionsTotal;
+ // ------------------------------------------------------------------
+ // v1.6.0: ปัดเศษครั้งเดียวตรงนี้ แล้วทุกที่ใช้ค่าเดียวกัน
+ //
+ // เดิมเก็บทศนิยมเต็ม สลิปแสดง 2 ตำแหน่ง ส่วน Excel ปัดเป็นจำนวนเต็ม — พนักงาน
+ // ถือเอกสารที่เขียน 15,234.57 แต่เงินเข้าบัญชี 15,235 และแถวรวมในไฟล์ Excel
+ // ไม่เท่ากับผลบวกของแถวข้างบนเพราะปัดคนละจังหวะกัน
+ // ปัดทีละรายการแล้วบวก เพื่อให้ยอดบนสลิปบวกลบได้ลงตัวเสมอ
+ // ------------------------------------------------------------------
+ const R = (n) => Math.round(Number(n) || 0);
+ const _baseSalary = R(baseSalary);
+ const _otPayNormal = R(otPayNormal);
+ const _otPayHoliday = R(otPayHoliday);
+ const _otPay = _otPayNormal + _otPayHoliday;
+ const _diligence = R(diligenceAmount);
+ const _lateDeduc = R(lateDeducTotal);
+ const _unpaidDeduc = R(unpaidDeduction);
+ const _absentDeduc = R(absentDeduction);
+ const _ssoAmount = R(sso.amount);
+ const _customTotal = R(customDeductionsTotal);
+
+ // v1.6.0: ยอดยกมาจากรอบก่อน — สร้างตอน HR ปิดรอบ ไม่ใช่ตอนคำนวณ
+ // (คำนวณสลิปถูกเรียกทุกครั้งที่เปิดหน้า จึงต้องไม่เขียนอะไรลงฐานข้อมูล)
+ // ค่าบวก = จ่ายเพิ่ม เช่น OT ตกเบิก · ค่าลบ = หักเพิ่ม เช่น ส่วนที่หักไม่หมดเดือนก่อน
+ const carryOvers = (DB.load('payrollCarryOver', []) || []).filter(c =>
+ c.employeeId === employeeId && c.monthStr === monthStr
+ );
+ const carryOverTotal = R(carryOvers.reduce((sum, c) => sum + (Number(c.amount) || 0), 0));
+
+ const totalEarnings = _baseSalary + _otPay + _diligence + commissionTotal
+ + Math.max(0, carryOverTotal);
+ const totalDeductions = _lateDeduc + _unpaidDeduc + _absentDeduc + _ssoAmount + _customTotal
+ + Math.max(0, -carryOverTotal);
+ const netPayRaw = totalEarnings - totalDeductions;
+
+ // v1.6.0: ไม่ปล่อยให้ยอดติดลบ — หยุดที่ศูนย์ แล้วยกส่วนที่หักไม่หมดไปรอบถัดไป
+ const netPay = Math.max(0, netPayRaw);
+ const deferredDeduction = netPayRaw < 0 ? -netPayRaw : 0;
+
+ // v1.6.0: เพดานตามมาตรา 76 — รายการตาม (2)-(5) หักได้ไม่เกิน 10% ต่อรายการ
+ // ประกันสังคมและเงินที่กฎหมายบัญญัติอื่น (เช่น กยศ) ไม่นับ เพราะอยู่ใน (1)
+ // ใช้เตือน HR เท่านั้น ไม่บล็อกการบันทึก เพราะบางรายการมีหนังสือยินยอมรองรับ
+ const warnPct = settings.deductionWarnPercent ?? 10;
+ const deductionCapBase = totalEarnings;
+ const cappedDeductions = (customDeductions || []).filter(d => !d.statutory);
+ const cappedTotal = R(cappedDeductions.reduce((sum, d) => sum + (Number(d.amount) || 0), 0));
+ const deductionWarnings = [];
+ if (deductionCapBase > 0) {
+ cappedDeductions.forEach(d => {
+ const pct = (Number(d.amount) || 0) * 100 / deductionCapBase;
+ if (pct > warnPct) deductionWarnings.push(
+ `${d.label || 'รายการหัก'} = ${pct.toFixed(1)}% ของเงินได้ (เกิน ${warnPct}% ตามมาตรา 76)`);
+ });
+ if (cappedTotal * 100 / deductionCapBase > 20) deductionWarnings.push(
+ `รายการหักที่อยู่ในเพดานรวมกัน = ${(cappedTotal * 100 / deductionCapBase).toFixed(1)}% (เกิน 20% ตามมาตรา 76)`);
+ }
 
  return {
  employeeId, year, month, monthStr,
- baseSalary, otHours, otPay, hourlyRate, otMultiplier, otMultiplierHoliday,
- otHoursNormal, otHoursHoliday, otPayNormal, otPayHoliday,
- workDays, lateDays, autoAbsentDays, lateDeduction, lateDeducTotal, lateUnit, lateCalculationMode,
+ baseSalary: _baseSalary, otHours, otPay: _otPay, hourlyRate, otMultiplier, otMultiplierHoliday,
+ otHoursNormal, otHoursHoliday, otPayNormal: _otPayNormal, otPayHoliday: _otPayHoliday,
+ workDays, workDaysCycle: _workDaysCycle,
+ lateDays, autoAbsentDays, absentDays, absentDeduction: _absentDeduc,
+ lateDeduction, lateDeducTotal: _lateDeduc, lateUnit, lateCalculationMode,
  totalLateMinutes, totalLateHours,
- leaveDays, unpaidDays: unpaidDaysThisMonth, unpaidHours: unpaidHoursThisMonth, unpaidDeduction, dailyRate,
- diligenceAmount, diligenceBonus, eligibleForDiligence, diligenceReasons,
+ leaveDays, unpaidDays: unpaidDaysThisMonth, unpaidHours: unpaidHoursThisMonth,
+ unpaidDeduction: _unpaidDeduc, dailyRate,
+ diligenceAmount: _diligence, diligenceBonus, eligibleForDiligence, diligenceReasons,
  commissions, commissionTotal,
- sso,
- customDeductions, customDeductionsTotal,
- netPay,
+ sso: { ...sso, amount: _ssoAmount },
+ customDeductions, customDeductionsTotal: _customTotal,
+ carryOvers, carryOverTotal,
+ totalEarnings, totalDeductions,
+ netPayRaw, netPay, deferredDeduction,
+ deductionWarnings,
  generatedAt: new Date().toISOString()
  };
 }
@@ -10132,7 +10278,7 @@ function calculatePaySlip(employeeId, year, month) {
 // คำนวณประกันสังคมตามกฎหมายไทย
 // 5% ของฐานเงินเดือน (ฐานขั้นต่ำ 1,650 บาท ขั้นสูง 15,000 บาท → max 750 บาท/เดือน)
 // emp.ssoOverride: ถ้ามีค่า → ใช้ค่านี้แทนการคำนวณ (สำหรับกรณีพิเศษ)
-function calculateSSO(emp, settings) {
+function calculateSSO(emp, settings, extraWage) {
  const enabled = settings.ssoEnabled !== false;
  if (!enabled) return { amount: 0, base: 0, rate: 0, override: false, enabled: false };
 
@@ -10148,12 +10294,13 @@ function calculateSSO(emp, settings) {
  }
  }
 
- const salary = emp.monthlySalary || 0;
+ const salary = (emp.monthlySalary || 0) + (Number(extraWage) || 0);
  let base = salary;
  if (base < minBase) base = minBase;
  if (base > maxBase) base = maxBase;
- const amount = base * rate / 100;
- return { amount, base, rate, override: false, enabled: true, minBase, maxBase };
+ const amount = Math.round(base * rate / 100);
+ return { amount, base, rate, override: false, enabled: true, minBase, maxBase,
+          includedExtraWage: Number(extraWage) || 0 };
 }
 
 // ============================================================
@@ -10614,6 +10761,7 @@ function exportCommissionReport() {
 // ============================================================
 // v1.4.52/v1.4.54: default is lazy-init to respect slipMonthDefault setting ('calendar' or 'payroll')
 let _slipMonth = null;
+let _slipShowInactive = false; // v1.6.0: แสดงพนักงานที่ลาออกเพื่อทำสลิปเดือนสุดท้าย
 
 function renderPaySlipAdmin() {
  // v1.4.54: initialize _slipMonth using setting-controlled default (calendar vs payroll)
@@ -10629,12 +10777,23 @@ function renderPaySlipAdmin() {
  _slipMonth = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
  }
  }
+ if (!canManagePayroll()) {
+  document.getElementById('mainContent').innerHTML =
+   '<div class="alert alert-error">หน้านี้เปิดให้เฉพาะ Admin และฝ่ายบัญชี</div>';
+  return;
+ }
  const [y, m] = _slipMonth.split('-').map(Number);
- const emps = DB.load('employees').filter(e => e.active);
- const slips = DB.load('paySlips');
+ const slips = DB.load('paySlips', []) || [];
+ // v1.6.0: พนักงานที่ลาออกแล้วยังต้องทำสลิปเดือนสุดท้ายได้ และต้องเปิดดูสลิปเก่าได้
+ const emps = DB.load('employees').filter(e =>
+  e.active || _slipShowInactive || slips.some(s => s.employeeId === e.id && s.monthStr === _slipMonth));
  const records = DB.load('attendanceRecords');
  // v1.4.52: check attendance by PAYROLL month
  const hasAttendance = records.some(r => getPayrollMonth(r.date) === _slipMonth);
+ const monthSlips = slips.filter(s => s.monthStr === _slipMonth);
+ const lockedCount = monthSlips.filter(isSlipLocked).length;
+ const periodLocked = monthSlips.length > 0 && lockedCount === monthSlips.length;
+ const isAdmin = currentUser.role === 'admin';
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
@@ -10658,38 +10817,70 @@ function renderPaySlipAdmin() {
  <div class="card">
  <div class="card-header">
  <h3>คำนวณสลิป ${formatSlipMonth(_slipMonth)}</h3>
- <div style="display:flex;gap:8px;flex-wrap:wrap;">
+ <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+ <label style="font-size:13px;display:flex;align-items:center;gap:6px;cursor:pointer;color:var(--gray-600);">
+  <input type="checkbox" ${_slipShowInactive ? 'checked' : ''} onchange="_slipShowInactive=this.checked; renderPaySlipAdmin();">
+  แสดงพนักงานที่ลาออก
+ </label>
  <button class="btn btn-success btn-sm" ${!hasAttendance ? 'disabled' : ''} onclick="exportPayrollXLSX()">Export Excel</button>
+ ${isAdmin ? `
  <button class="btn btn-success" ${!hasAttendance ? 'disabled' : ''} onclick="generateAllPaySlips()">สร้างสลิปทั้งหมด</button>
+ <button class="btn btn-primary" ${monthSlips.length === 0 || periodLocked ? 'disabled' : ''}
+   onclick="markPayrollPaid()" title="ล็อกสลิปทั้งรอบ ออกเลขที่เอกสาร และยกยอดคงค้างไปรอบถัดไป">
+   ${periodLocked ? 'ปิดรอบแล้ว' : 'จ่ายเงินทั้งหมดแล้ว'}
+ </button>
  <button class="btn btn-danger btn-sm" onclick="deleteAllTestPaySlips()" title="ลบสลิปทดสอบทั้งหมด (Admin only)">🗑️ ลบสลิปทั้งหมด</button>
+ ` : ''}
  </div>
  </div>
  <div class="card-body" style="padding:0;overflow-x:auto;">
  <table>
  <thead><tr>
- <th>รหัส</th><th>ชื่อ</th><th>เงินเดือน</th><th>OT</th><th>คอม</th><th>เบี้ยขยัน</th><th>มาสาย</th><th>ลาไม่รับ</th><th>ปกส.</th><th>เงินสุทธิ</th><th>การจัดการ</th>
+ <th>รหัส</th><th>ชื่อ</th><th>เงินเดือน</th><th>OT</th><th>คอม</th><th>เบี้ยขยัน</th><th>ยกยอด</th><th>มาสาย</th><th>ขาดงาน</th><th>ลาไม่รับ</th><th>ปกส.</th><th>หักพิเศษ</th><th>เงินสุทธิ</th><th>สถานะ</th><th>การจัดการ</th>
  </tr></thead>
  <tbody>
  ${emps.map(e => {
- const slip = calculatePaySlip(e.id, y, m);
- if (!slip) return '';
  const saved = slips.find(s => s.employeeId === e.id && s.monthStr === _slipMonth);
- return `<tr>
- <td>${e.id}</td>
+ const locked = isSlipLocked(saved);
+ // v1.6.0: ล็อกแล้วแสดงยอดที่ล็อกไว้ ไม่ใช่ยอดสด
+ const slip = locked ? saved : calculatePaySlip(e.id, y, m);
+ if (!slip) return '';
+ // ล็อกแล้วแต่ยอดสดเปลี่ยนไป = มีอะไรอนุมัติเข้ามาหลังปิดรอบ จะยกไปรอบถัดไป
+ let drift = 0;
+ if (locked) {
+  const live = calculatePaySlip(e.id, y, m);
+  const carried = (saved.carriedAdjustments || []).reduce((t, a) => t + (Number(a.amount) || 0), 0);
+  if (live) drift = Math.round(live.netPay - (Number(saved.netPay) || 0) - carried);
+ }
+ const neg = v => v > 0 ? `<span style="color:var(--danger);">-${v.toLocaleString()}</span>` : '0';
+ return `<tr${e.active ? '' : ' style="opacity:.72;"'}>
+ <td>${e.id}${e.active ? '' : ' <small style="color:var(--gray-500);">(ลาออก)</small>'}</td>
  <td>${esc(e.firstName)} ${esc(e.lastName)}</td>
  <td>${slip.baseSalary.toLocaleString()}</td>
- <td style="color:var(--success);">+${slip.otPay.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
- <td style="color:var(--success);">+${slip.commissionTotal.toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+ <td style="color:var(--success);">+${slip.otPay.toLocaleString()}</td>
+ <td style="color:var(--success);">+${slip.commissionTotal.toLocaleString()}</td>
  <td style="color:${slip.eligibleForDiligence?'var(--success)':'var(--gray-500)'};">${slip.eligibleForDiligence?'+':''}${slip.diligenceAmount.toLocaleString()}</td>
- <td style="color:${slip.lateDeducTotal > 0 ? 'var(--danger)' : 'inherit'};">${slip.lateDeducTotal > 0 ? '-' + slip.lateDeducTotal.toLocaleString() : '0'}</td>
- <td style="color:${slip.unpaidDeduction > 0 ? 'var(--danger)' : 'inherit'};">${slip.unpaidDeduction > 0 ? '-' + Math.round(slip.unpaidDeduction).toLocaleString() : '0'}</td>
- <td style="color:${slip.sso.amount > 0 ? 'var(--danger)' : 'inherit'};">${slip.sso.amount > 0 ? '-' + Math.round(slip.sso.amount).toLocaleString() : '0'}</td>
- <td><strong>${slip.netPay.toLocaleString(undefined, {maximumFractionDigits:2})}</strong></td>
+ <td style="color:${(slip.carryOverTotal||0) > 0 ? 'var(--success)' : ((slip.carryOverTotal||0) < 0 ? 'var(--danger)' : 'inherit')};"
+     title="${esc((slip.carryOvers||[]).map(c => c.reason).join(' · '))}">
+   ${(slip.carryOverTotal||0) === 0 ? '0' : ((slip.carryOverTotal > 0 ? '+' : '') + slip.carryOverTotal.toLocaleString())}</td>
+ <td>${neg(slip.lateDeducTotal)}</td>
+ <td>${neg(slip.absentDeduction || 0)}${(slip.absentDays||0) ? ` <small style="color:var(--gray-500);">(${slip.absentDays} วัน)</small>` : ''}</td>
+ <td>${neg(slip.unpaidDeduction)}</td>
+ <td>${neg(slip.sso.amount)}</td>
+ <td>${neg(slip.customDeductionsTotal)}</td>
+ <td><strong>${slip.netPay.toLocaleString()}</strong>${slip.deferredDeduction > 0 ? `<br><small style="color:var(--danger);">ยกไปหักต่อ ${slip.deferredDeduction.toLocaleString()}</small>` : ''}</td>
  <td style="white-space:nowrap;">
- <button class="btn btn-sm btn-warning" onclick="openCustomDeductionModal('${e.id}', ${y}, ${m})" title="เพิ่ม/แก้ไข รายการหักพิเศษ (กยศ, ประกันชีวิต ฯลฯ)"> Adjust${slip.customDeductionsTotal > 0 ? ` (${slip.customDeductions.length})` : ''}</button>
+   ${locked
+     ? `<span class="status-badge status-approved" title="ปิดรอบเมื่อ ${esc(saved.paidAt||'')}">ปิดรอบแล้ว</span>${saved.docNo ? `<br><small style="color:var(--gray-500);">${esc(saved.docNo)}</small>` : ''}${drift ? `<br><small style="color:var(--warning);">ส่วนต่าง ${drift > 0 ? '+' : ''}${drift.toLocaleString()} จะยกไปรอบถัดไป</small>` : ''}`
+     : (saved ? '<span class="status-badge status-pending">บันทึกแล้ว</span>' : '<span style="color:var(--gray-500);font-size:12px;">ยังไม่บันทึก</span>')}
+   ${(slip.deductionWarnings||[]).length ? `<br><small style="color:var(--danger);" title="${esc(slip.deductionWarnings.join(' · '))}">⚠️ หักเกินเพดาน</small>` : ''}
+ </td>
+ <td style="white-space:nowrap;">
+ ${isAdmin && !locked ? `<button class="btn btn-sm btn-warning" onclick="openCustomDeductionModal('${e.id}', ${y}, ${m})" title="เพิ่ม/แก้ไข รายการหักพิเศษ (กยศ, ประกันชีวิต ฯลฯ)"> Adjust${slip.customDeductionsTotal > 0 ? ` (${slip.customDeductions.length})` : ''}</button>` : ''}
+ <button class="btn btn-sm btn-secondary" onclick="previewPaySlip('${e.id}', ${y}, ${m})" title="ดูตัวอย่างสลิปก่อนบันทึก"> Preview</button>
  <button class="btn btn-sm btn-primary" onclick="downloadPaySlipImage('${e.id}', ${y}, ${m})"> PNG</button>
  <button class="btn btn-sm btn-success" onclick="sharePaySlip('${e.id}', ${y}, ${m})"> แชร์</button>
- ${saved ? '<button class="btn btn-sm btn-success" disabled style="opacity:0.85;cursor:default;">บันทึกแล้ว</button>' : `<button class="btn btn-sm btn-secondary" onclick="savePaySlip('${e.id}', ${y}, ${m})">บันทึก</button>`}
+ ${isAdmin && !locked ? `<button class="btn btn-sm btn-secondary" onclick="savePaySlip('${e.id}', ${y}, ${m})">${saved ? 'บันทึกใหม่' : 'บันทึก'}</button>` : ''}
  </td>
  </tr>`;
  }).join('')}
@@ -10700,14 +10891,182 @@ function renderPaySlipAdmin() {
  `;
 }
 
+// ============================================================
+// v1.6.0: PAYROLL PERIOD LOCK, DOCUMENT NUMBER, CARRY-OVER
+// ============================================================
+// สลิปเงินเดือนเป็นเอกสารทางการ ยอดที่ออกไปแล้วต้องไม่เปลี่ยนเอง
+// รอบที่กด "จ่ายเงินแล้ว" จะถูกล็อก และทุกที่ที่แสดงหรือดาวน์โหลดต้องอ่าน
+// จากสลิปที่ล็อกไว้ ห้ามคำนวณใหม่
+// ============================================================
+
+// ใครเปิดหน้าเงินเดือนได้ — ตรงกับเมนู payroll-export ที่เปิดให้บัญชีอยู่แล้ว
+// ดู/ส่งออก/ดูตัวอย่าง = admin + accountant · สร้าง/ปิดรอบ/ลบ = admin เท่านั้น
+function canManagePayroll() {
+ return currentUser && (currentUser.role === 'admin' || currentUser.role === 'accountant');
+}
+
+function getSavedSlip(empId, monthStr) {
+ return (DB.load('paySlips', []) || []).find(s => s.employeeId === empId && s.monthStr === monthStr) || null;
+}
+
+function isSlipLocked(slip) { return !!(slip && slip.paid); }
+
+// สลิปที่ใช้แสดงผลจริง: ล็อกแล้วใช้ของที่ล็อก ยังไม่ล็อกคำนวณสด
+function resolvePaySlip(empId, year, month) {
+ const monthStr = `${year}-${String(month).padStart(2,'0')}`;
+ const saved = getSavedSlip(empId, monthStr);
+ if (isSlipLocked(saved)) return saved;
+ return calculatePaySlip(empId, year, month);
+}
+
+function _nextMonthStr(monthStr) {
+ const [y, m] = monthStr.split('-').map(Number);
+ return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+}
+
+// เลขที่เอกสารรันตามลำดับภายในรอบ ออกครั้งเดียวตอนล็อก แล้วไม่เปลี่ยนอีก
+function _assignDocNo(slip, slips, settings) {
+ if (slip.docNo) return slip.docNo;
+ const prefix = settings.payslipDocPrefix || 'PS';
+ const stem = `${prefix}-${slip.monthStr.replace('-', '')}-`;
+ let max = 0;
+ slips.forEach(s => {
+  if (s.docNo && String(s.docNo).startsWith(stem)) {
+   const n = parseInt(String(s.docNo).slice(stem.length), 10);
+   if (Number.isFinite(n) && n > max) max = n;
+  }
+ });
+ return stem + String(max + 1).padStart(4, '0');
+}
+
+// v1.6.0: ยกยอดอัตโนมัติ — เรียกก่อนสร้างสลิปของรอบใหม่เสมอ
+//
+// ข้อมูลที่อนุมัติหลังปิดรอบเกิดขึ้นประจำ (OT ของรอบ ส.ค. ถูกอนุมัติวันที่ 31 ส.ค.
+// อีก 5 ใบ และ 1 ก.ย. อีก 2 ใบ) รอบที่ล็อกแล้วจะไม่ถูกแก้ ส่วนต่างจะกลายเป็น
+// รายการปรับปรุงในรอบถัดไปแทน
+//
+// กันยกยอดซ้ำด้วย carriedAdjustments บนตัวสลิปต้นทาง: ส่วนต่างคิดจาก
+// ยอดสด ลบ (ยอดที่ล็อก + ที่ยกไปแล้ว) จึงรันกี่ครั้งก็ไม่บวกซ้ำ
+function applyLockedSlipAdjustments(targetMonthStr) {
+ const slips = DB.load('paySlips', []) || [];
+ const carry = DB.load('payrollCarryOver', []) || [];
+ let changed = 0;
+ slips.forEach(slip => {
+  if (!isSlipLocked(slip)) return;
+  if (!slip.monthStr || slip.monthStr >= targetMonthStr) return;
+  const [y, m] = slip.monthStr.split('-').map(Number);
+  const live = calculatePaySlip(slip.employeeId, y, m);
+  if (!live) return;
+  const already = (slip.carriedAdjustments || []).reduce((sum, a) => sum + (Number(a.amount) || 0), 0);
+  const diff = Math.round(live.netPay - (Number(slip.netPay) || 0) - already);
+  if (Math.abs(diff) < 1) return;
+  carry.push({
+   id: uid('CO'),
+   employeeId: slip.employeeId,
+   monthStr: targetMonthStr,
+   amount: diff,
+   reason: `ปรับปรุงยอดรอบ ${formatSlipMonth(slip.monthStr)} (อนุมัติหลังปิดรอบ)`,
+   sourceMonth: slip.monthStr,
+   createdAt: new Date().toISOString()
+  });
+  slip.carriedAdjustments = (slip.carriedAdjustments || []).concat(
+   [{ toMonth: targetMonthStr, amount: diff, at: new Date().toISOString() }]);
+  changed++;
+ });
+ if (changed) {
+  DB.save('payrollCarryOver', carry);
+  DB.save('paySlips', slips);
+  auditLog('payroll-carryover', 'paySlips', targetMonthStr,
+   `ยกยอดปรับปรุงจากรอบที่ปิดแล้ว ${changed} รายการ เข้ารอบ ${targetMonthStr}`);
+ }
+ return changed;
+}
+
+// v1.6.0: ปิดรอบ — ล็อกทุกใบของเดือนนั้น ออกเลขที่เอกสาร และยกส่วนที่หักไม่หมดไปรอบถัดไป
+function markPayrollPaid() {
+ if (currentUser.role !== 'admin') { toast('เฉพาะ Admin เท่านั้น', 'error'); return; }
+ const settings = DB.load('settings', {});
+ const slips = DB.load('paySlips', []) || [];
+ const target = slips.filter(s => s.monthStr === _slipMonth && !s.paid);
+ if (target.length === 0) { toast('รอบนี้ไม่มีสลิปที่ยังไม่ปิด', 'info'); return; }
+ if (!confirm('ยืนยันปิดรอบ ' + formatSlipMonth(_slipMonth) + '?\n\n' +
+  '• สลิป ' + target.length + ' ใบจะถูกล็อก แก้ไขไม่ได้อีก\n' +
+  '• ระบบจะออกเลขที่เอกสารให้ทุกใบ\n' +
+  '• ข้อมูลที่อนุมัติหลังจากนี้จะถูกยกไปปรับในรอบถัดไปโดยอัตโนมัติ')) return;
+ const carry = DB.load('payrollCarryOver', []) || [];
+ const nextMonth = _nextMonthStr(_slipMonth);
+ const stamp = new Date().toISOString();
+ let deferred = 0;
+ target.forEach(slip => {
+  slip.docNo = _assignDocNo(slip, slips, settings);
+  slip.paid = true;
+  slip.paidAt = stamp;
+  slip.paidBy = currentUser.id;
+  if (slip.deferredDeduction > 0) {
+   carry.push({
+    id: uid('CO'),
+    employeeId: slip.employeeId,
+    monthStr: nextMonth,
+    amount: -slip.deferredDeduction,
+    reason: `ยอดหักคงค้างจากรอบ ${formatSlipMonth(slip.monthStr)} (รอบนั้นหักได้ไม่ครบ)`,
+    sourceMonth: slip.monthStr,
+    createdAt: stamp
+   });
+   deferred++;
+  }
+ });
+ if (deferred) DB.save('payrollCarryOver', carry);
+ DB.save('paySlips', slips);
+ auditLog('payroll-lock', 'paySlips', _slipMonth,
+  `ปิดรอบ ${_slipMonth} — ล็อก ${target.length} ใบ` + (deferred ? ` · ยกยอดหักคงค้าง ${deferred} ราย` : ''));
+ toast(`ปิดรอบสำเร็จ — ล็อก ${target.length} ใบ`);
+ renderPage();
+}
+
+// v1.6.0: ดูตัวอย่างสลิปก่อนบันทึก — ไม่สร้างไฟล์ ไม่เขียนอะไรลงฐานข้อมูล
+function previewPaySlip(empId, year, month) {
+ if (!canManagePayroll()) { toast('เฉพาะ Admin และฝ่ายบัญชี', 'error'); return; }
+ const slip = resolvePaySlip(empId, year, month);
+ const emp = getEmployee(empId);
+ if (!slip || !emp) { toast('ไม่พบข้อมูลสลิป', 'error'); return; }
+ const monthName = formatSlipMonth(slip.monthStr);
+ const warn = (slip.deductionWarnings && slip.deductionWarnings.length) ? `
+   <div class="alert alert-error mb-3" style="font-size:13px;">
+    <strong>⚠️ รายการหักเกินเพดานตามมาตรา 76</strong>
+    <ul style="margin:6px 0 0 18px;padding:0;">${slip.deductionWarnings.map(w => `<li>${esc(w)}</li>`).join('')}</ul>
+   </div>` : '';
+ const defer = slip.deferredDeduction > 0 ? `
+   <div class="alert alert-info mb-3" style="font-size:13px;">
+    รายการหักมากกว่าเงินได้ — ยอดสุทธิหยุดที่ 0 บาท ส่วนที่หักไม่หมด
+    <strong>${slip.deferredDeduction.toLocaleString()} บาท</strong> จะยกไปหักในรอบถัดไปเมื่อปิดรอบนี้
+   </div>` : '';
+ showModal(`ตัวอย่างสลิป — ${esc(emp.firstName)} ${esc(emp.lastName)}`,
+  warn + defer + `<div style="overflow:auto;max-height:70vh;background:#fff;padding:8px;">${buildPaySlipHTML(slip, emp, monthName)}</div>`);
+}
+
 function savePaySlip(empId, year, month) {
+ // v1.6.0: เดิมไม่มีการเช็กสิทธิ์เลย ทั้งที่ deleteAllTestPaySlips เช็ก
+ if (currentUser.role !== 'admin') { toast('เฉพาะ Admin เท่านั้น', 'error'); return; }
+ const slips = DB.load('paySlips', []) || [];
+ const monthStr = `${year}-${String(month).padStart(2,'0')}`;
+ const existing = slips.findIndex(s => s.employeeId === empId && s.monthStr === monthStr);
+ if (existing >= 0 && isSlipLocked(slips[existing])) {
+  toast('รอบนี้ปิดแล้ว แก้ไขไม่ได้ — ส่วนต่างจะถูกยกไปรอบถัดไปให้อัตโนมัติ', 'error');
+  return;
+ }
  const slip = calculatePaySlip(empId, year, month);
  if (!slip) return;
- const slips = DB.load('paySlips');
- const existing = slips.findIndex(s => s.employeeId === empId && s.monthStr === slip.monthStr);
+ const prev = existing >= 0 ? slips[existing] : null;
+ if (prev && prev.docNo) slip.docNo = prev.docNo;
+ slip.savedAt = new Date().toISOString();
+ slip.savedBy = currentUser.id;
  if (existing >= 0) slips[existing] = slip;
  else slips.push(slip);
  DB.save('paySlips', slips);
+ // v1.6.0: เดิมไม่มีบันทึกเลยว่าใครสร้างสลิปใบไหน ด้วยยอดเท่าไร
+ auditLog('payslip-save', 'paySlips', `${empId}|${monthStr}`,
+  `${getEmployee(empId)?.firstName || empId} รอบ ${monthStr} · สุทธิ ${slip.netPay.toLocaleString()} บาท` +
+  (prev ? ` (เดิม ${Number(prev.netPay || 0).toLocaleString()})` : ''));
  toast('บันทึกสลิปสำเร็จ');
  renderPage();
 }
@@ -10817,20 +11176,37 @@ function removeCustomDeduction(id, empId, year, month) {
 }
 
 function generateAllPaySlips() {
+ if (currentUser.role !== 'admin') { toast('เฉพาะ Admin เท่านั้น', 'error'); return; }
  const [y, m] = _slipMonth.split('-').map(Number);
- const emps = DB.load('employees').filter(e => e.active);
- const slips = DB.load('paySlips');
- let count = 0;
+ // v1.6.0: ยกยอดจากรอบที่ปิดไปแล้วก่อนเสมอ — ข้อมูลที่อนุมัติหลังปิดรอบจะกลาย
+ // เป็นรายการปรับปรุงในรอบนี้ แทนที่จะเงียบหายไป
+ const carried = applyLockedSlipAdjustments(_slipMonth);
+ const slips = DB.load('paySlips', []) || [];
+ // v1.6.0: รวมพนักงานที่ลาออกแล้วแต่มีสลิปในรอบนี้อยู่ด้วย เพื่อให้ทำสลิปเดือน
+ // สุดท้ายได้ เดิมกรอง e.active ทิ้ง คนที่ปิดสถานะจึงหายจากหน้านี้ทันที
+ const emps = DB.load('employees').filter(e =>
+  e.active || slips.some(s => s.employeeId === e.id && s.monthStr === _slipMonth));
+ let count = 0, locked = 0;
  emps.forEach(e => {
+ const existing = slips.findIndex(s => s.employeeId === e.id && s.monthStr === _slipMonth);
+ if (existing >= 0 && isSlipLocked(slips[existing])) { locked++; return; }
  const slip = calculatePaySlip(e.id, y, m);
  if (!slip) return;
- const existing = slips.findIndex(s => s.employeeId === e.id && s.monthStr === slip.monthStr);
+ if (existing >= 0 && slips[existing].docNo) slip.docNo = slips[existing].docNo;
+ slip.savedAt = new Date().toISOString();
+ slip.savedBy = currentUser.id;
  if (existing >= 0) slips[existing] = slip;
  else slips.push(slip);
  count++;
  });
  DB.save('paySlips', slips);
- toast(`สร้างสลิป ${count} ใบสำเร็จ`);
+ auditLog('payslip-generate-all', 'paySlips', _slipMonth,
+  `สร้างสลิปรอบ ${_slipMonth} จำนวน ${count} ใบ` +
+  (locked ? ` · ข้าม ${locked} ใบที่ปิดรอบแล้ว` : '') +
+  (carried ? ` · ยกยอดปรับปรุงเข้ามา ${carried} รายการ` : ''));
+ toast(`สร้างสลิป ${count} ใบสำเร็จ` +
+  (locked ? ` (ข้าม ${locked} ใบที่ปิดรอบแล้ว)` : '') +
+  (carried ? ` · ยกยอด ${carried} รายการ` : ''));
  renderPage();
 }
 
@@ -10953,11 +11329,15 @@ function renderMyPaySlip() {
 
  <div class="card">
  <div class="card-header"><h3>สลิปย้อนหลัง</h3></div>
+ <div style="padding:12px 16px 0;font-size:12.5px;color:var(--gray-600);">
+  ยอดในสลิปยังไม่รวมภาษีหัก ณ ที่จ่าย ซึ่งฝ่ายบัญชีเป็นผู้คำนวณ ยอดที่โอนเข้าบัญชีจึงอาจต่างจากนี้ ·
+  สลิปที่ขึ้นว่า “ฉบับร่าง” คือรอบที่ยังไม่ปิด ตัวเลขอาจเปลี่ยนได้จนกว่า HR จะปิดรอบ
+ </div>
  <div class="card-body" style="padding:0;">
  ${slips.length ? `
  <table>
  <thead><tr>
- <th>เดือน</th><th>เงินเดือน</th><th>OT (ชม.)</th><th>วันทำงาน</th><th>มาสาย</th><th>เงินสุทธิ</th><th></th>
+ <th>เดือน</th><th>เลขที่เอกสาร</th><th>เงินเดือน</th><th>OT (ชม.)</th><th>วันทำงาน</th><th>มาสาย</th><th>เงินสุทธิ</th><th>สถานะ</th><th></th>
  </tr></thead>
  <tbody>
  ${slips.map(s => {
@@ -10966,11 +11346,13 @@ function renderMyPaySlip() {
  const monthName = formatSlipMonth(s.monthStr);
  return `<tr>
  <td><strong>${monthName}</strong></td>
+ <td style="font-size:12px;color:var(--gray-600);">${esc(s.docNo || '—')}</td>
  <td>${s.baseSalary.toLocaleString()} ฿</td>
- <td>${s.otHours.toFixed(1)}</td>
+ <td>${Number(s.otHours || 0).toFixed(1)}</td>
  <td>${s.workDays}</td>
  <td style="color:${s.lateDays > 0 ? 'var(--danger)' : 'inherit'};">${s.lateDays}</td>
- <td><strong>${s.netPay.toLocaleString(undefined,{maximumFractionDigits:2})} ฿</strong></td>
+ <td><strong>${Number(s.netPay || 0).toLocaleString()} ฿</strong></td>
+ <td>${s.paid ? '<span class="status-badge status-approved">ปิดรอบแล้ว</span>' : '<span class="status-badge status-pending">ฉบับร่าง</span>'}</td>
  <td style="white-space:nowrap;">
  <button class="btn btn-sm btn-primary" onclick="downloadPaySlipImage('${currentUser.id}', ${y}, ${m})"> ดาวน์โหลด</button>
  <button class="btn btn-sm btn-success" onclick="sharePaySlip('${currentUser.id}', ${y}, ${m})"> แชร์</button>
@@ -11038,7 +11420,8 @@ function buildPaySlipHTML(slip, emp, monthName) {
  </thead>
  <tbody>
  <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">เงินเดือนพื้นฐาน</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">${slip.baseSalary.toLocaleString()} บาท</td></tr>
- <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">วันทำงาน</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">${slip.workDays} วัน</td></tr>
+ <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">วันทำงาน (ปฏิทิน ${monthName.split(' (')[0]}) — ช่วงเดียวกับเงินเดือน</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">${slip.workDays} วัน</td></tr>
+ ${slip.workDaysCycle !== undefined && slip.workDaysCycle !== null ? `<tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};color:${C.muted};">วันทำงานในรอบคิด OT/ลา/มาสาย</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;color:${C.muted};">${slip.workDaysCycle} วัน</td></tr>` : ''}
  <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};color:${C.muted};">ชั่วโมง OT รวม — ${slip.hourlyRate.toFixed(2)} บาท/ชม.</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;color:${C.muted};">${slip.otHours.toFixed(1)} ชั่วโมง</td></tr>
  ${slip.otHoursNormal > 0 ? `<tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};color:${C.muted};">↳ OT วันปกติ (× ${slip.otMultiplier} เท่า) ${slip.otHoursNormal.toFixed(1)} ชม.</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;color:${C.inkSoft};">+${slip.otPayNormal.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>` : ''}
  ${slip.otHoursHoliday > 0 ? `<tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};color:${C.muted};">↳ OT วันหยุด (× ${slip.otMultiplierHoliday} เท่า) ${slip.otHoursHoliday.toFixed(1)} ชม.</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;color:${C.inkSoft};">+${slip.otPayHoliday.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>` : ''}
@@ -11048,8 +11431,12 @@ function buildPaySlipHTML(slip, emp, monthName) {
  <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};font-weight:600;">+ ค่าคอมมิชชั่น${c.description ? ` — ${esc(c.description)}` : ''}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;font-weight:600;">+${c.amount.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
  `).join('') : ''}
  ${slip.commissionTotal > 0 ? `
- <tr style="background:${C.lineSoft};"><td style="padding:9px 12px;font-weight:700;">รวมค่าคอมมิชชั่น (${slip.commissions.length} รายการ)</td><td style="padding:9px 12px;text-align:right;font-weight:700;">+${slip.commissionTotal.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
+ <tr style="background:${C.lineSoft};"><td style="padding:9px 12px;font-weight:700;">รวมค่าคอมมิชชั่น (${slip.commissions.length} รายการ)</td><td style="padding:9px 12px;text-align:right;font-weight:700;">+${slip.commissionTotal.toLocaleString()} บาท</td></tr>
  ` : ''}
+ ${(slip.carryOvers || []).filter(c => (c.amount || 0) > 0).map(c => `
+ <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">+ ${esc(c.reason || 'ยกยอดจากรอบก่อน')}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">+${Number(c.amount).toLocaleString()} บาท</td></tr>
+ `).join('')}
+ <tr style="background:${C.lineSoft};"><td style="padding:9px 12px;font-weight:700;">รวมรายรับ</td><td style="padding:9px 12px;text-align:right;font-weight:700;">${(slip.totalEarnings ?? 0).toLocaleString()} บาท</td></tr>
  </tbody>
  </table>
 
@@ -11063,7 +11450,12 @@ function buildPaySlipHTML(slip, emp, monthName) {
  </tr>
  </thead>
  <tbody>
- <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">ลาไม่รับค่าจ้าง (${slip.unpaidDays || 0} วัน × ${(slip.dailyRate || 0).toFixed(2)} บาท/วัน)</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">-${slip.unpaidDeduction.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
+ <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">ลาไม่รับค่าจ้าง (${slip.unpaidDays || 0} วัน × ${(slip.dailyRate || 0).toFixed(2)} บาท/วัน)</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">-${slip.unpaidDeduction.toLocaleString()} บาท</td></tr>
+ ${(slip.absentDays || 0) > 0 ? `<tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">ขาดงาน (${slip.absentDays} วัน × ${(slip.dailyRate || 0).toFixed(2)} บาท/วัน)</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">-${(slip.absentDeduction || 0).toLocaleString()} บาท</td></tr>` : ''}
+ <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">มาสาย (${slip.lateUnit || slip.lateDays + ' ครั้ง'})</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">-${(slip.lateDeducTotal || 0).toLocaleString()} บาท</td></tr>
+ ${(slip.carryOvers || []).filter(c => (c.amount || 0) < 0).map(c => `
+ <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">${esc(c.reason || 'ยอดหักยกมาจากรอบก่อน')}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">-${Math.abs(Number(c.amount)).toLocaleString()} บาท</td></tr>
+ `).join('')}
  ${slip.sso.enabled ? `
  <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">ประกันสังคม ${slip.sso.override ? '(กำหนดเอง)' : `(${slip.sso.rate}% × ฐาน ${slip.sso.base.toLocaleString()} บาท)`}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">-${slip.sso.amount.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
  ` : ''}
@@ -11072,8 +11464,9 @@ function buildPaySlipHTML(slip, emp, monthName) {
  <tr><td style="padding:8px 12px;border-bottom:1px solid ${C.line};">${esc(d.label)}${d.note ? ` <small style="color:${C.muted};">— ${esc(d.note)}</small>` : ''}</td><td style="padding:8px 12px;border-bottom:1px solid ${C.line};text-align:right;">-${(Number(d.amount)||0).toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
  `).join('') : ''}
  ${slip.customDeductionsTotal > 0 ? `
- <tr style="background:${C.lineSoft};"><td style="padding:9px 12px;font-weight:700;">รวมรายการหักพิเศษ (${slip.customDeductions.length} รายการ)</td><td style="padding:9px 12px;text-align:right;font-weight:700;">-${slip.customDeductionsTotal.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</td></tr>
+ <tr style="background:${C.lineSoft};"><td style="padding:9px 12px;font-weight:700;">รวมรายการหักพิเศษ (${slip.customDeductions.length} รายการ)</td><td style="padding:9px 12px;text-align:right;font-weight:700;">-${slip.customDeductionsTotal.toLocaleString()} บาท</td></tr>
  ` : ''}
+ <tr style="background:${C.lineSoft};"><td style="padding:9px 12px;font-weight:700;border-top:1px solid ${C.line};">รวมรายการหัก</td><td style="padding:9px 12px;text-align:right;font-weight:700;border-top:1px solid ${C.line};">-${(slip.totalDeductions ?? 0).toLocaleString()} บาท</td></tr>
  </tbody>
  </table>
 
@@ -11083,8 +11476,19 @@ function buildPaySlipHTML(slip, emp, monthName) {
  <span style="font-size:26px;font-weight:800;">${slip.netPay.toLocaleString(undefined,{maximumFractionDigits:2})} บาท</span>
  </div>
 
- <div style="text-align:center;margin-top:18px;font-size:10px;color:${C.muted};line-height:1.5;">
- <div>ออกเอกสารเมื่อ: ${new Date().toLocaleString('th-TH')}</div>
+ ${slip.deferredDeduction > 0 ? `
+ <div style="margin-top:12px;padding:10px 14px;border:1px solid ${C.line};background:${C.panel};font-size:11.5px;color:${C.inkSoft};">
+  รายการหักในรอบนี้มากกว่าเงินได้ ยอดสุทธิจึงหยุดที่ 0 บาท
+  ส่วนที่หักไม่หมด <strong>${slip.deferredDeduction.toLocaleString()} บาท</strong> จะยกไปหักในรอบถัดไป
+ </div>` : ''}
+
+ <!-- v1.6.0: เลขที่เอกสารและวันที่ออกล็อกไว้ตอนบันทึก ไม่ใช่ new Date() ตอนดาวน์โหลด
+      เดิมดาวน์โหลดสองครั้งได้เอกสารสองใบที่วันที่ต่างกัน -->
+ <div style="text-align:center;margin-top:18px;font-size:10px;color:${C.muted};line-height:1.6;">
+ <div>เลขที่เอกสาร: <strong style="color:${C.inkSoft};">${esc(slip.docNo || '(ยังไม่ปิดรอบ)')}</strong>
+  &nbsp; • &nbsp; ออกเอกสารเมื่อ: ${new Date(slip.paidAt || slip.savedAt || slip.generatedAt || Date.now()).toLocaleString('th-TH')}
+  ${slip.paid ? '&nbsp; • &nbsp; <strong style="color:' + C.inkSoft + ';">ปิดรอบแล้ว</strong>' : '&nbsp; • &nbsp; ฉบับร่าง ยังไม่ปิดรอบ'}</div>
+ <div style="margin-top:4px;">ยอดนี้ยังไม่รวมภาษีหัก ณ ที่จ่าย ซึ่งฝ่ายบัญชีเป็นผู้คำนวณและนำส่ง ยอดที่โอนเข้าบัญชีจึงอาจต่างจากยอดนี้</div>
  <div>เอกสารนี้ออกโดยระบบ ไม่ต้องลงนามรับรอง</div>
  </div>
  </div>
@@ -11092,7 +11496,11 @@ function buildPaySlipHTML(slip, emp, monthName) {
 }
 
 async function generatePaySlipImage(empId, year, month) {
- const slip = calculatePaySlip(empId, year, month);
+ // v1.6.0: อ่านจากสลิปที่ล็อกไว้เมื่อรอบปิดแล้ว
+ //
+ // เดิมคำนวณใหม่ทุกครั้งแล้วเขียนทับสลิปเดิม — พนักงานกดดาวน์โหลดสลิปตัวเอง
+ // ก็เปลี่ยนบันทึกการจ่ายเงินได้ และดาวน์โหลดสองครั้งได้ตัวเลขคนละชุด
+ const slip = resolvePaySlip(empId, year, month);
  const emp = getEmployee(empId);
  if (!slip || !emp) return null;
 
@@ -11117,12 +11525,8 @@ async function generatePaySlipImage(empId, year, month) {
  windowWidth: 800
  });
 
- // Save the slip to history
- const slips = DB.load('paySlips');
- const existing = slips.findIndex(s => s.employeeId === empId && s.monthStr === slip.monthStr);
- if (existing >= 0) slips[existing] = slip;
- else slips.push(slip);
- DB.save('paySlips', slips);
+ // v1.6.0: ไม่เขียนอะไรลงฐานข้อมูลจากการดาวน์โหลดอีกต่อไป
+ // การออกสลิปเป็นหน้าที่ของ Admin ผ่านปุ่มบันทึกและปุ่มปิดรอบเท่านั้น
 
  // Get blob
  return await new Promise(resolve => {
@@ -12099,6 +12503,8 @@ function exportTimeCertXLSX() {
 // SETTINGS
 // ============================================================
 function renderSettings() {
+ // v1.6.0: ประเภทการลาที่ยกเว้นเบี้ยขยัน — ใช้ในแผงตั้งค่าด้านล่าง
+ const _dilEx = new Set((DB.load('settings', {}).diligenceExemptLeaveTypes) || ['comp-off']);
  const s = DB.load('settings');
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header"><h1> ตั้งค่าระบบ</h1></div>
@@ -12274,6 +12680,86 @@ function renderSettings() {
  </div>
  </div>
  </div>
+ <div class="card">
+ <div class="card-header"><h3> เบี้ยขยัน · ขาดงาน · เพดานการหัก <small style="color:var(--gray-500);font-weight:400;">(v1.6.0)</small></h3></div>
+ <div class="card-body">
+  <div class="form-group">
+   <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+    <input type="checkbox" id="qAbsentDeduct" ${s.absentDeductionEnabled === false ? '' : 'checked'}>
+    หักค่าขาดงานเท่าค่าแรงรายวัน
+   </label>
+   <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
+    วันที่ระบบนับว่าขาดงานอัตโนมัติ จะถูกหักเท่าเงินเดือน ÷ ${s.workDaysPerMonth || 22} วัน
+    · วันเดียวกันจะไม่ถูกหักค่ามาสายซ้ำอีก เพราะเป็นการหักวันนั้นเต็มวันไปแล้ว
+   </div>
+  </div>
+
+  <div class="form-group">
+   <label>ประเภทการลาที่ <strong>ไม่</strong> ตัดเบี้ยขยัน</label>
+   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:2px 18px;margin-top:6px;">
+  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
+   <input type="checkbox" class="dilExempt" value="comp-off" ${_dilEx.has('comp-off') ? 'checked' : ''}> ลาสะสมวันหยุด
+  </label>
+  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
+   <input type="checkbox" class="dilExempt" value="maternity" ${_dilEx.has('maternity') ? 'checked' : ''}> ลาคลอด
+  </label>
+  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
+   <input type="checkbox" class="dilExempt" value="ordination" ${_dilEx.has('ordination') ? 'checked' : ''}> ลาบวช
+  </label>
+  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
+   <input type="checkbox" class="dilExempt" value="sick-with-cert" ${_dilEx.has('sick-with-cert') ? 'checked' : ''}> ลาป่วย (มีใบรับรองแพทย์)
+  </label>
+  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
+   <input type="checkbox" class="dilExempt" value="sick-without-cert" ${_dilEx.has('sick-without-cert') ? 'checked' : ''}> ลาป่วย (ไม่มีใบรับรองแพทย์)
+  </label>
+  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
+   <input type="checkbox" class="dilExempt" value="sick" ${_dilEx.has('sick') ? 'checked' : ''}> ลาป่วย
+  </label>
+  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
+   <input type="checkbox" class="dilExempt" value="vacation" ${_dilEx.has('vacation') ? 'checked' : ''}> ลาพักร้อน
+  </label>
+  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
+   <input type="checkbox" class="dilExempt" value="personal" ${_dilEx.has('personal') ? 'checked' : ''}> ลากิจ
+  </label>
+  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
+   <input type="checkbox" class="dilExempt" value="unpaid" ${_dilEx.has('unpaid') ? 'checked' : ''}> ลาไม่รับค่าจ้าง
+  </label>
+   </div>
+   <div class="text-sm" style="color:var(--gray-500);margin-top:6px;">
+    ค่าเริ่มต้นยกเว้นกลุ่มที่มีเอกสารรับรองหรือเป็นสิทธิ์ตามกฎหมาย — พนักงานที่ลาคลอด 98 วัน
+    ไม่ควรเสียเบี้ยขยันทุกเดือนที่ลา ด้วยเหตุที่ควบคุมไม่ได้
+   </div>
+  </div>
+
+  <div class="form-row">
+   <div class="form-group">
+    <label>เตือนเมื่อรายการหักพิเศษเกิน (% ของเงินได้)</label>
+    <input type="number" id="qDeductWarn" min="0" max="100" step="1" value="${s.deductionWarnPercent ?? 10}">
+    <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
+     มาตรา 76 พ.ร.บ.คุ้มครองแรงงาน — รายการหักตาม (2)-(5) หักได้ไม่เกิน 10% ต่อรายการ
+     และรวมกันไม่เกิน 20% · ประกันสังคมและ กยศ ไม่นับ เพราะเป็นเงินที่กฎหมายบัญญัติตาม (1)
+     · ระบบเตือนเท่านั้น ไม่บล็อกการบันทึก
+    </div>
+   </div>
+   <div class="form-group">
+    <label>คำนำหน้าเลขที่เอกสารสลิป</label>
+    <input type="text" id="qSlipPrefix" maxlength="8" value="${s.payslipDocPrefix || 'PS'}">
+    <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">เช่น PS จะได้เลขที่ PS-202609-0001 ออกให้อัตโนมัติตอนปิดรอบ</div>
+   </div>
+   <div class="form-group">
+    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+     <input type="checkbox" id="qSsoIncludeOT" ${s.ssoIncludeOT ? 'checked' : ''}>
+     ฐานประกันสังคมรวมค่า OT และคอมมิชชั่น
+    </label>
+    <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
+     รอฝ่ายบัญชียืนยันก่อนเปิด · มีผลเฉพาะพนักงานที่เงินเดือนต่ำกว่าเพดาน
+     ${(s.ssoMaxBase ?? 15000).toLocaleString()} บาท คนอื่นถูกตัดที่เพดานอยู่แล้ว
+    </div>
+   </div>
+  </div>
+ </div>
+ </div>
+
  <div class="card">
  <div class="card-header"><h3> เวลาทำงาน และ การคำนวณเงินเดือน</h3></div>
  <div class="card-body">
@@ -12589,6 +13075,17 @@ function saveSettings() {
  s.lateDeduction = parseFloat(document.getElementById('qLateDeduct').value);
  s.lateCalculationMode = document.getElementById('qLateMode').value;
  s.diligenceBonus = parseFloat(document.getElementById('qDiligence').value);
+ // v1.6.0
+ const _ab = document.getElementById('qAbsentDeduct');
+ if (_ab) s.absentDeductionEnabled = _ab.checked;
+ const _ex = document.querySelectorAll('.dilExempt');
+ if (_ex.length) s.diligenceExemptLeaveTypes = Array.from(_ex).filter(c => c.checked).map(c => c.value);
+ const _dw = document.getElementById('qDeductWarn');
+ if (_dw && _dw.value !== '') s.deductionWarnPercent = parseFloat(_dw.value);
+ const _sp = document.getElementById('qSlipPrefix');
+ if (_sp && _sp.value.trim()) s.payslipDocPrefix = _sp.value.trim();
+ const _si = document.getElementById('qSsoIncludeOT');
+ if (_si) s.ssoIncludeOT = _si.checked;
  s.workDaysPerMonth = parseInt(document.getElementById('qWorkDays').value);
  s.workHoursPerDay = parseFloat(document.getElementById('qWorkHours').value);
  s.ssoEnabled = document.getElementById('qSsoEnabled').checked;

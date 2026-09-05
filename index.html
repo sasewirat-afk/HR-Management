@@ -921,7 +921,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.3';
+const APP_VERSION = '1.6.4';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2377,6 +2377,8 @@ function seedData() {
  // ประกันสังคมและ กยศ ไม่นับ เพราะเป็นเงินที่กฎหมายบัญญัติตาม (1)
  deductionWarnPercent: 10,
  payslipDocPrefix: 'PS',
+ // v1.6.4: ตัวเลขเงินเดือนปิดบังไว้เสมอ ยืนยันรหัสผ่านหนึ่งครั้งเปิดดูได้กี่นาที
+ salaryUnlockMinutes: 5,
  // Probation Evaluation
  probationEvalDays: 120,
  evalCriteria: [
@@ -7082,6 +7084,7 @@ function renderEmployees() {
  <div class="page-header">
  <h1> จัดการพนักงาน <small style="font-size:14px;color:var(--gray-500);">(${q ? `${emps.length} จาก ${all.length}` : all.length} คน)</small></h1>
  <div style="display:flex;gap:8px;flex-wrap:wrap;">
+ ${salaryToggleButton('renderEmployees')}
  <button class="btn btn-success" onclick="exportEmployeesXLSX()">Export Excel</button>
  <button class="btn btn-primary" onclick="showEmployeeForm()">+ เพิ่มพนักงาน</button>
  </div>
@@ -7121,7 +7124,7 @@ function renderEmployees() {
  <td>${esc(e.position)}</td>
  <td>${companyLabel}</td>
  <td>${mgr ? mgr.firstName : '-'}</td>
- <td>${(e.monthlySalary || 0).toLocaleString()} ฿</td>
+ <td>${maskMoney(e.monthlySalary, ' ฿')}</td>
  <td>${formatDate(e.startDate)}</td>
  <td><span class="role-badge">${e.role}</span></td>
  <td>${e.active ? '' : ''}</td>
@@ -8710,8 +8713,10 @@ function _xlsxSaveSheet(rows, sheetName, filename, colWidths) {
  XLSX.writeFile(wb, filename);
 }
 
-function exportEmployeesXLSX() {
+async function exportEmployeesXLSX() {
  if (!_xlsxCheck()) return;
+ // v1.6.4: ไฟล์นี้มีเงินเดือนของทุกคน
+ if (!(await unlockSalary('เพื่อส่งออกไฟล์ทะเบียนพนักงาน ซึ่งมีเงินเดือนของทุกคน'))) return;
  const all = DB.load('employees');
  const q = (_empSearchTerm || '').trim().toLowerCase();
  const emps = q
@@ -9805,8 +9810,10 @@ function _doRangeExport(scope) {
  closeModal();
 }
 
-function exportPayrollXLSX() {
+async function exportPayrollXLSX() {
  if (!_xlsxCheck()) return;
+ // v1.6.4: ไฟล์นี้มีเงินเดือนและเงินสุทธิของทุกคน ออกจากระบบไปแล้วควบคุมต่อไม่ได้
+ if (!(await unlockSalary('เพื่อส่งออกไฟล์ Payroll ซึ่งมีเงินเดือนและเงินสุทธิของพนักงานทุกคน'))) return;
  const [y, m] = _slipMonth.split('-').map(Number);
  // v1.6.0: รวมพนักงานที่ลาออกแล้วแต่มีสลิปในรอบนี้ เพื่อให้รอบสุดท้ายส่งออกได้ครบ
  const _expSlips = DB.load('paySlips', []) || [];
@@ -10854,6 +10861,7 @@ function renderPaySlipAdmin() {
   <input type="checkbox" ${_slipShowInactive ? 'checked' : ''} onchange="_slipShowInactive=this.checked; renderPaySlipAdmin();">
   แสดงพนักงานที่ลาออก
  </label>
+ ${salaryToggleButton('renderPaySlipAdmin')}
  <button class="btn btn-success btn-sm" ${!hasAttendance ? 'disabled' : ''} onclick="exportPayrollXLSX()">Export Excel</button>
  ${isAdmin ? `
  <button class="btn btn-success" ${!hasAttendance ? 'disabled' : ''} onclick="generateAllPaySlips()">สร้างสลิปทั้งหมด</button>
@@ -10884,13 +10892,15 @@ function renderPaySlipAdmin() {
   const carried = (saved.carriedAdjustments || []).reduce((t, a) => t + (Number(a.amount) || 0), 0);
   if (live) drift = Math.round(live.netPay - (Number(saved.netPay) || 0) - carried);
  }
- const neg = v => v > 0 ? `<span style="color:var(--danger);">-${v.toLocaleString()}</span>` : '0';
+ // v1.6.4: ปิดบังด้วย — ประกันสังคมคือ 5% ของฐาน จึงย้อนกลับไปหาเงินเดือนได้ทันที
+ const neg = v => !isSalaryUnlocked() ? maskMoney(v)
+  : (v > 0 ? `<span style="color:var(--danger);">-${v.toLocaleString()}</span>` : '0');
  return `<tr${e.active ? '' : ' style="opacity:.72;"'}>
  <td>${e.id}${e.active ? '' : ' <small style="color:var(--gray-500);">(ลาออก)</small>'}</td>
  <td>${esc(e.firstName)} ${esc(e.lastName)}</td>
- <td>${slip.baseSalary.toLocaleString()}</td>
- <td style="color:var(--success);">+${slip.otPay.toLocaleString()}</td>
- <td style="color:var(--success);">+${slip.commissionTotal.toLocaleString()}</td>
+ <td>${maskMoney(slip.baseSalary)}</td>
+ <td style="color:var(--success);">${isSalaryUnlocked() ? '+' : ''}${maskMoney(slip.otPay)}</td>
+ <td style="color:var(--success);">${isSalaryUnlocked() ? '+' : ''}${maskMoney(slip.commissionTotal)}</td>
  <td style="color:${slip.eligibleForDiligence?'var(--success)':'var(--gray-500)'};">${slip.eligibleForDiligence?'+':''}${slip.diligenceAmount.toLocaleString()}</td>
  <td style="color:${(slip.carryOverTotal||0) > 0 ? 'var(--success)' : ((slip.carryOverTotal||0) < 0 ? 'var(--danger)' : 'inherit')};"
      title="${esc((slip.carryOvers||[]).map(c => c.reason).join(' · '))}">
@@ -10900,7 +10910,7 @@ function renderPaySlipAdmin() {
  <td>${neg(slip.unpaidDeduction)}</td>
  <td>${neg(slip.sso.amount)}</td>
  <td>${neg(slip.customDeductionsTotal)}</td>
- <td><strong>${slip.netPay.toLocaleString()}</strong>${slip.deferredDeduction > 0 ? `<br><small style="color:var(--danger);">ยกไปหักต่อ ${slip.deferredDeduction.toLocaleString()}</small>` : ''}</td>
+ <td><strong>${maskMoney(slip.netPay)}</strong>${slip.deferredDeduction > 0 && isSalaryUnlocked() ? `<br><small style="color:var(--danger);">ยกไปหักต่อ ${slip.deferredDeduction.toLocaleString()}</small>` : ''}</td>
  <td style="white-space:nowrap;">
    ${locked
      ? `<span class="status-badge status-approved" title="ปิดรอบเมื่อ ${esc(saved.paidAt||'')}">ปิดรอบแล้ว</span>${saved.docNo ? `<br><small style="color:var(--gray-500);">${esc(saved.docNo)}</small>` : ''}${drift ? `<br><small style="color:var(--warning);">ส่วนต่าง ${drift > 0 ? '+' : ''}${drift.toLocaleString()} จะยกไปรอบถัดไป</small>` : ''}`
@@ -10936,6 +10946,100 @@ function renderPaySlipAdmin() {
 // ดู/ส่งออก/ดูตัวอย่าง = admin + accountant · สร้าง/ปิดรอบ/ลบ = admin เท่านั้น
 function canManagePayroll() {
  return currentUser && (currentUser.role === 'admin' || currentUser.role === 'accountant');
+}
+
+// ============================================================
+// v1.6.4: ปกปิดตัวเลขเงินเดือน — ต้องยืนยันรหัสผ่านก่อนเปิดดูและก่อน export
+// ============================================================
+// ขอบเขตที่กันได้จริง:
+//   · คนเดินผ่านมาเห็นจอที่เปิดหน้าเงินเดือนค้างไว้
+//   · เผลอ export ไฟล์เงินเดือนโดยไม่ตั้งใจ
+//   · มีบันทึกใน audit log ว่าใครเปิดดูและ export เมื่อไหร่
+//
+// ขอบเขตที่กันไม่ได้ และห้ามเข้าใจผิดว่ากันได้:
+//   ข้อมูลเงินเดือนทุกคนถูกดาวน์โหลดลง localStorage ของทุกเครื่องอยู่แล้ว
+//   คนที่ตั้งใจจะดูเปิด DevTools อ่านได้โดยไม่ผ่านหน้าจอนี้เลย
+//   ทางแก้ที่แท้จริงคือแยกข้อมูลเงินออกเป็นตารางต่างหากแล้วปิดด้วย RLS
+//   ให้ role ที่ไม่ใช่ admin ดึงข้อมูลไม่ได้ตั้งแต่ต้นทาง (ต้องทำ Phase 4a ขั้น 6 ก่อน)
+//   ดูรายละเอียดในรายงานทบทวนโมดูลสลิปเงินเดือน ข้อ 7
+// ============================================================
+
+let _salaryUnlockUntil = 0;
+
+function isSalaryUnlocked() { return Date.now() < _salaryUnlockUntil; }
+
+function _salaryUnlockMinutes() {
+ const m = DB.load('settings', {}).salaryUnlockMinutes;
+ return (typeof m === 'number' && m > 0) ? m : 5;
+}
+
+// ปิดบังตัวเลขเมื่อยังไม่ปลดล็อก — ใช้กับทุกช่องที่แสดงจำนวนเงิน
+function maskMoney(v, suffix) {
+ const sfx = suffix === undefined ? '' : suffix;
+ if (isSalaryUnlocked()) return Number(v || 0).toLocaleString() + sfx;
+ return '<span style="letter-spacing:2px;color:var(--gray-500);" title="กดปุ่มแสดงเงินเดือนเพื่อดู">••••••</span>';
+}
+
+// ถามรหัสผ่านด้วยช่องแบบปิดบัง ไม่ใช้ prompt() เพราะรหัสจะโผล่บนจอ
+// ซึ่งขัดกับเหตุผลที่ทำฟีเจอร์นี้ตั้งแต่ต้น
+function askPassword(title, reason) {
+ return new Promise(resolve => {
+  window._askPwResolve = (val) => { window._askPwResolve = null; closeModal(); resolve(val); };
+  showModal(title, `
+   <div class="text-sm" style="color:var(--gray-600);margin-bottom:12px;line-height:1.7;">${esc(reason)}</div>
+   <div class="form-group">
+    <label>รหัสผ่านของคุณ (${esc(currentUser.id)})</label>
+    <input type="password" id="pwConfirmInput" autocomplete="current-password"
+     onkeydown="if(event.key==='Enter'){event.preventDefault();window._askPwResolve(this.value);}
+                if(event.key==='Escape'){window._askPwResolve(null);}">
+   </div>
+   <div style="display:flex;gap:10px;margin-top:6px;">
+    <button class="btn btn-primary" onclick="window._askPwResolve(document.getElementById('pwConfirmInput').value)">ยืนยัน</button>
+    <button class="btn btn-secondary" onclick="window._askPwResolve(null)">ยกเลิก</button>
+   </div>
+  `);
+  setTimeout(() => { const el = document.getElementById('pwConfirmInput'); if (el) el.focus(); }, 60);
+ });
+}
+
+// ตรวจกับข้อมูลล่าสุดในฐานข้อมูล ไม่ใช่ currentUser ที่เป็นสำเนาใน sessionStorage
+// เผื่อรหัสถูกเปลี่ยนจากที่อื่นระหว่างเซสชันนี้
+async function verifyOwnPassword(password) {
+ if (!password) return false;
+ const me = DB.load('employees', []).find(e => e.id === currentUser.id);
+ if (!me) return false;
+ const h = await hashPassword(password);
+ return !!((me.passwordHash && me.passwordHash === h) || (me.password && me.password === password));
+}
+
+async function unlockSalary(reason) {
+ if (isSalaryUnlocked()) return true;
+ const pw = await askPassword('ยืนยันตัวตน', reason);
+ if (pw === null) return false;
+ if (!(await verifyOwnPassword(pw))) {
+  auditLog('salary-unlock-failed', 'salary', currentUser.id, reason);
+  toast('รหัสผ่านไม่ถูกต้อง', 'error');
+  return false;
+ }
+ const mins = _salaryUnlockMinutes();
+ _salaryUnlockUntil = Date.now() + mins * 60000;
+ auditLog('salary-unlock', 'salary', currentUser.id, `${reason} · เปิดดูได้ ${mins} นาที`);
+ toast(`แสดงตัวเลขเงินเดือนได้ ${mins} นาที`);
+ return true;
+}
+
+function lockSalary() {
+ _salaryUnlockUntil = 0;
+ auditLog('salary-lock', 'salary', currentUser.id, 'ปิดการแสดงเงินเดือนด้วยตนเอง');
+ renderPage();
+}
+
+// ปุ่มสลับแสดง/ซ่อน ใช้ร่วมกันทั้งหน้าพนักงานและหน้าสลิป
+function salaryToggleButton(afterUnlock) {
+ const fn = afterUnlock || 'renderPage';
+ return isSalaryUnlocked()
+  ? `<button class="btn btn-sm btn-secondary" onclick="lockSalary()" title="ซ่อนตัวเลขเงินเดือนทันที">ซ่อนเงินเดือน</button>`
+  : `<button class="btn btn-sm btn-warning" onclick="unlockSalary('เพื่อแสดงตัวเลขเงินเดือนบนหน้าจอ').then(ok => { if (ok) ${fn}(); })">แสดงเงินเดือน</button>`;
 }
 
 function getSavedSlip(empId, monthStr) {
@@ -11076,8 +11180,11 @@ function markPayrollPaid() {
 }
 
 // v1.6.0: ดูตัวอย่างสลิปก่อนบันทึก — ไม่สร้างไฟล์ ไม่เขียนอะไรลงฐานข้อมูล
-function previewPaySlip(empId, year, month) {
+async function previewPaySlip(empId, year, month) {
  if (!canManagePayroll()) { toast('เฉพาะ Admin และฝ่ายบัญชี', 'error'); return; }
+ // v1.6.4: สลิปแสดงเงินเดือนเต็มจำนวน — ของคนอื่นต้องยืนยันตัวตนก่อน
+ if (empId !== currentUser.id &&
+     !(await unlockSalary('เพื่อเปิดดูสลิปเงินเดือนของพนักงานคนอื่น'))) return;
  const slip = resolvePaySlip(empId, year, month);
  const emp = getEmployee(empId);
  if (!slip || !emp) { toast('ไม่พบข้อมูลสลิป', 'error'); return; }
@@ -11598,6 +11705,9 @@ async function generatePaySlipImage(empId, year, month) {
 }
 
 async function downloadPaySlipImage(empId, year, month) {
+ // v1.6.4: ดาวน์โหลดสลิปของตัวเองไม่ต้องยืนยัน — ของคนอื่นต้อง
+ if (empId !== currentUser.id &&
+     !(await unlockSalary('เพื่อดาวน์โหลดสลิปเงินเดือนของพนักงานคนอื่น'))) return;
  toast('กำลังสร้างสลิป...', 'info');
  const result = await generatePaySlipImage(empId, year, month);
  if (!result) { toast('สร้างสลิปไม่สำเร็จ', 'error'); return; }
@@ -11614,6 +11724,9 @@ async function downloadPaySlipImage(empId, year, month) {
 }
 
 async function sharePaySlip(empId, year, month) {
+ // v1.6.4: แชร์สลิปของคนอื่นต้องยืนยันตัวตน — ไฟล์ออกจากระบบแล้วควบคุมต่อไม่ได้
+ if (empId !== currentUser.id &&
+     !(await unlockSalary('เพื่อแชร์สลิปเงินเดือนของพนักงานคนอื่น'))) return;
  toast('กำลังเตรียมสลิป...', 'info');
  const result = await generatePaySlipImage(empId, year, month);
  if (!result) { toast('สร้างสลิปไม่สำเร็จ', 'error'); return; }
@@ -12711,6 +12824,15 @@ function renderSettings() {
     </div>
    </div>
    <div class="form-group">
+    <label>เปิดดูเงินเดือนได้นานกี่นาทีต่อการยืนยันหนึ่งครั้ง</label>
+    <input type="number" id="qSalaryUnlockMin" min="1" max="60" step="1" value="${s.salaryUnlockMinutes ?? 5}">
+    <div class="field-hint">
+     ตัวเลขเงินเดือนถูกปิดบังไว้เสมอ ต้องยืนยันรหัสผ่านของตัวเองก่อนจึงจะเห็น
+     และปิดกลับอัตโนมัติเมื่อครบเวลา · การส่งออกไฟล์ที่มีเงินเดือนก็ต้องยืนยันเช่นกัน
+     ทุกครั้งที่เปิดดูหรือส่งออกจะถูกบันทึกใน audit log
+    </div>
+   </div>
+   <div class="form-group">
     <label>คำนำหน้าเลขที่เอกสารสลิป</label>
     <input type="text" id="qSlipPrefix" maxlength="8" value="${s.payslipDocPrefix || 'PS'}">
     <div class="field-hint">เช่น PS จะได้เลขที่ PS-202609-0001 ออกให้อัตโนมัติตอนปิดรอบ</div>
@@ -13190,6 +13312,8 @@ function saveSettings() {
  if (_ex.length) s.diligenceExemptLeaveTypes = Array.from(_ex).filter(c => c.checked).map(c => c.value);
  const _dw = document.getElementById('qDeductWarn');
  if (_dw && _dw.value !== '') s.deductionWarnPercent = parseFloat(_dw.value);
+ const _su = document.getElementById('qSalaryUnlockMin');
+ if (_su && _su.value !== '') s.salaryUnlockMinutes = parseFloat(_su.value);
  const _sp = document.getElementById('qSlipPrefix');
  if (_sp && _sp.value.trim()) s.payslipDocPrefix = _sp.value.trim();
  const _si = document.getElementById('qSsoIncludeOT');

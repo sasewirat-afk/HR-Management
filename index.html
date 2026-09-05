@@ -156,6 +156,29 @@ body::before {
  box-shadow: 0 0 0 4px rgba(59,130,246,0.15);
 }
 /* iOS-style toggle switch */
+.toggle-grid {
+ display: grid;
+ grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+ gap: 8px;
+ margin-top: 8px;
+}
+.toggle-chip {
+ display: flex;
+ align-items: center;
+ padding: 9px 12px;
+ border: 1px solid rgba(30,58,138,0.10);
+ border-radius: 10px;
+ background: rgba(255,255,255,0.6);
+ transition: background 0.15s, border-color 0.15s;
+}
+.toggle-chip:hover { background: rgba(30,58,138,0.04); border-color: rgba(30,58,138,0.22); }
+.toggle-chip .ios-toggle { width: 100%; }
+.field-hint {
+ font-size: 12.5px;
+ color: var(--muted);
+ margin-top: 7px;
+ line-height: 1.7;
+}
 .ios-toggle {
  display: inline-flex;
  align-items: center;
@@ -898,7 +921,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.1';
+const APP_VERSION = '1.6.2';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -12610,58 +12633,43 @@ function renderSettings() {
  <div class="card-header"><h3> เบี้ยขยัน · ขาดงาน · เพดานการหัก <small style="color:var(--gray-500);font-weight:400;">(v1.6.0)</small></h3></div>
  <div class="card-body">
   <div class="form-group">
-   <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+   <label class="ios-toggle">
     <input type="checkbox" id="qAbsentDeduct" ${s.absentDeductionEnabled === false ? '' : 'checked'}>
-    หักค่าขาดงานเท่าค่าแรงรายวัน
+    <span>หักค่าขาดงานเท่าค่าแรงรายวัน</span>
    </label>
-   <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
-    วันที่ระบบนับว่าขาดงานอัตโนมัติ จะถูกหักเท่าเงินเดือน ÷ ${s.workDaysPerMonth || 22} วัน
-    · วันเดียวกันจะไม่ถูกหักค่ามาสายซ้ำอีก เพราะเป็นการหักวันนั้นเต็มวันไปแล้ว
+   <div class="field-hint">
+    วันที่ระบบนับว่าขาดงานอัตโนมัติ จะถูกหักเท่ากับ <strong>เงินเดือน ÷ ${s.workDaysPerMonth || 22} วัน</strong><br>
+    วันเดียวกันจะไม่ถูกหักค่ามาสายซ้ำอีก เพราะหักวันนั้นเต็มวันไปแล้ว
    </div>
   </div>
 
-  <div class="form-group">
-   <label>ประเภทการลาที่ <strong>ไม่</strong> ตัดเบี้ยขยัน</label>
-   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:2px 18px;margin-top:6px;">
-  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
-   <input type="checkbox" class="dilExempt" value="comp-off" ${_dilEx.has('comp-off') ? 'checked' : ''}> ลาสะสมวันหยุด
-  </label>
-  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
-   <input type="checkbox" class="dilExempt" value="maternity" ${_dilEx.has('maternity') ? 'checked' : ''}> ลาคลอด
-  </label>
-  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
-   <input type="checkbox" class="dilExempt" value="ordination" ${_dilEx.has('ordination') ? 'checked' : ''}> ลาบวช
-  </label>
-  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
-   <input type="checkbox" class="dilExempt" value="sick-with-cert" ${_dilEx.has('sick-with-cert') ? 'checked' : ''}> ลาป่วย (มีใบรับรองแพทย์)
-  </label>
-  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
-   <input type="checkbox" class="dilExempt" value="sick-without-cert" ${_dilEx.has('sick-without-cert') ? 'checked' : ''}> ลาป่วย (ไม่มีใบรับรองแพทย์)
-  </label>
-  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
-   <input type="checkbox" class="dilExempt" value="sick" ${_dilEx.has('sick') ? 'checked' : ''}> ลาป่วย
-  </label>
-  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
-   <input type="checkbox" class="dilExempt" value="vacation" ${_dilEx.has('vacation') ? 'checked' : ''}> ลาพักร้อน
-  </label>
-  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
-   <input type="checkbox" class="dilExempt" value="personal" ${_dilEx.has('personal') ? 'checked' : ''}> ลากิจ
-  </label>
-  <label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer;padding:4px 0;">
-   <input type="checkbox" class="dilExempt" value="unpaid" ${_dilEx.has('unpaid') ? 'checked' : ''}> ลาไม่รับค่าจ้าง
-  </label>
+   <div class="form-group">
+    <label>ประเภทการลาที่ <strong>ไม่</strong> ตัดเบี้ยขยัน</label>
+    <div class="field-hint" style="margin-top:2px;">
+     เปิดสวิตช์ = ลาประเภทนั้นแล้ว <strong>ยังได้</strong> เบี้ยขยัน · ปิด = ลาแล้วเสียสิทธิ์
+    </div>
+    <div class="toggle-grid">
+     <div class="toggle-chip"><label class="ios-toggle"><input type="checkbox" class="dilExempt" value="comp-off" ${_dilEx.has('comp-off') ? 'checked' : ''}><span>ลาสะสมวันหยุด</span></label></div>
+     <div class="toggle-chip"><label class="ios-toggle"><input type="checkbox" class="dilExempt" value="maternity" ${_dilEx.has('maternity') ? 'checked' : ''}><span>ลาคลอด</span></label></div>
+     <div class="toggle-chip"><label class="ios-toggle"><input type="checkbox" class="dilExempt" value="ordination" ${_dilEx.has('ordination') ? 'checked' : ''}><span>ลาบวช</span></label></div>
+     <div class="toggle-chip"><label class="ios-toggle"><input type="checkbox" class="dilExempt" value="sick-with-cert" ${_dilEx.has('sick-with-cert') ? 'checked' : ''}><span>ลาป่วย (มีใบรับรองแพทย์)</span></label></div>
+     <div class="toggle-chip"><label class="ios-toggle"><input type="checkbox" class="dilExempt" value="sick-without-cert" ${_dilEx.has('sick-without-cert') ? 'checked' : ''}><span>ลาป่วย (ไม่มีใบรับรองแพทย์)</span></label></div>
+     <div class="toggle-chip"><label class="ios-toggle"><input type="checkbox" class="dilExempt" value="sick" ${_dilEx.has('sick') ? 'checked' : ''}><span>ลาป่วย</span></label></div>
+     <div class="toggle-chip"><label class="ios-toggle"><input type="checkbox" class="dilExempt" value="vacation" ${_dilEx.has('vacation') ? 'checked' : ''}><span>ลาพักร้อน</span></label></div>
+     <div class="toggle-chip"><label class="ios-toggle"><input type="checkbox" class="dilExempt" value="personal" ${_dilEx.has('personal') ? 'checked' : ''}><span>ลากิจ</span></label></div>
+     <div class="toggle-chip"><label class="ios-toggle"><input type="checkbox" class="dilExempt" value="unpaid" ${_dilEx.has('unpaid') ? 'checked' : ''}><span>ลาไม่รับค่าจ้าง</span></label></div>
+    </div>
+    <div class="field-hint">
+     ค่าเริ่มต้นเปิดไว้เฉพาะกลุ่มที่มีเอกสารรับรองหรือเป็นสิทธิ์ตามกฎหมาย —
+     พนักงานที่ลาคลอด 98 วัน ไม่ควรเสียเบี้ยขยันทุกเดือนที่ลา ด้วยเหตุที่ควบคุมไม่ได้
+    </div>
    </div>
-   <div class="text-sm" style="color:var(--gray-500);margin-top:6px;">
-    ค่าเริ่มต้นยกเว้นกลุ่มที่มีเอกสารรับรองหรือเป็นสิทธิ์ตามกฎหมาย — พนักงานที่ลาคลอด 98 วัน
-    ไม่ควรเสียเบี้ยขยันทุกเดือนที่ลา ด้วยเหตุที่ควบคุมไม่ได้
-   </div>
-  </div>
 
   <div class="form-row">
    <div class="form-group">
     <label>เตือนเมื่อรายการหักพิเศษเกิน (% ของเงินได้)</label>
     <input type="number" id="qDeductWarn" min="0" max="100" step="1" value="${s.deductionWarnPercent ?? 10}">
-    <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
+    <div class="field-hint">
      มาตรา 76 พ.ร.บ.คุ้มครองแรงงาน — รายการหักตาม (2)-(5) หักได้ไม่เกิน 10% ต่อรายการ
      และรวมกันไม่เกิน 20% · ประกันสังคมและ กยศ ไม่นับ เพราะเป็นเงินที่กฎหมายบัญญัติตาม (1)
      · ระบบเตือนเท่านั้น ไม่บล็อกการบันทึก
@@ -12670,16 +12678,16 @@ function renderSettings() {
    <div class="form-group">
     <label>คำนำหน้าเลขที่เอกสารสลิป</label>
     <input type="text" id="qSlipPrefix" maxlength="8" value="${s.payslipDocPrefix || 'PS'}">
-    <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">เช่น PS จะได้เลขที่ PS-202609-0001 ออกให้อัตโนมัติตอนปิดรอบ</div>
+    <div class="field-hint">เช่น PS จะได้เลขที่ PS-202609-0001 ออกให้อัตโนมัติตอนปิดรอบ</div>
    </div>
    <div class="form-group">
-    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+    <label class="ios-toggle">
      <input type="checkbox" id="qSsoIncludeOT" ${s.ssoIncludeOT ? 'checked' : ''}>
-     ฐานประกันสังคมรวมค่า OT และคอมมิชชั่น
+     <span>ฐานประกันสังคมรวมค่า OT และคอมมิชชั่น</span>
     </label>
-    <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
+    <div class="field-hint">
      รอฝ่ายบัญชียืนยันก่อนเปิด · มีผลเฉพาะพนักงานที่เงินเดือนต่ำกว่าเพดาน
-     ${(s.ssoMaxBase ?? 15000).toLocaleString()} บาท คนอื่นถูกตัดที่เพดานอยู่แล้ว
+     <strong>${(s.ssoMaxBase ?? 15000).toLocaleString()} บาท</strong> คนอื่นถูกตัดที่เพดานอยู่แล้ว
     </div>
    </div>
   </div>

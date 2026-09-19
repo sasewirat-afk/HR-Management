@@ -28,3 +28,6 @@ reports/
 ISSUE_REMEDIATION_ROADMAP.md
 *.docx
 v1.4.46-diff.txt
+
+# Local test suites (fictional fixtures; kept out of the public repo)
+tests/

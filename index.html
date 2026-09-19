@@ -921,7 +921,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.6';
+const APP_VERSION = '1.6.7';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -7396,6 +7396,14 @@ function showEmployeeForm(id) {
 
 async function submitEmployee(e, editId) {
  e.preventDefault();
+ // v1.6.7: กันวันเริ่มงานที่กรอกเป็นปี พ.ศ. — ช่องวันที่รับ ค.ศ. แต่พิมพ์ 2569 ลงไปได้
+ // ระบบเก็บเป็นปี ค.ศ. 2569 คือเริ่มงานในอนาคต 543 ปี → ติดทดลองงานตลอดไป
+ // ลาพักร้อนเป็น 0 และเลือกลาพักร้อนไม่ได้ โดยไม่มี error ให้เห็น (พบ 2 คนในข้อมูลจริง 19 ก.ย. 2026)
+ const _startYr = Number((document.getElementById('empStart')?.value || '').slice(0, 4));
+ if (_startYr > new Date().getFullYear() + 1) {
+ toast(`วันเริ่มงานปี ${_startYr} อยู่ในอนาคต — ถ้าเป็นปี พ.ศ. ให้ใช้ ค.ศ. ${_startYr - 543}`, 'error');
+ return;
+ }
  const emps = DB.load('employees');
  const data = {
  id: document.getElementById('empId').value,

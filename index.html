@@ -921,7 +921,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.4';
+const APP_VERSION = '1.6.5';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -8175,6 +8175,29 @@ function computeAutoAbsentCutoff(settings) {
  return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`;
 }
 
+// v1.6.5: เกณฑ์ขาดงานอัตโนมัติของ "คนนี้ วันนี้" — นับจากเวลาเข้ากะของเขาเอง
+//
+// computeAutoAbsentCutoff() ข้างบนใช้ lateThreshold กลางของบริษัท (09:01) + 240 นาที
+// = 13:01 กับทุกคนทุกวัน ขณะที่การตัดสินว่า "สาย" ดูตารางกะรายวันมาตั้งแต่ v1.5.4
+// ผลคือคนเข้ากะบ่ายโมงที่สแกน 13:05 ถูกนับว่า "ขาดงาน" ไม่ใช่ "สาย 5 นาที"
+// และคนที่กะเริ่มหลัง 13:01 ถูกนับว่าขาดงานทุกวันที่มาทำงาน
+// ตั้งแต่ v1.6.0 ขาดงานถูกหักเท่าค่าแรงหนึ่งวัน บั๊กนี้จึงกลายเป็นเงินจริง
+//
+// ห้ามใช้ addMinutesToTimeStr() ตรงนี้ เพราะมันวนรอบเที่ยงคืน (% 24) — กะ 21:00
+// จะได้เกณฑ์ 01:01 แล้วทุกการสแกนจะ >= 01:01 กลายเป็นขาดงานทั้งหมด จึงตัดที่ 23:59
+function computeAutoAbsentCutoffFor(emp, date, settings) {
+ settings = settings || DB.load('settings');
+ const mins = settings.autoAbsentLateMinutes;
+ if (!mins || mins <= 0) return null;
+ const info = getShiftLateInfo_v1_5_4(emp, date, settings);
+ if (!info) return null;                       // วันหยุดตามกะ — ไม่มีการขาดงาน
+ const m = /^(\d{1,2}):(\d{2})$/.exec(info.lateThreshold || '');
+ if (!m) return null;
+ const total = Number(m[1]) * 60 + Number(m[2]) + mins;
+ if (total >= 24 * 60) return '23:59';
+ return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
 // Merge approved time-cert requests for a specific date into the attendance pool.
 // v1.5.18 CRITICAL FIX: scope certs to emps present in input records (was leaking cross-emp).
 // Bug (pre-v1.5.18): if input scoped to 1 emp but other emp had cert same date → INJECTED
@@ -8388,8 +8411,14 @@ function renderAttendanceReport() {
  const uniqueDayRecords = [...byEmp.values()];
 
  const presentRaw = uniqueDayRecords.filter(r => r.checkIn);
- const autoAbsent = autoAbsentCutoff ? presentRaw.filter(r => r.checkIn >= autoAbsentCutoff) : [];
- const present = autoAbsentCutoff ? presentRaw.filter(r => r.checkIn < autoAbsentCutoff) : presentRaw;
+ // v1.6.5: เกณฑ์ขาดงานนับจากเวลาเข้ากะของแต่ละคน ไม่ใช่ 13:01 กลาง
+ const _absentCutoffFor = (r) => {
+  const emp = _empsById.get(r.employeeCode) || _empsById.get(r.employeeId);
+  return computeAutoAbsentCutoffFor(emp, r.date || _attReportDate, settings);
+ };
+ const _isAutoAbsent = (r) => { const c = _absentCutoffFor(r); return !!c && r.checkIn >= c; };
+ const autoAbsent = presentRaw.filter(_isAutoAbsent);
+ const present = presentRaw.filter(r => !_isAutoAbsent(r));
 
  // Leave on that date
  const leaveOnDate = DB.load('leaveRequests').filter(r =>
@@ -8500,7 +8529,7 @@ function renderAttendanceReport() {
  <div class="stat-card red">
  <div class="label">ขาดอัตโนมัติ (สาย > ${settings.autoAbsentLateMinutes} นาที)</div>
  <div class="value">${autoAbsent.length} <small>คน</small></div>
- <div class="sub">เข้างานหลัง ${autoAbsentCutoff}</div>
+ <div class="sub">สแกนหลังเวลาเข้ากะของตัวเองเกิน ${settings.autoAbsentLateMinutes} นาที</div>
  </div>` : ''}
  </div>
 
@@ -10036,17 +10065,23 @@ function calculatePaySlip(employeeId, year, month) {
  });
  // Auto-absent: anyone with checkIn >= cutoff is excluded from workDays + lateRecords
  // v1.4.55: field work days are NEVER auto-absent (protected)
- const autoAbsentCutoff = computeAutoAbsentCutoff(settings);
- const presentInMonth = autoAbsentCutoff
- ? attendance.filter(r => r._fieldWork || cycleFieldWorkDates.has(r.date) || (r.checkIn && r.checkIn < autoAbsentCutoff))
- : attendance.filter(r => r._fieldWork || cycleFieldWorkDates.has(r.date) || r.checkIn);
- const autoAbsentDays = autoAbsentCutoff
- ? attendance.filter(r => !r._fieldWork && !cycleFieldWorkDates.has(r.date) && r.checkIn && r.checkIn >= autoAbsentCutoff).length
- : 0;
+ // v1.6.5: เกณฑ์ขาดงานนับจากเวลาเข้ากะของคนนี้ในวันนั้น ไม่ใช่ 13:01 กลาง
+ const _absCut = (r) => computeAutoAbsentCutoffFor(emp, r.date, settings);
+ const _isAbsentRec = (r) => {
+  if (r._fieldWork || cycleFieldWorkDates.has(r.date) || !r.checkIn) return false;
+  const c = _absCut(r);
+  return !!c && r.checkIn >= c;
+ };
+ const presentInMonth = attendance.filter(r =>
+  r._fieldWork || cycleFieldWorkDates.has(r.date) || (r.checkIn && !_isAbsentRec(r)));
+ const autoAbsentDays = attendance.filter(_isAbsentRec).length;
  // v1.4.54 Q4 answer B: workDays DISPLAYED = calendar count (matches base salary period)
- const presentInCalendar = autoAbsentCutoff
- ? rawAttendanceCalendarWithFW.filter(r => r._fieldWork || calendarFieldWorkDates.has(r.date) || (r.checkIn && r.checkIn < autoAbsentCutoff))
- : rawAttendanceCalendarWithFW.filter(r => r._fieldWork || calendarFieldWorkDates.has(r.date) || r.checkIn);
+ const presentInCalendar = rawAttendanceCalendarWithFW.filter(r => {
+  if (r._fieldWork || calendarFieldWorkDates.has(r.date)) return true;
+  if (!r.checkIn) return false;
+  const c = _absCut(r);
+  return !c || r.checkIn < c;
+ });
  const workDays = presentInCalendar.length; // v1.4.54: calendar-scoped for display
  // v1.4.54 Q4.2 answer B: internal cycle-scoped workDays used for diligence gate
  const _workDaysCycle = presentInMonth.length;
@@ -13009,7 +13044,7 @@ function renderSettings() {
  <input type="number" id="qAutoAbsentLate" min="0" step="1" value="${s.autoAbsentLateMinutes ?? 240}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
  นับจากเวลามาสาย (<strong>${s.lateThreshold || '09:01'}</strong>) — เช่น ตั้ง 240 นาที = 4 ชม.<br>
- → ใครเข้างานหลัง <strong>${(() => { const [h,m]=(s.lateThreshold||'09:01').split(':').map(Number); const total=h*60+m+(s.autoAbsentLateMinutes??240); return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`; })()}</strong> ในวันใด ระบบจะนับเป็นขาดงานของวันนั้น (ใช้ทั้งในรายงานและการคำนวณเงินเดือน)
+ → นับจาก<strong>เวลาเข้ากะของแต่ละคน</strong>ตามตารางกะวันนั้น — เช่น กะ 9 โมงสแกนหลัง <strong>${(() => { const [h,m]=(s.lateThreshold||'09:01').split(':').map(Number); const total=h*60+m+(s.autoAbsentLateMinutes??240); return `${String(Math.floor(total/60)).padStart(2,'0')}:${String(total%60).padStart(2,'0')}`; })()}</strong> หรือกะบ่ายโมงสแกนหลัง <strong>17:01</strong> จะนับเป็นขาดงาน · วันที่ไม่ได้ลงกะไว้จะใช้เวลาเข้างานกลางของบริษัท (ใช้ทั้งในรายงานและการคำนวณเงินเดือน)
  </div>
  </div>
  <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">

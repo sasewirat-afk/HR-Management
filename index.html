@@ -921,7 +921,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.5';
+const APP_VERSION = '1.6.6';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2331,6 +2331,7 @@ function seedData() {
  sickCertThreshold: 2, // ลาป่วยเกิน X วัน ต้องแนบใบรับรองแพทย์
  leaveCarryOverMax: 5, // ยกยอดลาพักร้อนข้ามปีได้สูงสุด (วัน)
  leaveCarryOverCutoff: '03-31', // ตัดยอดยกข้ามปี (MM-DD)
+ leaveCarryOverFromYear: 2026, // v1.6.6: ปีแรกที่ยอดเหลือยกไปปีถัดไป (2026 → 2027)
  backDatedLeaveMaxDays: 7, // ห้ามยื่นลาย้อนหลังเกิน (วัน)
  payrollCutoffDay: 21, // v1.4.48: วันตัดรอบเงินเดือน — events วันที่ > cutoff → คิดในรอบเดือนถัดไป (leave quota ยังนับปีปฏิทิน)
  slipMonthDefault: 'calendar', // v1.4.54: 'calendar' or 'payroll' — how _slipMonth is defaulted on render
@@ -3169,19 +3170,12 @@ function getLeaveBalance(employeeId) {
  let personalQuota = ov.personal ?? settings.leaveQuotas.personal;
  let vacationQuota = ov.vacation ?? emp.vacationQuota ?? vacationFromAccrual ?? settings.leaveQuotas.vacation;
 
- // Pro-rate for new hires — VACATION only (personal ไม่ pro-rate ตามกฎหมาย)
- if (startYear === year && !prob) {
- // v1.5.29 (Phase 3): was `12 - probEnd.getMonth()`, which reads only the month and
- // ignores the year. A hire on 15 พ.ย. 2026 with 90-day probation has probEnd in
- // ก.พ. 2027 → getMonth() = 1 → 11 months credited for 2026, a year in which they
- // worked six weeks, all of it on probation. If probation ends in a later year the
- // employee earns no vacation for this year at all.
- const probEndYear = probEnd.getFullYear();
- const monthsRemaining = probEndYear > year ? 0
-  : probEndYear < year ? 12
-  : 12 - probEnd.getMonth();
- if (ov.vacation === undefined) vacationQuota = Math.round((vacationQuota * monthsRemaining / 12) * 10) / 10;
- }
+ // v1.6.6: ผ่านทดลองงานแล้วได้ลาพักร้อนเต็มจำนวนทันที ไม่คิดตามสัดส่วน
+ //
+ // เดิมคิดตามเดือนที่เหลือหลังผ่านทดลองงานในปีที่เข้าทำงาน — คนเข้า 1 มี.ค. ได้ 4 วัน
+ // คนเข้า 1 ต.ค. ได้ 0.5 วัน แล้วทุกคนได้เต็ม 6 วันพร้อมกันวันที่ 1 ม.ค. ปีถัดไป
+ // ตัดสินใจ 19 ก.ย. 2026 ให้ได้เต็มทันทีที่ผ่านทดลองงาน
+ // มาตรา 30 กำหนดขั้นต่ำ 6 วันเมื่อทำงานครบ 1 ปี การให้ก่อนครบปีจึงใจดีกว่ากฎหมาย
 
  // During probation: ลาพักร้อนยังไม่มี (unless Admin override) — ลากิจ already = settings (3)
  if (prob) {
@@ -3218,6 +3212,70 @@ function getLeaveBalance(employeeId) {
    new Date(r.startDate).getFullYear() === year)
  .forEach(r => { pending[_quotaKey(r.type)] = (pending[_quotaKey(r.type)] || 0) + r.days; });
 
+ // ------------------------------------------------------------------
+ // v1.6.6: ยกยอดลาพักร้อนข้ามปี
+ //
+ // หน้าตั้งค่ามีช่อง "ยกยอดได้สูงสุด 5 วัน ตัดยอด 31 มี.ค." และหน้าประกาศนโยบาย
+ // ก็บอกพนักงานแบบนั้นมาตลอด แต่สูตรไม่เคยใช้ค่านี้เลย — วันที่เหลือหายทุก 1 ม.ค.
+ //
+ // กฎ: วันที่เหลือจากปีก่อน ยกมาได้ไม่เกิน leaveCarryOverMax วัน ใช้ได้ถึงวันตัดยอด
+ //     ลาที่เกิดก่อนวันตัดยอดใช้จากส่วนที่ยกมาก่อน (FIFO) พ้นวันตัดยอดแล้วส่วนที่
+ //     ยังไม่ได้ใช้หมดอายุ ส่วนที่ใช้ไปแล้วยังนับรวมในโควตาต่อ ไม่ย้อนกลับมาเป็นหนี้
+ //
+ // ไม่ยกยอดให้คนที่ HR แก้โควตาเองรายคน — ค่านั้นคือ "สิทธิ์คงเหลือจริง" ที่ HR
+ // ตั้งไว้แล้ว ถ้าบวกยอดยกมาเพิ่มอีกจะนับซ้ำ
+ // ------------------------------------------------------------------
+ // เริ่มยกยอดจากปี leaveCarryOverFromYear (ค่าเริ่มต้น 2026 → ยกเข้าปี 2027 เป็นปีแรก)
+ // ไม่ย้อนคิดปี 2025→2026 เพราะยอดคงเหลือปีนี้ที่พนักงานเห็นอยู่และใช้ตัดสินใจลาไปแล้ว
+ // จะเปลี่ยนกลางปีโดยไม่มีใครรู้ ถ้าต้องการย้อนหลังให้ตั้งค่านี้เป็น 2025
+ // ------------------------------------------------------------------
+ const _carryMax = Number(settings.leaveCarryOverMax ?? 5) || 0;
+ const _carryFrom = Number(settings.leaveCarryOverFromYear ?? 2026);
+ const _cutMD = /^\d{2}-\d{2}$/.test(settings.leaveCarryOverCutoff || '') ? settings.leaveCarryOverCutoff : '03-31';
+ const _cutoffDate = `${year}-${_cutMD}`;
+ const _todayISO = new Date().toISOString().slice(0, 10);
+ const _vacUsedIn = (y, beforeISO) => DB.load('leaveRequests').filter(r =>
+  r.employeeId === employeeId && r.status === 'approved' && r.type === 'vacation' &&
+  new Date(r.startDate).getFullYear() === y && (!beforeISO || String(r.startDate) <= beforeISO)
+ ).reduce((t, r) => t + (Number(r.days) || 0), 0);
+ // สิทธิ์ประจำปี y (ไม่รวมยอดยกมา) — ผ่านทดลองงานภายในปีนั้นหรือก่อนหน้าจึงมีสิทธิ์
+ const _baseQuotaIn = y => {
+  const yEnd = new Date(y, 11, 31, 23, 59, 59);
+  if (startDate.getFullYear() > y || probEnd > yEnd) return 0;
+  const yos = Math.floor((yEnd.getTime() - startDate.getTime()) / msPerYear);
+  let acc;
+  if (accrual.enabled && yos >= (accrual.startYear ?? 2)) {
+   acc = (accrual.base ?? 6) + (yos - (accrual.startYear ?? 2) + 1) * (accrual.incrementPerYear ?? 1);
+   if (accrual.maxDays) acc = Math.min(acc, accrual.maxDays);
+  } else if (accrual.enabled) {
+   acc = accrual.base ?? 6;
+  }
+  return emp.vacationQuota ?? acc ?? settings.leaveQuotas.vacation ?? 0;
+ };
+ // ยอดยกเข้าปี y และส่วนที่ใช้ไปก่อนวันตัดยอด (FIFO)
+ // วันที่ใช้ในปีก่อนหักส่วนที่ปีก่อนยกมาออกก่อน ไม่งั้นคนที่ใช้ยอดยกมาจนหมด
+ // จะถูกนับว่าใช้สิทธิ์ของปีตัวเองเกิน แล้วไม่ได้ยกยอดต่อ
+ const _carryInto = (y, depth) => {
+  if (_carryMax <= 0 || y - 1 < _carryFrom || depth > 3) return { over: 0, used: 0 };
+  const prevBase = _baseQuotaIn(y - 1);
+  if (prevBase <= 0) return { over: 0, used: 0 };
+  const prevCarry = _carryInto(y - 1, depth + 1);
+  const prevOwnUsed = Math.max(0, _vacUsedIn(y - 1) - prevCarry.used);
+  const over = Math.max(0, Math.min(_carryMax, prevBase - prevOwnUsed));
+  const used = Math.min(over, _vacUsedIn(y, `${y}-${_cutMD}`));
+  return { over, used };
+ };
+ let carryOver = 0, carryUsed = 0, carryActive = false;
+ if (ov.vacation === undefined && !prob) {
+  const c = _carryInto(year, 0);
+  carryOver = c.over; carryUsed = c.used;
+  if (carryOver > 0) {
+   carryActive = _todayISO <= _cutoffDate;
+   // ก่อนวันตัดยอด: ยกมาเต็มก้อน · หลังวันตัดยอด: เหลือเฉพาะส่วนที่ใช้ไปแล้ว
+   vacationQuota += carryActive ? carryOver : carryUsed;
+  }
+ }
+
  // Comp-off balance from accumulated holidays
  const compOffs = DB.load('accumulatedHolidays').filter(a =>
  a.employeeId === employeeId &&
@@ -3236,7 +3294,10 @@ function getLeaveBalance(employeeId) {
  // v1.5.29: `pending` added per type. `remaining` keeps its old meaning (quota − approved)
  // so every existing screen reads the same; use `remaining - pending` to gate new requests.
  personal: { quota: personalQuota, used: used.personal, pending: pending.personal, remaining: personalQuota - used.personal },
- vacation: { quota: vacationQuota, used: used.vacation, pending: pending.vacation, remaining: vacationQuota - used.vacation },
+ vacation: { quota: vacationQuota, used: used.vacation, pending: pending.vacation, remaining: vacationQuota - used.vacation,
+   // v1.6.6: ยอดยกมาจากปีก่อน — แสดงให้พนักงานเห็นว่าส่วนไหนจะหมดอายุเมื่อไหร่
+   carryOver, carryUsed, carryActive, carryExpires: _cutoffDate,
+   carryRemaining: carryActive ? Math.max(0, carryOver - carryUsed) : 0 },
  sick: { quota: ov.sick ?? settings.leaveQuotas.sick, used: used.sick, pending: pending.sick, remaining: (ov.sick ?? settings.leaveQuotas.sick) - used.sick },
  maternity: { quota: ov.maternity ?? settings.leaveQuotas.maternity, used: used.maternity, pending: pending.maternity, remaining: (ov.maternity ?? settings.leaveQuotas.maternity) - used.maternity },
  ordination: { quota: ov.ordination ?? ordinationQuota, used: used.ordination, pending: pending.ordination, remaining: (ov.ordination ?? ordinationQuota) - used.ordination, available: emp.gender === 'male' },
@@ -7359,8 +7420,10 @@ async function submitEmployee(e, editId) {
  customStartTime: (document.getElementById('empCustomStartTime')?.value || '').trim() || undefined,
  exemptFromAttendance: document.getElementById('empExemptAttendance')?.checked || false,
  canUploadAttendance: document.getElementById('empCanUploadAttendance')?.checked || false,
- canViewAttendanceReport: document.getElementById('empCanViewAttendanceReport')?.checked || false,
- vacationQuota: 6
+ canViewAttendanceReport: document.getElementById('empCanViewAttendanceReport')?.checked || false
+ // v1.6.6: เอา vacationQuota: 6 ออกจากตรงนี้ — ก้อน data ถูก spread ทับข้อมูลเดิมตอนแก้ไข
+ // ({...emps[idx], ...data}) ทำให้การแก้ข้อมูลพนักงานช่องไหนก็ตาม รีเซ็ตโควตาลาพักร้อน
+ // ที่ตกลงไว้กลับเป็น 6 ทุกครั้ง ตอนนี้ตั้งค่าเฉพาะตอนสร้างพนักงานใหม่ (ด้านล่าง)
  };
 
  const pass = document.getElementById('empPass').value;
@@ -7389,6 +7452,7 @@ async function submitEmployee(e, editId) {
  }
  data.password = pass;
  data.forceChangePassword = true; // Force change for new employees
+ data.vacationQuota = 6; // v1.6.6: ย้ายมาตั้งเฉพาะตอนสร้าง ไม่ให้ทับค่าเดิมตอนแก้ไข
  // v1.4.24: stamp _addedAt for tombstone stale detection
  // v1.4.26: stamp _updatedAt for field-level LWW merge
  data._addedAt = new Date().toISOString();
@@ -13443,7 +13507,7 @@ function renderDashboardOverview() {
   </div>
 
   <div class="stats-grid">
-   <div class="stat-card green"><div class="label">วันลาพักร้อนคงเหลือ</div><div class="value">${b.vacation.remaining} <small>วัน</small></div><div class="sub">จากสิทธิ์ ${b.vacation.quota} วัน</div></div>
+   <div class="stat-card green"><div class="label">วันลาพักร้อนคงเหลือ</div><div class="value">${b.vacation.remaining} <small>วัน</small></div><div class="sub">จากสิทธิ์ ${b.vacation.quota} วัน${b.vacation.carryRemaining > 0 ? ` · ยกมา ${b.vacation.carryRemaining} วัน ใช้ได้ถึง ${formatDate(b.vacation.carryExpires)}` : ''}</div></div>
    <div class="stat-card" title="${formatPayrollCycle(_targetOTCycle)}"><div class="label" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>OT เดือนนี้</span><select onchange="_empOTCycle=this.value;renderDashboardOverview();" style="font-size:11px;padding:2px 6px;border:1px solid var(--gray-300);border-radius:4px;background:white;color:var(--gray-700);max-width:120px;cursor:pointer;" title="เลือกรอบเงินเดือนเพื่อดู OT ย้อนหลัง">${_empOTCycleOptions.map(o => `<option value="${o.value}" ${o.value===_targetOTCycle?'selected':''}>${o.label}</option>`).join('')}</select></div><div class="value">${otHoursThisMonth.toFixed(1)} <small>ชม.</small></div></div>
    <div class="stat-card orange"><div class="label">คำขอรออนุมัติ</div><div class="value">${pendingCount}</div></div>
    <div class="stat-card"><div class="label">ลาป่วยคงเหลือ</div><div class="value">${b.sick.remaining} <small>/${b.sick.quota}</small></div></div>

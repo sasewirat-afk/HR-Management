@@ -639,7 +639,8 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 }
 .calendar-grid {
  display: grid;
- grid-template-columns: repeat(7, 1fr);
+ /* v1.6.9: minmax(0,1fr) — 1fr เฉยๆ ขยายตามเนื้อหา บนมือถือ 7 คอลัมน์ล้นขอบ วันเสาร์กับตัวเลขวันที่ถูกตัด */
+ grid-template-columns: repeat(7, minmax(0, 1fr));
  gap: 1px;
  background: rgba(30,58,138,0.08);
  border: 1px solid rgba(30,58,138,0.10);
@@ -671,6 +672,11 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  font-weight: 500;
  overflow: hidden;
  min-height: 90px;
+ /* v1.6.9: aspect-ratio 1 + min-height 90px บังคับความกว้างขั้นต่ำ 90px ด้วย บนมือถือ 7 ช่อง = 630px
+    ล้นขอบจนวันเสาร์และตัวเลขวันที่ถูกตัด — กำหนดความกว้างตามคอลัมน์ให้ชัด ความสูงยังคิดจาก
+    aspect-ratio (จอกว้างเป็นช่องสี่เหลี่ยมจัตุรัสเหมือนเดิม) และไม่ต่ำกว่า 90px */
+ min-width: 0;
+ width: 100%;
 }
 .calendar-day.other-month { color: var(--gray-300); background: #ffffff; }
 .calendar-day.today {
@@ -684,6 +690,8 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 .calendar-day.sunday.today { background: #1e3a8a; color: #fde047; box-shadow: inset 0 0 0 3px #fde047; }
 .calendar-day.sunday.leave { background: #1e3a8a; color: #fde047; }
 .calendar-day.sunday.holiday { background: #1e3a8a; color: #fecaca; }
+/* v1.6.9: ข้อความสีในช่องวันอาทิตย์และวันนี้ (กะวันอาทิตย์ · ปฏิทินทีม) อ่านไม่ออกบนพื้นน้ำเงินเข้ม — ใช้สีของช่องแทน */
+.calendar-day.sunday div, .calendar-day.today div { color: inherit !important; }
 .calendar-day.holiday { background: rgba(254,226,226,0.7); color: var(--danger); }
 
 /* ===== Tabs ===== */
@@ -921,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.8';
+const APP_VERSION = '1.6.9';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -4883,6 +4891,153 @@ function submitFieldWork(e) {
 let calMonth = new Date().getMonth();
 let calYear = new Date().getFullYear();
 
+// ============================================================
+// v1.6.9: สถานะรายวันของปฏิทิน — ใช้ร่วมกันระหว่าง "ปฏิทินของฉัน" และ "ปฏิทินทีม"
+// ============================================================
+// เดิมปฏิทินของฉันตัดสินเองว่าวันไหนขาดงาน และไม่ตรงกับสลิปเงินเดือน 4 จุด:
+//   1. วันทำงานนอกสถานที่ที่อนุมัติแล้ว ขึ้น "ขาดงาน" (สลิปนับว่ามาทำงาน)
+//   2. สแกนเกินเกณฑ์ขาดงานของกะ ขึ้นเป็นแค่จุดแดง (สลิปหักเป็นขาดงานทั้งวัน)
+//   3. ดูวันทำงานจากเสาร์-อาทิตย์ ไม่ได้ดูตารางกะ — คนที่มีกะวันเสาร์ไม่สแกนก็ไม่ขึ้นขาด
+//      ส่วนวันหยุดบริษัทที่มีกะทำงานกลับขึ้นเป็นวันหยุด
+//   4. ใบรับรองเวลาวันที่ 22 เป็นต้นไปไม่แสดง เพราะดึงตาม "รอบเงินเดือน" แทนเดือนปฏิทิน
+// และวันที่ยังไม่ได้อัปโหลดไฟล์สแกนขึ้น "ขาดงาน" ทั้งที่แค่ยังไม่มีข้อมูล
+//
+// ctx โหลดข้อมูลทั้งเดือนครั้งเดียวแล้วทำเป็น Map — ปฏิทินทีมเรียกวันละหลายสิบคน
+function buildCalendarCtx(empIds, monthStr) {
+ const settings = DB.load('settings');
+ const ids = new Set(empIds);
+ const key = (id, d) => `${id}|${d}`;
+ const shifts = new Map();
+ DB.load('shifts', []).forEach(x => {
+  if (ids.has(x.employeeId) && String(x.date).startsWith(monthStr)) shifts.set(key(x.employeeId, x.date), x.type);
+ });
+ const leaves = new Map();
+ const monthFirst = `${monthStr}-01`, monthLast = `${monthStr}-31`;
+ DB.load('leaveRequests').forEach(r => {
+  if (r.status !== 'approved' || !ids.has(r.employeeId)) return;
+  const end = r.endDate || r.startDate;
+  if (!r.startDate || end < monthFirst || r.startDate > monthLast) return;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(r.startDate);
+  if (!m) return;
+  const cur = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  for (let g = 0; g < 400; g++) {
+   const iso = cur.toISOString().slice(0, 10);
+   if (iso > end) break;
+   if (iso.startsWith(monthStr)) leaves.set(key(r.employeeId, iso), r);
+   cur.setUTCDate(cur.getUTCDate() + 1);
+  }
+ });
+ const fieldWork = new Set();
+ DB.load('fieldWorkRequests', []).forEach(f => {
+  if (f.status === 'approved' && ids.has(f.employeeId) && String(f.date).startsWith(monthStr)) fieldWork.add(key(f.employeeId, f.date));
+ });
+ // วันล่าสุดที่มีไฟล์สแกนของทั้งบริษัท — หลังจากนี้ "ไม่มีสแกน" แปลว่ายังไม่ได้อัปโหลด ไม่ใช่ขาดงาน
+ const att = new Map();
+ let lastDataDate = '';
+ DB.load('attendanceRecords').forEach(r => {
+  if (!r.date) return;
+  if (r.date > lastDataDate) lastDataDate = r.date;
+  const id = ids.has(r.employeeId) ? r.employeeId : ids.has(r.employeeCode) ? r.employeeCode : null;
+  if (id && r.date.startsWith(monthStr)) att.set(key(id, r.date), r);
+ });
+ // ใบรับรองเวลาที่อนุมัติ กรองตามวันที่ในเดือนปฏิทิน และเฉพาะคนในขอบเขต
+ DB.load('timeCertRequests', []).forEach(c => {
+  if (c.status !== 'approved' || !ids.has(c.employeeId) || !String(c.date).startsWith(monthStr)) return;
+  const k = key(c.employeeId, c.date), ex = att.get(k);
+  att.set(k, Object.assign({ employeeId: c.employeeId, employeeCode: c.employeeId, date: c.date }, ex || {}, {
+   checkIn: c.claimedCheckIn || ex?.checkIn || null,
+   checkOut: c.claimedCheckOut || ex?.checkOut || null,
+   _certified: true, _certReason: c.reason,
+  }));
+ });
+ return { settings, monthStr, shifts, leaves, fieldWork, att, lastDataDate,
+  holidays: new Set(settings.companyHolidays || []), todayStr: today() };
+}
+
+// ลำดับเดียวกับ isNonWorkingDay() และ calculatePaySlip():
+// วันหยุด → ลา → นอกสถานที่ → สแกน (เกินเกณฑ์ = ขาด) → ละเว้นการสแกน → อนาคต / รอข้อมูล → ขาด
+function calendarDayStatus(emp, dStr, cx) {
+ const k = `${emp.id}|${dStr}`;
+ const shift = cx.shifts.get(k);
+ const rec = cx.att.get(k) || null;
+ const base = { shift, rec };
+ if (shift !== undefined) {
+  if (shift === 'O' || shift === 'off') return { ...base, code: 'off' };
+ } else {
+  if (cx.holidays.has(dStr)) return { ...base, code: 'holiday' };
+  const dow = _dowFromISO(dStr);
+  if (dow === 0 || dow === 6) return { ...base, code: 'weekend' };
+ }
+ const leave = cx.leaves.get(k);
+ if (leave) return { ...base, code: 'leave', leave };
+ if (cx.fieldWork.has(k)) return { ...base, code: 'fieldwork' };
+ if (rec && rec.checkIn) {
+  const cut = computeAutoAbsentCutoffFor(emp, dStr, cx.settings);
+  if (cut && rec.checkIn >= cut) return { ...base, code: 'absent-late' };
+  const info = getShiftLateInfo_v1_5_4(emp, dStr, cx.settings);
+  return { ...base, code: info && rec.checkIn >= info.lateThreshold ? 'late' : 'ontime' };
+ }
+ if (emp.exemptFromAttendance) return { ...base, code: 'exempt' };
+ if (dStr > cx.todayStr) return { ...base, code: 'future' };
+ if (!cx.lastDataDate || dStr > cx.lastDataDate) return { ...base, code: 'nodata' };
+ return { ...base, code: 'absent' };
+}
+
+const CAL_STATUS_LABEL = {
+ ontime: 'มาตรงเวลา', late: 'มาสาย', 'absent-late': 'ขาดงาน (สแกนเกินเกณฑ์)', absent: 'ขาดงาน',
+ fieldwork: 'ทำงานนอกสถานที่', off: 'หยุดตามกะ', holiday: 'วันหยุดบริษัท', weekend: 'วันหยุด',
+ exempt: 'ไม่ต้องสแกน', nodata: 'รอข้อมูลสแกน', future: '-', leave: 'ลา',
+};
+
+function _calLeaveLabel(t) {
+ switch (t) {
+  case 'personal': return '🟠 ลากิจ';
+  case 'sick': case 'sick-cert': case 'sick-with-cert': case 'sick-without-cert': return '🟠 ลาป่วย';
+  case 'vacation': return '🟠 ลาพักร้อน';
+  case 'comp-off': return '🟢 สะสมหยุด';
+  case 'maternity': return '🟣 ลาคลอด';
+  case 'ordination': return '🟤 ลาบวช';
+  case 'unpaid': return '⚫ ลาไม่รับค่าจ้าง';
+  default: return '🟠 ลา';
+ }
+}
+
+// เนื้อหาใต้ตัวเลขวันที่ในช่องปฏิทินรายคน — ปฏิทินของฉันและปฏิทินทีม (ดูรายคน) ใช้ตัวเดียวกัน
+function _calCellContent(st) {
+ const small = (txt, color) => `<div style="font-size:11px;color:${color};margin-top:2px;line-height:1.3;">${txt}</div>`;
+ const shiftLabel = st.shift && st.shift !== 'O' && st.shift !== 'off'
+  ? `<div style="font-size:11px;color:#4b5563;line-height:1.2;">กะ: ${esc(String(st.shift))}</div>` : '';
+ const times = r => {
+  if (!r) return '';
+  const inLine = r.checkIn ? `<div style="font-size:12px;line-height:1.2;">${r.checkIn}</div>` : '';
+  const outLine = r.checkOut ? `<div style="font-size:12px;color:#4b5563;line-height:1.2;">${r.checkOut}</div>`
+   : `<div style="font-size:11px;color:#9ca3af;line-height:1.2;">--:--</div>`;
+  return inLine + outLine;
+ };
+ const cert = st.rec?._certified ? `<div style="font-size:9px;color:#16a34a;line-height:1;">✓ รับรอง</div>` : '';
+ switch (st.code) {
+  case 'leave': return small(_calLeaveLabel(st.leave.type), '#c2410c');
+  case 'off': return small('🔵 หยุด', '#64748b');
+  case 'holiday': return small('🔴 วันหยุด', '#dc2626');
+  case 'weekend': return '';
+  case 'fieldwork': return `<div style="margin-top:3px;">${shiftLabel}${small('🧳 นอกสถานที่', '#0369a1')}</div>`;
+  case 'ontime': case 'late': {
+   const dot = st.code === 'late' ? '🔴' : '🟢';
+   const r = st.rec;
+   const inLine = `<div style="font-size:12px;line-height:1.2;">${dot} ${r.checkIn}</div>`;
+   const outLine = r.checkOut ? `<div style="font-size:12px;color:#4b5563;line-height:1.2;">${r.checkOut}</div>`
+    : `<div style="font-size:11px;color:#9ca3af;line-height:1.2;">--:--</div>`;
+   return `<div style="margin-top:3px;">${shiftLabel}${inLine}${outLine}${cert}</div>`;
+  }
+  case 'absent-late': return `${shiftLabel}${small('❌ ขาดงาน', '#dc2626')}<div style="font-size:10px;color:#9ca3af;line-height:1.2;">สแกน ${st.rec.checkIn}</div>${cert}`;
+  case 'absent': return `${shiftLabel}${small('❌ ขาดงาน', '#dc2626')}${st.rec?.checkOut ? `<div style="font-size:10px;color:#9ca3af;line-height:1.2;">ออก ${st.rec.checkOut}</div>` : ''}`;
+  case 'exempt': return `${shiftLabel}${small('ไม่ต้องสแกน', '#9ca3af')}`;
+  case 'nodata': return `${shiftLabel}${small('รอข้อมูลสแกน', '#9ca3af')}`;
+  case 'future': return shiftLabel;
+  default: return times(st.rec);
+ }
+}
+
 function renderMyCalendar() {
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
@@ -4923,62 +5078,15 @@ function drawCalendar() {
  const monthNames = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
  document.getElementById('calTitle').textContent = `${monthNames[calMonth]} ${calYear + 543}`;
 
- // v1.5.16: Preload all data once, build lookup maps for performance (Q6 A)
- const settings = DB.load('settings');
- const holidays = new Set(settings.companyHolidays);
- const empId = currentUser.id;
+ // v1.6.9: สถานะรายวันมาจาก calendarDayStatus() ตัวเดียวกับปฏิทินทีม ให้ตรงกับสลิปเงินเดือน
+ const me = getEmployee(currentUser.id) || currentUser;
  const monthStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}`;
- // Leaves — approved for this emp
- const leaves = DB.load('leaveRequests').filter(r => r.employeeId === empId && r.status === 'approved');
- const leaveByDate = {}; // date → leave type
- leaves.forEach(r => {
- const s = new Date(r.startDate), e = new Date(r.endDate);
- for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
- leaveByDate[d.toISOString().split('T')[0]] = r.type;
- }
- });
- // Shifts (grid)
- const shifts = DB.load('shifts', []);
- const shiftByDate = {};
- shifts.filter(s => s.employeeId === empId && s.date.startsWith(monthStr)).forEach(s => {
- shiftByDate[s.date] = s.type;
- });
- // Attendance records (raw + apply cert merge per month for accuracy)
- const rawRecords = DB.load('attendanceRecords').filter(r =>
- (r.employeeCode === empId || r.employeeId === empId) && r.date && r.date.startsWith(monthStr)
- );
- const mergedRecords = mergeApprovedTimeCertForMonth(rawRecords, monthStr);
- const attByDate = {};
- mergedRecords.forEach(r => { if (r.date) attByDate[r.date] = r; });
+ const cx = buildCalendarCtx([me.id], monthStr);
 
  const first = new Date(calYear, calMonth, 1);
  const startDay = first.getDay();
  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
- const todayStr = today();
-
- // Helper: determine late status (Q5 C — 🟢 on-time / 🔴 late)
- // Uses per-day late threshold via v1.5.4 helper if available.
- const _getLateDot = (rec, dStr) => {
- if (!rec?.checkIn) return '';
- const info = (typeof getShiftLateInfo_v1_5_4 === 'function')
- ? getShiftLateInfo_v1_5_4(currentUser, dStr, settings)
- : null;
- if (!info) return ''; // day off
- return rec.checkIn >= info.lateThreshold ? '🔴' : '🟢';
- };
-
- const leaveTypeLabel = (t) => {
- switch (t) {
- case 'personal': return '🟠 ลากิจ';
- case 'sick': case 'sick-cert': case 'sick-with-cert': case 'sick-without-cert': return '🟠 ลาป่วย';
- case 'vacation': return '🟠 ลาพักร้อน';
- case 'comp-off': return '🟢 สะสมหยุด';
- case 'maternity': return '🟣 ลาคลอด';
- case 'ordination': return '🟤 ลาบวช';
- case 'unpaid': return '⚫ ลาไม่รับค่าจ้าง';
- default: return '🟠 ลา';
- }
- };
+ const todayStr = cx.todayStr;
 
  const days = ['อา','จ','อ','พ','พฤ','ศ','ส'];
  let html = '<div class="calendar-grid">';
@@ -4986,49 +5094,21 @@ function drawCalendar() {
 
  for (let i = 0; i < startDay; i++) html += `<div class="calendar-day other-month" style="background:#ffffff;"></div>`;
  for (let d = 1; d <= daysInMonth; d++) {
- const dStr = `${calYear}-${String(calMonth+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+ const dStr = `${monthStr}-${String(d).padStart(2,'0')}`;
  const dow = new Date(calYear, calMonth, d).getDay();
+ const st = calendarDayStatus(me, dStr, cx);
  let cls = 'calendar-day';
  if (dStr === todayStr) cls += ' today';
  if (dow === 0) cls += ' sunday';
- const hasLeave = !!leaveByDate[dStr];
- const isHoliday = holidays.has(dStr);
- if (hasLeave) cls += ' leave';
- else if (isHoliday) cls += ' holiday';
+ if (st.code === 'leave') cls += ' leave';
+ else if (st.code === 'holiday') cls += ' holiday';
  else if (dow === 6) cls += ' weekend';
  // v1.5.13: past/today dates clickable → time cert modal
  const isPastOrToday = dStr <= todayStr;
  const clickHandler = isPastOrToday
  ? ` onclick="openCalendarTimeCertModal('${dStr}')" style="cursor:pointer;" title="คลิกเพื่อขอรับรองเวลาสำหรับวันนี้"`
  : ` style="cursor:not-allowed;opacity:0.6;" title="ไม่สามารถขอรับรองเวลาล่วงหน้าได้"`;
-
- // v1.5.16: build content below date number (Q1 C — shift context, Q4 12px + colors)
- const shiftType = shiftByDate[dStr];
- const rec = attByDate[dStr];
- let content = '';
- if (hasLeave) {
- content = `<div style="font-size:11px;color:#c2410c;margin-top:2px;line-height:1.3;">${leaveTypeLabel(leaveByDate[dStr])}</div>`;
- } else if (shiftType === 'O') {
- content = `<div style="font-size:11px;color:#64748b;margin-top:2px;line-height:1.3;">🔵 หยุด</div>`;
- } else if (isHoliday) {
- content = `<div style="font-size:11px;color:#dc2626;margin-top:2px;line-height:1.3;">🔴 วันหยุด</div>`;
- } else if (rec) {
- // Working day with scan data
- const inDot = _getLateDot(rec, dStr);
- const shiftLabel = shiftType ? `<div style="font-size:11px;color:#4b5563;line-height:1.2;">กะ: ${shiftType}</div>` : '';
- const inLine = rec.checkIn ? `<div style="font-size:12px;line-height:1.2;">${inDot} ${rec.checkIn}</div>` : '';
- const outLine = rec.checkOut ? `<div style="font-size:12px;color:#4b5563;line-height:1.2;">${rec.checkOut}</div>` : `<div style="font-size:11px;color:#9ca3af;line-height:1.2;">--:--</div>`;
- const certBadge = rec._certified ? `<div style="font-size:9px;color:#16a34a;line-height:1;">✓ รับรอง</div>` : '';
- content = `<div style="margin-top:3px;">${shiftLabel}${inLine}${outLine}${certBadge}</div>`;
- } else if (isPastOrToday && !hasLeave && !isHoliday && dow !== 0 && dow !== 6) {
- // Past workday without scan and no leave → absent
- const shiftLabel = shiftType ? `<div style="font-size:11px;color:#4b5563;line-height:1.2;">กะ: ${shiftType}</div>` : '';
- content = `${shiftLabel}<div style="font-size:11px;color:#dc2626;margin-top:2px;line-height:1.2;">❌ ขาดงาน</div>`;
- } else if (shiftType) {
- // Future date with shift set (or no scan needed)
- content = `<div style="font-size:11px;color:#4b5563;margin-top:2px;line-height:1.2;">กะ: ${shiftType}</div>`;
- }
- html += `<div class="${cls}"${clickHandler}><div style="font-weight:600;">${d}</div>${content}</div>`;
+ html += `<div class="${cls}"${clickHandler}><div style="font-weight:600;">${d}</div>${_calCellContent(st)}</div>`;
  }
  html += '</div>';
  document.getElementById('calendarGrid').innerHTML = html;
@@ -10156,7 +10236,12 @@ function calculatePaySlip(employeeId, year, month) {
  const rawAttendanceCycle = DB.load('attendanceRecords').filter(r =>
  r.employeeId === employeeId && getPayrollMonth(r.date) === monthStr
  );
- const attendanceWithCert = mergeApprovedTimeCertForMonth(rawAttendanceCycle, monthStr);
+ // v1.6.9: กรองให้เหลือเฉพาะของคนนี้หลัง merge — mergeApprovedTimeCertForDate() รับรายการว่าง
+ // แล้วใส่ใบรับรองเวลาของ "ทุกคน" ในวันนั้นเข้ามา (ตั้งใจไว้ให้รายงานรายวัน) คนที่ไม่มีสแกนเลยทั้งรอบ
+ // เช่น พนักงานใหม่ ลาคลอด หรือคนที่ละเว้นการสแกน จึงได้เวลาของเพื่อนร่วมงานมาเป็นของตัวเอง
+ // แล้วถูกนับสาย/ขาดงานและหักเงินจากเวลาของคนอื่น
+ const attendanceWithCert = mergeApprovedTimeCertForMonth(rawAttendanceCycle, monthStr)
+  .filter(r => r.employeeId === employeeId || r.employeeCode === employeeId);
  const cycleFwResult = mergeApprovedFieldWorkForMonth(attendanceWithCert, employeeId, monthStr);
  const attendance = cycleFwResult.attendance;
  const cycleFieldWorkDates = cycleFwResult.fieldWorkDates;
@@ -11973,6 +12058,7 @@ function renderReports() {
  <div class="tab ${reportTab==='field-work'?'active':''}" onclick="setReportTab('field-work')">งานนอกสถานที่</div>
  <div class="tab ${reportTab==='time-cert'?'active':''}" onclick="setReportTab('time-cert')">รับรองเวลา</div>
  <div class="tab ${reportTab==='late-summary'?'active':''}" onclick="setReportTab('late-summary')">มาสายสะสม</div>
+ <div class="tab ${reportTab==='team-calendar'?'active':''}" onclick="setReportTab('team-calendar')">ปฏิทินทีม</div>
  ${currentUser.role === 'manager' ? `<div class="tab ${reportTab==='attendance-range'?'active':''}" onclick="setReportTab('attendance-range')">รายงานเข้างาน</div>` : ''}
  </div>
  <div id="reportContent"></div>
@@ -12481,7 +12567,173 @@ function drawReport() {
  `;
  }
 
+ else if (reportTab === 'team-calendar') {
+ html = _teamCalendarShell();
+ }
+
  document.getElementById('reportContent').innerHTML = html;
+ if (reportTab === 'team-calendar') drawTeamCalendar();
+}
+
+// ============================================================
+// v1.6.9: ปฏิทินทีม — ใครเข้างานวันไหน กี่โมง
+// ============================================================
+// ขอบเขตเดียวกับศูนย์อนุมัติ: Manager เห็นลูกน้องที่ตัวเองเป็นผู้อนุมัติ (managerId) · Admin เห็นทุกคน
+// สถานะรายวันใช้ calendarDayStatus() ตัวเดียวกับปฏิทินของฉัน
+let _tcYear = new Date().getFullYear();
+let _tcMonth = new Date().getMonth();
+let _tcEmp = '';
+let _tcCompany = '';
+let _tcDept = '';
+let _tcCache = null; // { members, cx } ของเดือนที่แสดงอยู่ — ใช้ตอนกดดูรายวัน
+
+function _teamCalScope() {
+ const scope = _reportScopeEmpIds();
+ return DB.load('employees').filter(e => e.active && scope.has(e.id) && e.id !== currentUser.id && isCountedInAttendance(e));
+}
+
+function _teamCalMembers() {
+ return _teamCalScope()
+  .filter(e => !_tcCompany || e.company === _tcCompany)
+  .filter(e => !_tcDept || e.department === _tcDept)
+  .sort((a, b) => String(a.firstName || '').localeCompare(String(b.firstName || ''), 'th'));
+}
+
+function _teamCalendarShell() {
+ const isAdmin = currentUser.role === 'admin';
+ const scope = _teamCalScope();
+ const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
+ const companies = [...new Set(scope.map(e => e.company).filter(Boolean))].sort();
+ const depts = [...new Set(scope.filter(e => !_tcCompany || e.company === _tcCompany).map(e => e.department).filter(Boolean))].sort();
+ if (_tcDept && !depts.includes(_tcDept)) _tcDept = '';
+ const members = _teamCalMembers();
+ if (_tcEmp && !members.some(e => e.id === _tcEmp)) _tcEmp = '';
+ const sel = 'padding:6px 10px;border:1px solid var(--gray-300);border-radius:6px;background:white;font-size:13px;max-width:100%;';
+ return `
+ <div class="card">
+ <div class="card-body">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px;">
+  ${isAdmin ? `<select style="${sel}" onchange="_tcCompany=this.value;_tcDept='';_tcEmp='';setReportTab('team-calendar')">
+   ${opt('', 'ทุกบริษัท', _tcCompany)}${companies.map(c => { const nm = getCompanyName(c); return opt(c, nm && nm !== '-' ? nm : c, _tcCompany); }).join('')}</select>
+  <select style="${sel}" onchange="_tcDept=this.value;_tcEmp='';setReportTab('team-calendar')">
+   ${opt('', 'ทุกแผนก', _tcDept)}${depts.map(d => opt(d, d, _tcDept)).join('')}</select>` : ''}
+  <select style="${sel}" onchange="_tcEmp=this.value;drawTeamCalendar()">
+   ${opt('', `ทั้งทีม (${members.length} คน)`, _tcEmp)}${members.map(e => opt(e.id, `${e.firstName || ''} ${e.lastName || ''} (${e.id})`, _tcEmp)).join('')}</select>
+  </div>
+  <div class="calendar-header">
+  <button class="btn btn-secondary btn-sm" onclick="teamCalShift(-1)">◀ เดือนก่อน</button>
+  <h3 id="teamCalTitle"></h3>
+  <button class="btn btn-secondary btn-sm" onclick="teamCalShift(1)">เดือนถัดไป ▶</button>
+  </div>
+  <div id="teamCalGrid"></div>
+  <div id="teamCalLegend" class="flex mt-3" style="gap:14px;font-size:13px;flex-wrap:wrap;"></div>
+ </div>
+ </div>`;
+}
+
+function teamCalShift(delta) {
+ _tcMonth += delta;
+ if (_tcMonth < 0) { _tcMonth = 11; _tcYear--; }
+ if (_tcMonth > 11) { _tcMonth = 0; _tcYear++; }
+ drawTeamCalendar();
+}
+
+function drawTeamCalendar() {
+ const grid = document.getElementById('teamCalGrid');
+ if (!grid) return;
+ const monthNames = ['มกราคม','กุมภาพันธ์','มีนาคม','เมษายน','พฤษภาคม','มิถุนายน','กรกฎาคม','สิงหาคม','กันยายน','ตุลาคม','พฤศจิกายน','ธันวาคม'];
+ const monthStr = `${_tcYear}-${String(_tcMonth + 1).padStart(2, '0')}`;
+ const members = _teamCalMembers();
+ const person = _tcEmp ? members.find(e => e.id === _tcEmp) : null;
+ const shown = person ? [person] : members;
+ document.getElementById('teamCalTitle').textContent =
+  `${person ? `${person.firstName || ''} ${person.lastName || ''} · ` : ''}${monthNames[_tcMonth]} ${_tcYear + 543}`;
+ if (!shown.length) {
+  grid.innerHTML = `<div class="empty-state" style="padding:30px;text-align:center;color:var(--gray-500);">ไม่มีพนักงานในขอบเขตนี้</div>`;
+  document.getElementById('teamCalLegend').innerHTML = '';
+  return;
+ }
+ const cx = buildCalendarCtx(shown.map(e => e.id), monthStr);
+ _tcCache = { members: shown, cx };
+
+ const startDay = new Date(_tcYear, _tcMonth, 1).getDay();
+ const daysInMonth = new Date(_tcYear, _tcMonth + 1, 0).getDate();
+ let html = '<div class="calendar-grid">';
+ ['อา','จ','อ','พ','พฤ','ศ','ส'].forEach(d => html += `<div class="calendar-day-header">${d}</div>`);
+ for (let i = 0; i < startDay; i++) html += `<div class="calendar-day other-month" style="background:#ffffff;"></div>`;
+ for (let d = 1; d <= daysInMonth; d++) {
+  const dStr = `${monthStr}-${String(d).padStart(2, '0')}`;
+  const dow = new Date(_tcYear, _tcMonth, d).getDay();
+  let cls = 'calendar-day';
+  if (dStr === cx.todayStr) cls += ' today';
+  if (dow === 0) cls += ' sunday';
+  let content;
+  if (person) {
+   const st = calendarDayStatus(person, dStr, cx);
+   if (st.code === 'leave') cls += ' leave';
+   else if (st.code === 'holiday') cls += ' holiday';
+   else if (dow === 6) cls += ' weekend';
+   content = _calCellContent(st);
+  } else {
+   const n = { present: 0, late: 0, leave: 0, absent: 0, nodata: 0, working: 0 };
+   let allHoliday = true;
+   shown.forEach(e => {
+    const st = calendarDayStatus(e, dStr, cx);
+    if (st.code !== 'holiday') allHoliday = false;
+    if (st.code === 'ontime' || st.code === 'fieldwork' || st.code === 'exempt') n.present++;
+    else if (st.code === 'late') n.late++;
+    else if (st.code === 'leave') n.leave++;
+    else if (st.code === 'absent' || st.code === 'absent-late') n.absent++;
+    else if (st.code === 'nodata') n.nodata++;
+    if (!['off', 'holiday', 'weekend'].includes(st.code)) n.working++;
+   });
+   const line = (icon, v, color) => v ? `<div style="font-size:12px;line-height:1.35;color:${color};">${icon} ${v}</div>` : '';
+   if (allHoliday) { cls += ' holiday'; content = `<div style="font-size:11px;color:#dc2626;margin-top:2px;">🔴 วันหยุด</div>`; }
+   else if (!n.working) { if (dow === 6) cls += ' weekend'; content = `<div style="font-size:11px;color:#64748b;margin-top:2px;">🔵 หยุด</div>`; }
+   else {
+    if (dow === 6) cls += ' weekend';
+    content = `<div style="margin-top:3px;">${line('🟢', n.present, '#15803d')}${line('🔴', n.late, '#b91c1c')}${line('🟠', n.leave, '#c2410c')}${line('❌', n.absent, '#b91c1c')}`
+     + (n.nodata && !n.present && !n.late ? `<div style="font-size:11px;color:#9ca3af;">รอข้อมูล</div>` : '') + `</div>`;
+   }
+  }
+  html += `<div class="${cls}" onclick="showTeamCalendarDay('${dStr}')" style="cursor:pointer;" title="กดเพื่อดูรายคน"><div style="font-weight:600;">${d}</div>${content}</div>`;
+ }
+ html += '</div>';
+ grid.innerHTML = html;
+ const lg = (bg, txt, border) => `<span class="flex"><span style="width:16px;height:16px;background:${bg};border-radius:3px;${border ? 'border:1px solid var(--gray-300);' : ''}"></span> ${txt}</span>`;
+ document.getElementById('teamCalLegend').innerHTML = person
+  ? `${lg('var(--primary-light)', 'วันลา')}${lg('var(--danger-light)', 'วันหยุดบริษัท')}<span>🟢 ตรงเวลา · 🔴 สาย · ❌ ขาดงาน · 🧳 นอกสถานที่</span>`
+  : `<span>🟢 มาทำงาน (รวมนอกสถานที่) · 🔴 มาสาย · 🟠 ลา · ❌ ขาดงาน · กดที่วันเพื่อดูเวลาเข้า-ออกรายคน</span>`;
+}
+
+function showTeamCalendarDay(dStr) {
+ if (!_tcCache || !dStr.startsWith(_tcCache.cx.monthStr)) return;
+ const { members, cx } = _tcCache;
+ const order = { absent: 0, 'absent-late': 1, late: 2, nodata: 3, leave: 4, ontime: 5, fieldwork: 6, exempt: 7, future: 8, off: 9, holiday: 10, weekend: 11 };
+ const rows = members.map(e => ({ e, st: calendarDayStatus(e, dStr, cx) }))
+  .sort((a, b) => (order[a.st.code] ?? 99) - (order[b.st.code] ?? 99));
+ const color = { ontime: '#15803d', fieldwork: '#0369a1', late: '#b91c1c', absent: '#b91c1c', 'absent-late': '#b91c1c', leave: '#c2410c' };
+ const body = `
+ <div style="overflow-x:auto;">
+ <table style="width:100%;font-size:13px;">
+ <thead style="background:var(--gray-100);"><tr>
+  <th style="padding:8px;text-align:left;">พนักงาน</th><th style="padding:8px;text-align:left;">กะ</th>
+  <th style="padding:8px;text-align:left;">สถานะ</th><th style="padding:8px;">เข้า</th><th style="padding:8px;">ออก</th>
+ </tr></thead>
+ <tbody>${rows.map(({ e, st }) => {
+  const label = st.code === 'leave' ? getLeaveTypeName(st.leave.type) : CAL_STATUS_LABEL[st.code];
+  const shift = st.shift && st.shift !== 'O' && st.shift !== 'off' ? esc(String(st.shift)) : '-';
+  return `<tr style="border-top:1px solid var(--gray-200);">
+   <td style="padding:8px;"><strong>${esc(e.firstName || '')} ${esc(e.lastName || '')}</strong><br><small style="color:var(--gray-500);">${esc(e.department || '-')}</small></td>
+   <td style="padding:8px;">${shift}</td>
+   <td style="padding:8px;color:${color[st.code] || 'var(--gray-600)'};font-weight:600;">${label}${st.rec?._certified ? ' <small style="color:#16a34a;">✓ รับรอง</small>' : ''}</td>
+   <td style="padding:8px;text-align:center;">${st.rec?.checkIn || '-'}</td>
+   <td style="padding:8px;text-align:center;">${st.rec?.checkOut || '-'}</td>
+  </tr>`;
+ }).join('')}</tbody>
+ </table>
+ </div>`;
+ showModal(`ปฏิทินทีม · ${formatDate(dStr)}`, body, `<button class="btn btn-secondary" onclick="closeModal()">ปิด</button>`);
 }
 
 // Show detail modal: per-day late breakdown for an employee

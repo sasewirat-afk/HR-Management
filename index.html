@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.10';
+const APP_VERSION = '1.6.11';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -1841,6 +1841,46 @@ function setupFocusResync() {
 // inconsistency and restores status to 'approved'. Runs on init after
 // cloud pull. Only touches requests with matching stock sourceRequestId
 // (safest signal). Never creates duplicate stocks.
+// v1.6.11: แปลงวันที่ปี พ.ศ. ที่บันทึกไปก่อน v1.6.8 ในคำขอทุกประเภท
+// ผลตรวจ 120 (22 ก.ย. 2026): OT ที่อนุมัติแล้ว 18 รายการ 18.5 ชม. มีวันที่เป็นปี 2569 จึงไม่ตกในรอบ
+// เงินเดือนไหนเลย (ยังไม่ได้จ่าย) · ใบลาอนุมัติ 1 ใบไม่ถูกหักสิทธิ์ · วันสะสม 1 รายการหมดอายุปี 2570
+//
+// ทำไมแก้ในแอป ไม่แก้ด้วย SQL: เครื่องที่ถือสำเนาเก่าจะเขียนปี 2569 กลับขึ้นไปได้ ถ้าแก้ในแอป
+// ทุกเครื่องแปลงสำเนาของตัวเองด้วย ค่าเก่าจึงไม่ย้อนกลับ · trigger รวมรายการ (db/merge) ทำให้
+// หลายเครื่องแปลงพร้อมกันได้โดยไม่ทับกัน — เนื้อหาเหมือนกันจึงไม่นับเป็นการแก้ซ้ำ
+// รันทุกครั้งหลังดึงข้อมูลสำเร็จ ถ้าไม่มีอะไรให้แปลงก็ไม่บันทึกอะไรเลย
+const BE_DATE_FIELDS = ['date', 'startDate', 'endDate', 'workDate', 'earnedDate', 'expireDate'];
+function migrateBuddhistEraDates() {
+ try {
+  DB._mergedKeys.forEach(key => {
+   const arr = DB.load(key, []);
+   if (!Array.isArray(arr)) return;
+   const fixed = [];
+   arr.forEach(r => {
+    if (!r || typeof r !== 'object') return;
+    BE_DATE_FIELDS.forEach(f => {
+     const v = r[f];
+     if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return;
+     const ce = beToCE(v);
+     if (ce === v) return;
+     const d = new Date(ce + 'T00:00:00Z');
+     if (isNaN(d) || d.toISOString().slice(0, 10) !== ce) return;   // 29 ก.พ. ที่ไม่มีในปี ค.ศ. — ปล่อยไว้ให้คนแก้
+     r[f] = ce;
+     fixed.push(`${r.id || '?'}.${f} ${v}→${ce}`);
+    });
+   });
+   if (!fixed.length) return;
+   DB.save(key, arr);
+   console.warn(`[v1.6.11 BE-migrate] ${key}: แปลง ${fixed.length} ค่า`, fixed);
+   if (typeof auditLog === 'function') {
+    auditLog('be-date-migrate', key, 'ALL', `แปลงวันที่ปี พ.ศ. เป็น ค.ศ. ${fixed.length} ค่า: ${fixed.slice(0, 30).join(', ')}${fixed.length > 30 ? ' …' : ''}`);
+   }
+  });
+ } catch (e) {
+  console.warn('[v1.6.11 BE-migrate] ข้าม:', e);
+ }
+}
+
 function healCompOffPendingWithStock() {
  try {
   const cos = DB.load('compOffRequests');
@@ -15228,6 +15268,7 @@ document.addEventListener('DOMContentLoaded', async () => {
  // array over the cloud, exactly what startup rule 3 above forbids. compOffRequests has
  // no field-level LWW merge (only employees does), so the whole array gets overwritten.
  if (pullResult.ok) healCompOffPendingWithStock(); // v1.5.27: auto-repair LWW race inconsistency
+ if (pullResult.ok) migrateBuddhistEraDates(); // v1.6.11: ต้องอยู่หลังดึงข้อมูลสำเร็จเท่านั้น (กฎเดียวกับบรรทัดบน)
  else console.warn('[v1.5.28] Skipping comp-off auto-heal — cloud pull failed, local data may be stale');
 
  if (pullResult.ok) {

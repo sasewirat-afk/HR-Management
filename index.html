@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.11';
+const APP_VERSION = '1.6.12';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -1257,6 +1257,9 @@ const DB = {
  if (_wait) { this._tombWait = null; _wait.then(() => this._cloudUpsert(key, val, _changed)); }
  else this._cloudUpsert(key, val, _changed);
  }
+ // v1.6.12: ลงกะแล้ว → คำนวณวันของใบลาที่รออนุมัติใหม่ (เฉพาะการบันทึกของผู้ใช้ ไม่ใช่ตอนเปิดแอป)
+ if (key === 'shifts' && typeof recalcPendingLeaveDays === 'function'
+     && typeof currentUser !== 'undefined' && currentUser) setTimeout(recalcPendingLeaveDays, 0);
  },
 
  // v1.4.27: Force full sync — bypass incremental + debounce
@@ -3265,6 +3268,79 @@ function leaveQtyDisplay(r) {
  return `${r.unpaidHours} ชม.`;
  }
  return `${r.days} วัน`;
+}
+
+// ============================================================
+// v1.6.12: วันลาของคนทำงานเป็นกะ ที่ยื่นล่วงหน้าเกินช่วงที่ลงกะไว้
+// ============================================================
+// พบ 22 ก.ย. 2026 (ผล 123): พนักงานที่มีกะวันเสาร์ 7 ครั้งตั้งแต่ ส.ค. ยื่นลาพักร้อน ศ. 16 – ส. 17 ต.ค.
+// แต่ตารางกะลงไว้ถึง 30 ก.ย. — วันที่ไม่มีกะ isNonWorkingDay() ใช้กฎเสาร์-อาทิตย์หยุด จึงนับ 1 วัน
+// และจำนวนวันถูกเก็บตอนยื่น ลงกะทีหลังก็ไม่เปลี่ยน สิทธิ์ลาจึงถูกหักขาด
+//
+// แก้ 2 ทาง:
+//   1. ทุกครั้งที่บันทึกตารางกะ คำนวณจำนวนวันของใบลาที่ "ยังรออนุมัติ" ใหม่ด้วยกฎเดียวกับตอนยื่น
+//      ใบที่อนุมัติแล้วไม่แตะ (มติ 19 ส.ค. 2026: ไม่ปรับย้อนหลัง)
+//   2. ศูนย์อนุมัติขึ้นป้ายเตือนถ้าช่วงวันลายังไม่ได้ลงกะ สำหรับคนที่เคยมีกะวันเสาร์/อาทิตย์
+
+// วันในช่วงลาที่ยังไม่ได้ลงกะ — คืน [] ถ้าคนนี้ไม่เคยมีกะทำงานวันเสาร์/อาทิตย์ (ใช้กฎวันหยุดปกติได้)
+function leaveShiftGap(r) {
+ if (!r || !r.startDate) return [];
+ const mine = DB.load('shifts', []).filter(x => x.employeeId === r.employeeId);
+ const weekendWorker = mine.some(x => x.type !== 'O' && x.type !== 'off' && [0, 6].includes(_dowFromISO(x.date)));
+ if (!weekendWorker) return [];
+ const have = new Set(mine.map(x => x.date));
+ const end = r.endDate || r.startDate;
+ const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(r.startDate);
+ if (!m) return [];
+ const out = [];
+ const cur = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+ for (let g = 0; g < 400; g++) {
+  const iso = cur.toISOString().slice(0, 10);
+  if (iso > end) break;
+  if (!have.has(iso)) out.push(iso);
+  cur.setUTCDate(cur.getUTCDate() + 1);
+ }
+ return out;
+}
+
+function leaveShiftGapBadge(r) {
+ const gap = leaveShiftGap(r);
+ if (!gap.length) return '';
+ return `<div style="margin-top:4px;font-size:11px;line-height:1.35;color:#b45309;background:#fef3c7;border-radius:6px;padding:3px 6px;"
+  title="ยังไม่ได้ลงกะ: ${gap.join(', ')}">⚠ ยังไม่ได้ลงกะ ${gap.length} วันในช่วงนี้<br>จำนวนวันอาจไม่ถูก — ลงกะก่อนแล้วระบบจะคำนวณใหม่</div>`;
+}
+
+// คำนวณจำนวนวันของใบลาที่รออนุมัติใหม่ ด้วยกฎเดียวกับ submitLeave()
+function recalcPendingLeaveDays() {
+ try {
+  const reqs = DB.load('leaveRequests', []);
+  const changed = [];
+  reqs.forEach(r => {
+   if (!r || r.status !== 'pending' || !r.startDate) return;
+   if (r.type === 'unpaid' && r.unpaidHours > 0) return;      // ลาเป็นชั่วโมง ไม่ได้คิดเป็นวัน
+   const end = r.endDate || r.startDate;
+   let d = workingDaysBetween(r.employeeId, r.startDate, end);
+   if (d <= 0) return;                                         // ช่วงนี้กลายเป็นวันหยุดทั้งหมด — ปล่อยให้คนตัดสิน
+   if (r.halfDay && r.startDate === end) d = 0.5;
+   if (d === r.days) return;
+   changed.push({ r, from: r.days, to: d });
+   r.days = d;
+   r.daysRecalculatedAt = new Date().toISOString();
+  });
+  if (!changed.length) return 0;
+  DB.save('leaveRequests', reqs);
+  changed.forEach(({ r, from, to }) => {
+   if (typeof auditLog === 'function') auditLog('leave-days-recalc', 'leave', r.id,
+    `${r.employeeId} ${getLeaveTypeName(r.type)} ${r.startDate}–${r.endDate || r.startDate}: ${from} → ${to} วัน (ลงกะแล้ว)`);
+   if (typeof notify === 'function') notify(r.employeeId,
+    `จำนวนวันลา${getLeaveTypeName(r.type)} (${formatDate(r.startDate)}) ปรับจาก ${from} เป็น ${to} วัน ตามตารางกะที่ลงใหม่`, 'leave', r.id);
+  });
+  if (typeof toast === 'function') toast(`ปรับจำนวนวันของใบลาที่รออนุมัติ ${changed.length} ใบตามตารางกะ`, 'info');
+  return changed.length;
+ } catch (e) {
+  console.warn('[v1.6.12 recalcPendingLeaveDays] ข้าม:', e);
+  return 0;
+ }
 }
 
 function getLeaveBalance(employeeId) {
@@ -7203,7 +7279,7 @@ function drawApprovalList() {
  <td>${esc(emp.firstName)} ${esc(emp.lastName)}</td>
  <td>${getLeaveTypeName(r.type)}</td>
  <td>${formatDate(r.startDate)}${r.endDate !== r.startDate ? '<br>- ' + formatDate(r.endDate) : ''}${r.halfDay ? '<br>(' + (r.halfDay === 'morning' ? 'เช้า' : 'บ่าย') + ')' : ''}</td>
- <td>${r.days} วัน</td>
+ <td>${r.days} วัน${leaveShiftGapBadge(r)}</td>
  <td style="max-width:200px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, " ") : ''}</td>
  <td>${_apvActionButtons('leave', r.id)}</td>
  </tr>`;

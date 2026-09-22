@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.9';
+const APP_VERSION = '1.6.10';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -988,6 +988,77 @@ if (SUPABASE_URL && SUPABASE_ANON_KEY && window.supabase) {
 // ============================================================
 const DB = {
  _pendingWrites: 0,
+
+ // v1.6.10: คีย์ที่ฐานข้อมูลรวมรายการตามรหัสให้ (trigger hr_data_a_merge_bu — db/merge/01)
+ // แอปมีหน้าที่ 2 อย่าง: (1) บันทึกการลบจริงไว้ใน deletedRecordIds ก่อนบันทึกรายการ
+ // ไม่งั้น trigger จะใส่รายการที่ลบกลับให้ (2) รับค่าที่รวมแล้วกลับมาเก็บในเครื่อง
+ _mergedKeys: new Set(['otRequests','leaveRequests','compOffRequests',
+                       'fieldWorkRequests','timeCertRequests','accumulatedHolidays']),
+
+ // อ่านค่าที่เครื่องนี้บันทึก/ดึงไว้ล่าสุด ใช้เทียบว่า save ครั้งนี้ลบหรือแก้รายการไหน
+ // ต้องอ่านจาก localStorage ไม่ใช่ _cache — ผู้เรียกส่วนใหญ่แก้ array ที่ได้จาก DB.load() ตรงๆ
+ // แล้วส่งตัวเดิมกลับมา _cache จึงเป็นตัวเดียวกับค่าใหม่ เทียบอะไรไม่ได้
+ _readStored(key) {
+ try {
+  const raw = localStorage.getItem('hr_' + key);
+  if (!raw) return [];
+  const json = raw.startsWith('LZ:') ? LZString.decompressFromUTF16(raw.slice(3)) : raw;
+  const v = JSON.parse(json);
+  return Array.isArray(v) ? v : [];
+ } catch (e) { return null; }
+ },
+
+ // รหัสที่ save ครั้งนี้เพิ่มหรือแก้ เทียบกับค่าที่เก็บไว้ในเครื่อง — ใช้แค่ตัดสินว่าจะเตือนผู้ใช้หรือไม่
+ // ห้ามใช้ผลต่างนี้ตัดสิน "การลบ": ถ้าหน้าจอถือ array เก่าอยู่ตอนที่ realtime เอารายการใหม่ของ
+ // เครื่องอื่นมาใส่ localStorage รายการนั้นจะดูเหมือนถูกลบ แล้ว trigger จะลบทิ้งจริง
+ // การลบจริงบันทึกผ่าน markDeleted() ที่จุดลบแต่ละจุดเท่านั้น
+ _diffChanged(key, val) {
+ const prev = this._readStored(key);
+ const changed = new Set();
+ if (!prev) return changed;
+ const strip = r => { const { _updatedAt, ...rest } = r; return JSON.stringify(rest); };
+ const prevMap = new Map(prev.filter(r => r && r.id).map(r => [r.id, r]));
+ val.forEach(r => {
+  if (!r || !r.id) return;
+  const p = prevMap.get(r.id);
+  if (!p || strip(p) !== strip(r)) changed.add(r.id);
+ });
+ return changed;
+ },
+
+ // v1.6.10: บันทึกว่าตั้งใจลบรายการเหล่านี้ — เรียกก่อน DB.save() ของคีย์นั้นทุกครั้งที่ลบจริง
+ // DB.save() ถัดไปจะรอให้บันทึกการลบถึงฐานข้อมูลก่อน แล้วค่อยส่งรายการ
+ markDeleted(key, ids) {
+ ids = (ids || []).filter(Boolean);
+ if (!ids.length || !this._mergedKeys.has(key)) return;
+ const tombs = this.load('deletedRecordIds', []).slice();
+ const have = new Set(tombs.map(t => `${t.key}|${t.id}`));
+ const at = new Date().toISOString();
+ const by = (typeof currentUser !== 'undefined' && currentUser) ? currentUser.id : null;
+ ids.forEach(id => { if (!have.has(`${key}|${id}`)) tombs.push({ key, id, deletedAt: at, deletedBy: by }); });
+ try { this._setRaw('deletedRecordIds', this._compressForStorage(tombs), tombs); } catch (e) { /* _cache มีค่าแล้ว */ }
+ if (cloudSync) this._tombWait = Promise.all([this._tombWait, this._cloudUpsert('deletedRecordIds', tombs)]);
+ },
+
+ // รับค่าที่ trigger รวมแล้วกลับมาเก็บในเครื่อง · เตือนถ้ารายการที่เราแก้ถูกคงค่าเดิมไว้
+ _adoptMerged(key, sent, merged, changed) {
+ const strip = r => { const { _updatedAt, ...rest } = r || {}; return JSON.stringify(rest); };
+ const sentMap = new Map(sent.filter(r => r && r.id).map(r => [r.id, r]));
+ const conflicts = merged.filter(r => r && r.id && changed && changed.has(r.id)
+  && sentMap.has(r.id) && strip(r) !== strip(sentMap.get(r.id)));
+ const sentIds = new Set(sentMap.keys());
+ const differs = merged.length !== sent.length || merged.some(r => r && r.id && !sentIds.has(r.id));
+ // เก็บเฉพาะเมื่อไม่มี save ใหม่ของคีย์นี้ตามหลังมา — ไม่งั้นจะทับสิ่งที่ผู้ใช้เพิ่งทำ
+ if (((this._localDirty && this._localDirty[key]) || 0) <= 1) {
+  try { this._setRaw(key, this._compressForStorage(merged), merged); } catch (e) { /* _cache มีค่าแล้ว */ }
+  if ((differs || conflicts.length) && typeof currentUser !== 'undefined' && currentUser
+      && typeof _safeRerender === 'function') _safeRerender('Merged');
+ }
+ if (conflicts.length && typeof toast === 'function') {
+  toast(`⚠️ ข้อมูลในเครื่องนี้เก่ากว่าในระบบ ${conflicts.length} รายการ ระบบใช้ข้อมูลล่าสุดแล้ว — ถ้าเพิ่งแก้รายการไหน กรุณาตรวจอีกครั้ง`, 'error');
+ }
+ if (differs || conflicts.length) console.warn(`[Merge v1.6.10] '${key}' ส่ง ${sent.length} ได้กลับ ${merged.length} · ถูกคงค่าเดิม ${conflicts.length}`);
+ },
  // v1.4.49: in-memory cache to avoid redundant LZ decompression on repeat DB.load calls
  // (fixes 20-30 sec slowness on payroll/reports pages caused by 98× repeat decompression)
  _cache: new Map(),
@@ -1140,6 +1211,8 @@ const DB = {
  console.error(`[DB.save] refused to save undefined for '${key}'`);
  return;
  }
+ // v1.6.10: ต้องทำก่อน setItem เพราะเทียบกับค่าที่เก็บไว้ในเครื่องก่อนหน้า
+ const _changed = (this._mergedKeys.has(key) && Array.isArray(val)) ? this._diffChanged(key, val) : null;
  // v1.4.46: DEFENSIVE — compress + validate BEFORE setItem
  let stored;
  try {
@@ -1178,7 +1251,12 @@ const DB = {
  // — fixes leak when upsert hangs and .then() never runs, causing realtime echoes to be permanently skipped)
  this._localDirty = this._localDirty || {};
  this._localDirty[key] = (this._localDirty[key] || 0) + 1;
- if (cloudSync) this._cloudUpsert(key, val);
+ // v1.6.10: บันทึกการลบต้องถึงฐานข้อมูลก่อน ไม่งั้น trigger จะใส่รายการที่ลบกลับ
+ if (cloudSync) {
+ const _wait = this._mergedKeys.has(key) ? this._tombWait : null;
+ if (_wait) { this._tombWait = null; _wait.then(() => this._cloudUpsert(key, val, _changed)); }
+ else this._cloudUpsert(key, val, _changed);
+ }
  },
 
  // v1.4.27: Force full sync — bypass incremental + debounce
@@ -1212,7 +1290,7 @@ const DB = {
  else { this._localDirty = {}; console.log('[DB] all dirty flags cleared'); }
  },
 
- async _cloudUpsert(key, val) {
+ async _cloudUpsert(key, val, changedIds) {
  if (val === undefined) {
  console.warn(`[CloudUpsert] refused undefined for '${key}'`);
  return;
@@ -1311,9 +1389,13 @@ const DB = {
  }
  this._pendingWrites++;
  try {
- const { error } = await supa.from('hr_data').upsert({
+ const _q = supa.from('hr_data').upsert({
  key, value: val, updated_at: new Date().toISOString()
  }, { onConflict: 'key' });
+ // v1.6.10: ขอค่าหลังบันทึกกลับมา — trigger อาจใส่รายการที่เครื่องอื่นเพิ่งเพิ่ม หรือคงค่าล่าสุดไว้
+ const _merged = this._mergedKeys.has(key) && Array.isArray(val);
+ const { data: _back, error } = _merged ? await _q.select('value').maybeSingle() : await _q;
+ if (!error && _merged && _back && Array.isArray(_back.value)) this._adoptMerged(key, val, _back.value, changedIds);
  if (error) {
  console.error(`[CloudUpsert] failed for '${key}':`, error.message);
  // v1.4.33 (H1): detect RLS violation (Postgres error code 42501)
@@ -4210,6 +4292,7 @@ function deleteLeave(id) {
  const dateRange = r.endDate !== r.startDate ? `${formatDate(r.startDate)} - ${formatDate(r.endDate)}` : formatDate(r.startDate);
  if (!confirm(`ยืนยันการลบรายการลา?\n\nพนักงาน: ${empName}\nประเภท: ${typeName}\nวันที่: ${dateRange}\nจำนวน: ${leaveQtyDisplay(r)}\nสถานะ: ${r.status}\n\n${r.status === 'approved' ? 'สิทธิ์ลาจะถูกคืนกลับให้พนักงาน\n\n' : ''}การลบไม่สามารถย้อนกลับได้!`)) return;
 
+ DB.markDeleted('leaveRequests', [id]); // v1.6.10
  DB.save('leaveRequests', reqs.filter(x => x.id !== id));
  // Remove related notifications referencing this leave
  DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
@@ -7350,12 +7433,12 @@ function deleteEmployee(id) {
  if (cloudSync) DB._cloudUpsert('deletedEmployeeIds', tombstones);
  // Cascade delete
  DB.save('employees', DB.load('employees').filter(e => e.id !== id));
- DB.save('leaveRequests', DB.load('leaveRequests').filter(r => r.employeeId !== id));
- DB.save('otRequests', DB.load('otRequests').filter(r => r.employeeId !== id));
- DB.save('compOffRequests', DB.load('compOffRequests').filter(r => r.employeeId !== id));
- DB.save('fieldWorkRequests', DB.load('fieldWorkRequests').filter(r => r.employeeId !== id));
- DB.save('timeCertRequests', DB.load('timeCertRequests', []).filter(r => r.employeeId !== id));
- DB.save('accumulatedHolidays', DB.load('accumulatedHolidays').filter(a => a.employeeId !== id));
+ // v1.6.10: บันทึกการลบของทุกคีย์ก่อน ไม่งั้น trigger ในฐานข้อมูลจะใส่คำขอของพนักงานคนนี้กลับ
+ ['leaveRequests','otRequests','compOffRequests','fieldWorkRequests','timeCertRequests','accumulatedHolidays'].forEach(k => {
+ const all = DB.load(k, []);
+ DB.markDeleted(k, all.filter(r => r.employeeId === id).map(r => r.id));
+ DB.save(k, all.filter(r => r.employeeId !== id));
+ });
  DB.save('notifications', DB.load('notifications').filter(n => n.recipientId !== id));
  DB.save('attendanceRecords', DB.load('attendanceRecords').filter(a => a.employeeId !== id));
  // v1.6.0: ไม่ลบสลิปเงินเดือนอีกต่อไป — กฎหมายกำหนดให้เก็บเอกสารการจ่ายค่าจ้าง
@@ -12941,6 +13024,7 @@ function deleteOTRequest(id) {
  const emp = getEmployee(r.employeeId);
  const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : r.employeeId;
  if (!confirm(`ยืนยันลบคำขอ OT?\n\nพนักงาน: ${empName}\nวันที่: ${formatDate(r.date)}\nเวลา: ${r.startTime}-${r.endTime}\nชั่วโมง: ${r.hours}\nสถานะ: ${r.status}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ DB.markDeleted('otRequests', [id]); // v1.6.10
  DB.save('otRequests', reqs.filter(x => x.id !== id));
  DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
  auditLog('ot-delete', 'ot', id, `${empName} ${formatDate(r.date)} ${r.hours}ชม. (${r.status})`);
@@ -12963,10 +13047,13 @@ function deleteCompOffRequest(id) {
  const extra = stockFromThis.length > 0 ? `\n\n⚠ จะเพิกถอนสิทธิ์สะสมวันหยุด ${stockFromThis.length} วัน (ที่ยังไม่ได้ใช้)` :
  (stockUsedFromThis.length > 0 ? `\n\n⚠ สิทธิ์สะสมวันหยุด ${stockUsedFromThis.length} วันจากคำขอนี้ ถูกใช้ไปแล้ว (จะไม่กระทบ)` : '');
  if (!confirm(`ยืนยันลบคำขอสะสมวันหยุด?\n\nพนักงาน: ${empName}\nวันที่ทำงาน: ${formatDate(r.workDate)}\nเหตุผล: ${esc(r.reason)}\nสถานะ: ${r.status}${extra}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ DB.markDeleted('compOffRequests', [id]); // v1.6.10
  DB.save('compOffRequests', reqs.filter(x => x.id !== id));
  // Revoke unused accumulated holidays from this request
  if (stockFromThis.length > 0) {
- DB.save('accumulatedHolidays', stocks.filter(s => !(s.employeeId === r.employeeId && s.earnedDate === r.workDate && !s.used)));
+ const _revoke = s => s.employeeId === r.employeeId && s.earnedDate === r.workDate && !s.used;
+ DB.markDeleted('accumulatedHolidays', stocks.filter(_revoke).map(s => s.id)); // v1.6.10
+ DB.save('accumulatedHolidays', stocks.filter(s => !_revoke(s)));
  }
  DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
  auditLog('comp-off-delete', 'comp-off', id, `${empName} ${formatDate(r.workDate)} (${r.status}) — revoked ${stockFromThis.length} stocks`);
@@ -12983,6 +13070,7 @@ function deleteFieldWorkRequest(id) {
  const emp = getEmployee(r.employeeId);
  const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : r.employeeId;
  if (!confirm(`ยืนยันลบคำขอปฏิบัติงานนอกสถานที่?\n\nพนักงาน: ${empName}\nวันที่: ${formatDate(r.date)}\nเวลา: ${r.startTime}-${r.endTime}\nวัตถุประสงค์: ${esc(r.purpose)}\nสถานะ: ${r.status}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ DB.markDeleted('fieldWorkRequests', [id]); // v1.6.10
  DB.save('fieldWorkRequests', reqs.filter(x => x.id !== id));
  DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
  auditLog('field-work-delete', 'field-work', id, `${empName} ${formatDate(r.date)} (${r.status})`);
@@ -12998,6 +13086,7 @@ function deleteTimeCert(id) {
  const emp = getEmployee(r.employeeId);
  const empName = emp ? `${esc(emp.firstName)} ${esc(emp.lastName)}` : r.employeeId;
  if (!confirm(`ยืนยันลบคำขอรับรองเวลา?\n\nพนักงาน: ${empName}\nวันที่: ${formatDate(r.date)}\nเวลา: ${r.claimedCheckIn} - ${r.claimedCheckOut || '-'}\nสถานะ: ${r.status}\n\nการลบไม่สามารถย้อนกลับได้`)) return;
+ DB.markDeleted('timeCertRequests', [id]); // v1.6.10
  DB.save('timeCertRequests', reqs.filter(x => x.id !== id));
  DB.save('notifications', DB.load('notifications').filter(n => n.refId !== id));
  auditLog('time-cert-delete', 'time-cert', id, `${empName} ${formatDate(r.date)} (${r.status})`);

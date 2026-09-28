@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.15';
+const APP_VERSION = '1.6.16';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -1040,6 +1040,34 @@ const DB = {
  if (cloudSync) this._tombWait = Promise.all([this._tombWait, this._cloudUpsert('deletedRecordIds', tombs)]);
  },
 
+ // v1.6.16: รวบการเขียนที่ตามมาระหว่างที่ยังเขียนไม่เสร็จ ให้เหลือครั้งเดียว
+ //
+ // เดิม: กดอนุมัติ 1 ใบ = เขียนขึ้นฐานข้อมูล 3-4 รอบ (คำขอ + วันสะสม + แจ้งเตือน + audit)
+ // กดรัวๆ 14 ใบใน 13 วินาที = เขียนรายการ OT ทั้งชุด (~860 รายการ) 14 รอบ
+ // เปลืองปริมาณข้อมูล และเป็นต้นเหตุให้ชนกันเอง (hr_merge_log 26 ก.ย. คงค่าเดิม 18 ครั้ง)
+ //
+ // กฎ: ถ้าคีย์นั้นยังเขียนไม่เสร็จ ไม่ต้องยิงซ้ำ — จดไว้ว่า "ต้องเขียนอีกครั้ง" พอครั้งแรกเสร็จ
+ // ค่อยยิงรอบเดียวด้วย **ข้อมูลล่าสุดในเครื่อง ณ ตอนนั้น** (ไม่ใช่ค่าที่ค้างไว้ตอนกด
+ // ซึ่งอาจเก่ากว่าเพราะ _adoptMerged/_syncStampsFrom อัปเดตเวลาประทับไปแล้ว)
+ //
+ // ตั้งใจไม่หน่วงเวลาการเขียนครั้งแรก: ถ้าหน่วงแล้วแท็บถูกปิดหรือแครชในช่วงนั้น
+ // ข้อมูลจะอยู่แค่ในเครื่อง แล้วหายตอนดึงข้อมูลครั้งถัดไป
+ _queueOrUpsert(key, val, changed) {
+ this._writing = this._writing || {};
+ if (this._writing[key]) {
+  this._pendingWrite = this._pendingWrite || {};
+  const p = this._pendingWrite[key] || { changed: new Set() };
+  if (changed) changed.forEach(id => p.changed.add(id));
+  p.val = val;                                     // ค่าสำรอง เผื่ออ่านจากเครื่องไม่ได้
+  this._pendingWrite[key] = p;
+  // การเขียนครั้งนี้ถูกรวบไปกับรอบถัดไป — คืนตัวนับ ไม่งั้น realtime จะข้าม event ค้าง
+  if (this._localDirty && this._localDirty[key] > 0) this._localDirty[key]--;
+  return;
+ }
+ // อ่านค่าล่าสุดจากเครื่อง โดยมี val เป็นค่าสำรอง — ห้ามปล่อยให้ load() คืน [] แล้วไปลบของบนคลาวด์
+ this._cloudUpsert(key, this.load(key, val), changed);
+ },
+
  // v1.6.15: ซิงก์ "เวลาประทับ" ของรายการที่เนื้อหาตรงกับในระบบอยู่แล้ว
  //
  // ปัญหา (พบจาก hr_merge_log 26 ก.ย. — กดอนุมัติ OT 14 ใบใน 13 วินาที ชนกัน 18 ครั้ง):
@@ -1081,7 +1109,11 @@ const DB = {
  const sentIds = new Set(sentMap.keys());
  const differs = merged.length !== sent.length || merged.some(r => r && r.id && !sentIds.has(r.id));
  // เก็บทั้งก้อนเฉพาะเมื่อไม่มี save ใหม่ของคีย์นี้ตามหลังมา — ไม่งั้นจะทับสิ่งที่ผู้ใช้เพิ่งทำ
- if (((this._localDirty && this._localDirty[key]) || 0) <= 1) {
+ // v1.6.16: ต้องนับงานที่ถูกรวบไว้ (_pendingWrite) ด้วย — ตัวรวบลด _localDirty ไปแล้ว
+ // ถ้าดูแต่ตัวนับ จะเอาค่าจากฐานข้อมูลมาทับรายการที่ผู้ใช้เพิ่งกดเพิ่มระหว่างรอบนี้ (เทสต์จับได้)
+ const _morePending = ((this._localDirty && this._localDirty[key]) || 0) > 1
+  || !!(this._pendingWrite && this._pendingWrite[key]);
+ if (!_morePending) {
   try { this._setRaw(key, this._compressForStorage(merged), merged); } catch (e) { /* _cache มีค่าแล้ว */ }
   if ((differs || conflicts.length) && typeof currentUser !== 'undefined' && currentUser
       && typeof _safeRerender === 'function') _safeRerender('Merged');
@@ -1290,8 +1322,9 @@ const DB = {
  // v1.6.10: บันทึกการลบต้องถึงฐานข้อมูลก่อน ไม่งั้น trigger จะใส่รายการที่ลบกลับ
  if (cloudSync) {
  const _wait = this._mergedKeys.has(key) ? this._tombWait : null;
- if (_wait) { this._tombWait = null; _wait.then(() => this._cloudUpsert(key, val, _changed)); }
- else this._cloudUpsert(key, val, _changed);
+ // v1.6.16: ผ่านตัวรวบการเขียน — กดรัวๆ จะเหลือ "ครั้งแรก + รอบสรุปหนึ่งรอบ"
+ if (_wait) { this._tombWait = null; _wait.then(() => this._queueOrUpsert(key, val, _changed)); }
+ else this._queueOrUpsert(key, val, _changed);
  }
  // v1.6.12: ลงกะแล้ว → คำนวณวันของใบลาที่รออนุมัติใหม่ (เฉพาะการบันทึกของผู้ใช้ ไม่ใช่ตอนเปิดแอป)
  if (key === 'shifts' && typeof recalcPendingLeaveDays === 'function'
@@ -1427,6 +1460,8 @@ const DB = {
  } catch (e) { console.warn('[CloudUpsert] guard check failed, proceeding:', e); }
  }
  this._pendingWrites++;
+ this._writing = this._writing || {};
+ this._writing[key] = true;                        // v1.6.16
  try {
  const _q = supa.from('hr_data').upsert({
  key, value: val, updated_at: new Date().toISOString()
@@ -1452,6 +1487,15 @@ const DB = {
  } finally {
  // v1.4.11: GUARANTEED decrement — fires on every exit (success, error, early return, hang-cancelled)
  if (this._localDirty && this._localDirty[key] > 0) this._localDirty[key]--;
+ // v1.6.16: มีการบันทึกที่ถูกรวบไว้ระหว่างรอบนี้ → ยิงรอบสรุปด้วยข้อมูลล่าสุดในเครื่อง
+ if (this._writing) this._writing[key] = false;
+ const _p = this._pendingWrite && this._pendingWrite[key];
+ if (_p) {
+  delete this._pendingWrite[key];
+  this._localDirty = this._localDirty || {};
+  this._localDirty[key] = (this._localDirty[key] || 0) + 1;
+  this._cloudUpsert(key, this.load(key, _p.val), _p.changed);
+ }
  }
  },
 

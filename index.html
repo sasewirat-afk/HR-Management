@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.14';
+const APP_VERSION = '1.6.15';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -1040,6 +1040,38 @@ const DB = {
  if (cloudSync) this._tombWait = Promise.all([this._tombWait, this._cloudUpsert('deletedRecordIds', tombs)]);
  },
 
+ // v1.6.15: ซิงก์ "เวลาประทับ" ของรายการที่เนื้อหาตรงกับในระบบอยู่แล้ว
+ //
+ // ปัญหา (พบจาก hr_merge_log 26 ก.ย. — กดอนุมัติ OT 14 ใบใน 13 วินาที ชนกัน 18 ครั้ง):
+ // ตอนมีการบันทึกค้างหลายรายการ เราข้ามการรับค่ากลับทั้งก้อน (กันไม่ให้ทับสิ่งที่ผู้ใช้เพิ่งทำ)
+ // เวลาประทับในเครื่องจึงค้างเก่า การกดครั้งถัดไปส่งฐานเก่าขึ้นไปอีก ฐานข้อมูลก็คงค่าเดิมไว้อีก
+ // กลายเป็นลูกโซ่ รอบนี้ปลายทางยังถูกเพราะผู้ใช้กดต่อจนครบ แต่ถ้าหยุดกดพอดี ครั้งสุดท้ายจะหลุด
+ //
+ // กฎ: ซิงก์เฉพาะรายการที่ "เนื้อหาตรงกันทุกช่อง ต่างแค่เวลาประทับ" — คือรายการที่ฐานข้อมูล
+ // รับค่าของเราไปแล้วและประทับเวลาใหม่ให้ การเอาเวลานั้นมาเก็บจึงไม่แตะข้อมูลของใคร
+ // ถ้าเนื้อหาต่าง แปลว่ามีคนอื่นแก้จริง — ไม่ซิงก์ ปล่อยให้ถูกปฏิเสธและเตือนตามเดิม
+ _syncStampsFrom(key, serverArr) {
+ if (!Array.isArray(serverArr)) return 0;
+ const cur = this.load(key, []);
+ if (!Array.isArray(cur) || !cur.length) return 0;
+ const strip = r => { const { _updatedAt, ...rest } = r || {}; return JSON.stringify(rest); };
+ const smap = new Map(serverArr.filter(r => r && r.id).map(r => [r.id, r]));
+ let synced = 0;
+ cur.forEach(r => {
+  if (!r || !r.id) return;
+  const sv = smap.get(r.id);
+  if (!sv || !sv._updatedAt || sv._updatedAt === r._updatedAt) return;
+  if (strip(sv) !== strip(r)) return;          // เนื้อหาต่าง = มีคนอื่นแก้ → ไม่แตะ
+  r._updatedAt = sv._updatedAt;
+  synced++;
+ });
+ if (synced) {
+  try { this._setRaw(key, this._compressForStorage(cur), cur); } catch (e) { /* _cache มีค่าแล้ว */ }
+  console.log(`[Merge v1.6.15] '${key}' ซิงก์เวลาประทับ ${synced} รายการ (เนื้อหาตรงกันอยู่แล้ว)`);
+ }
+ return synced;
+ },
+
  // รับค่าที่ trigger รวมแล้วกลับมาเก็บในเครื่อง · เตือนถ้ารายการที่เราแก้ถูกคงค่าเดิมไว้
  _adoptMerged(key, sent, merged, changed) {
  const strip = r => { const { _updatedAt, ...rest } = r || {}; return JSON.stringify(rest); };
@@ -1048,11 +1080,15 @@ const DB = {
   && sentMap.has(r.id) && strip(r) !== strip(sentMap.get(r.id)));
  const sentIds = new Set(sentMap.keys());
  const differs = merged.length !== sent.length || merged.some(r => r && r.id && !sentIds.has(r.id));
- // เก็บเฉพาะเมื่อไม่มี save ใหม่ของคีย์นี้ตามหลังมา — ไม่งั้นจะทับสิ่งที่ผู้ใช้เพิ่งทำ
+ // เก็บทั้งก้อนเฉพาะเมื่อไม่มี save ใหม่ของคีย์นี้ตามหลังมา — ไม่งั้นจะทับสิ่งที่ผู้ใช้เพิ่งทำ
  if (((this._localDirty && this._localDirty[key]) || 0) <= 1) {
   try { this._setRaw(key, this._compressForStorage(merged), merged); } catch (e) { /* _cache มีค่าแล้ว */ }
   if ((differs || conflicts.length) && typeof currentUser !== 'undefined' && currentUser
       && typeof _safeRerender === 'function') _safeRerender('Merged');
+ } else {
+  // v1.6.15: มี save ใหม่ตามมาแล้ว — ยังเอาเวลาประทับของรายการที่เนื้อหาตรงกันมาเก็บได้
+  // ไม่งั้นการกดครั้งถัดไปจะส่งฐานเก่าขึ้นไปชนซ้ำอีก
+  this._syncStampsFrom(key, merged);
  }
  if (conflicts.length && typeof toast === 'function') {
   toast(`⚠️ ข้อมูลในเครื่องนี้เก่ากว่าในระบบ ${conflicts.length} รายการ ระบบใช้ข้อมูลล่าสุดแล้ว — ถ้าเพิ่งแก้รายการไหน กรุณาตรวจอีกครั้ง`, 'error');
@@ -1677,6 +1713,11 @@ function setupCloudRealtime() {
  DB._skipCount = DB._skipCount || {};
  DB._skipCount[row.key] = (DB._skipCount[row.key] || 0) + 1;
  console.log(`[Realtime] skip '${row.key}' — ${DB._localDirty[row.key]} local write(s) pending (skip #${DB._skipCount[row.key]})`);
+ // v1.6.15: event นี้ถูกทิ้งและไม่ถูกเล่นซ้ำ — ก่อนทิ้ง เอาเวลาประทับของรายการที่เนื้อหา
+ // ตรงกันอยู่แล้วมาเก็บไว้ก่อน เพื่อไม่ให้การบันทึกครั้งถัดไปชนกับฐานข้อมูล
+ if (DB._mergedKeys && DB._mergedKeys.has(row.key) && Array.isArray(row.value)) {
+ try { DB._syncStampsFrom(row.key, row.value); } catch (e) { console.warn('[Realtime v1.6.15] sync stamps failed:', e); }
+ }
  if (DB._skipCount[row.key] >= 5) {
  console.warn(`[Realtime] AUTO-RECOVER '${row.key}' — stuck >5 skips, force clearing dirty flag`);
  DB._localDirty[row.key] = 0;

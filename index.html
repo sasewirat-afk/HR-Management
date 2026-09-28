@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.13';
+const APP_VERSION = '1.6.14';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -12490,7 +12490,6 @@ function drawReport() {
  //           Match calculateLeaveBalance semantic (subtract from earned).
  const allReqs = DB.load('compOffRequests').filter(r => scopeIds.has(r.employeeId)).sort((a,b) => new Date(b.requestDate) - new Date(a.requestDate));
  const stocks = DB.load('accumulatedHolidays').filter(a => scopeIds.has(a.employeeId));
- const today = new Date();
  // v1.5.7: query approved comp-off leaves (source of truth for "used")
  const usedByEmp = {};
  DB.load('leaveRequests').filter(r =>
@@ -12502,6 +12501,8 @@ function drawReport() {
  // v1.6.13: ใช้ compOffAllocation() ตัวเดียวกับหน้าสิทธิ์ของพนักงาน — เดิมนับ "หมดอายุ" จากวันที่
  // อย่างเดียว ใบที่ใช้ไปแล้วจึงถูกนับซ้ำเป็นทั้งใช้แล้วและหมดอายุ
  const byEmp = {};
+ // v1.6.13 HOTFIX: เดิมบรรทัดนี้เรียก today() ในบล็อกที่มี const today = new Date() บังอยู่
+ // → TypeError ทั้งแท็บ "สะสมวันหยุด" จึงว่างเปล่า · ตัดตัวแปรบังทิ้ง ให้ใช้ today() ของระบบ
  const _coCtx = { stocks, leaves: DB.load('leaveRequests', []), today: today() };
  new Set([...stocks.map(s => s.employeeId), ...Object.keys(usedByEmp)]).forEach(key => {
  byEmp[key] = compOffAllocation(key, _coCtx);

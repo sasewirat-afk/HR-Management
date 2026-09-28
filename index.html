@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.12';
+const APP_VERSION = '1.6.13';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -3343,6 +3343,61 @@ function recalcPendingLeaveDays() {
  }
 }
 
+// ============================================================
+// v1.6.13: ผูกวันลาสะสมเข้ากับใบสะสมแบบเข้าก่อนออกก่อน
+// ============================================================
+// พบ 28 ก.ย. 2026: สิทธิ์สะสมวันหยุดติดลบ และรายงานขึ้นว่าหมดอายุทั้งที่ใช้ไปแล้ว
+// สาเหตุ: ไม่มีที่ไหนในแอปตั้ง used = true ให้ใบสะสมเลย (ยืนยันกับข้อมูลจริง 87 คน = 0 ทุกคน)
+// ทั้งสองหน้าจึงเดาเอาเองคนละแบบ:
+//   • สิทธิ์คงเหลือ = (ใบที่ยังไม่หมดอายุ) − (วันลาที่อนุมัติ) → ใบที่ใช้ไปแล้วพอหมดอายุก็หลุด
+//     จากตัวตั้ง แต่วันลายังถูกลบออก → ติดลบ และลบเพิ่มทุกครั้งที่มีใบหมดอายุ
+//   • รายงานนับ "หมดอายุ" จากวันที่อย่างเดียว → ใบที่ใช้ไปแล้วถูกนับซ้ำเป็นทั้งใช้แล้วและหมดอายุ
+//
+// ตัวนี้ผูกวันลาแต่ละวันเข้ากับใบสะสม (ใบที่หมดอายุเร็วสุดก่อน และต้องยังไม่หมดอายุ ณ วันที่ลา)
+// แล้วคิดทุกตัวเลขจากผลผูก — คำนวณตอนแสดงผล ไม่เขียนทับข้อมูล ทั้งสองหน้าจึงตรงกันเสมอ
+function compOffAllocation(employeeId, ctx) {
+ const todayStr = (ctx && ctx.today) || today();
+ const stocks = ((ctx && ctx.stocks) || DB.load('accumulatedHolidays', []))
+  .filter(a => a && a.employeeId === employeeId)
+  .sort((a, b) => String(a.expireDate || '').localeCompare(String(b.expireDate || '')));
+ const leaves = ((ctx && ctx.leaves) || DB.load('leaveRequests', []))
+  .filter(r => r && r.employeeId === employeeId && r.status === 'approved' && r.type === 'comp-off')
+  .sort((a, b) => String(a.startDate || '').localeCompare(String(b.startDate || '')));
+ const slots = stocks.map(a => ({ a, left: 1 }));
+ let overUsed = 0;
+ leaves.forEach(r => {
+  let need = Number(r.days) || 0;
+  const at = String(r.startDate || '');
+  // รอบแรก: ใบที่ยังไม่หมดอายุ ณ วันที่ลา
+  for (const sl of slots) {
+   if (need <= 0) break;
+   if (sl.left <= 0 || (at && String(sl.a.expireDate || '') < at)) continue;
+   const take = Math.min(sl.left, need); sl.left -= take; need -= take;
+  }
+  // รอบสอง: เผื่อข้อมูลวันที่ไม่ครบ/ลาก่อนได้ใบ — ยังถือว่าใช้ ดีกว่าไปโผล่เป็นหมดอายุ
+  for (const sl of slots) {
+   if (need <= 0) break;
+   if (sl.left <= 0) continue;
+   const take = Math.min(sl.left, need); sl.left -= take; need -= take;
+  }
+  if (need > 0) overUsed += need;   // อนุมัติเกินกว่าที่สะสมไว้
+ });
+ const left = slots.reduce((t, sl) => t + sl.left, 0);
+ const available = slots.filter(sl => sl.left > 0 && String(sl.a.expireDate || '') >= todayStr)
+  .reduce((t, sl) => t + sl.left, 0);
+ const usedDays = leaves.reduce((t, r) => t + (Number(r.days) || 0), 0);
+ return {
+  earned: stocks.length,
+  // ใบที่ยังเหลือและยังไม่หมดอายุ (เรียงตามวันหมดอายุ) — หน้าพนักงานเอาไปแสดงเป็นรายใบ
+  slots: slots.filter(sl => sl.left > 0 && String(sl.a.expireDate || '') >= todayStr)
+   .map(sl => ({ id: sl.a.id, earnedDate: sl.a.earnedDate, expireDate: sl.a.expireDate, left: sl.left })),
+  used: usedDays,                       // วันลาสะสมที่อนุมัติแล้วทั้งหมด
+  available: Math.round(available * 100) / 100,
+  expired: Math.round((left - available) * 100) / 100,   // เหลือและเลยวันหมดอายุ = หมดอายุจริง
+  overUsed: Math.round(overUsed * 100) / 100,            // อนุมัติเกินสิทธิ์
+ };
+}
+
 function getLeaveBalance(employeeId) {
  const emp = getEmployee(employeeId);
  const settings = DB.load('settings');
@@ -3482,13 +3537,8 @@ function getLeaveBalance(employeeId) {
   }
  }
 
- // Comp-off balance from accumulated holidays
- const compOffs = DB.load('accumulatedHolidays').filter(a =>
- a.employeeId === employeeId &&
- !a.used &&
- new Date(a.expireDate) >= new Date()
- );
- const compOffBalance = compOffs.length;
+ // Comp-off balance — v1.6.13: ผูกวันลากับใบสะสมก่อน (เดิมหักวันลาออกจากใบที่ยังไม่หมดอายุ → ติดลบ)
+ const _co = compOffAllocation(employeeId);
 
  // Ordination only for male employees
  const ordinationQuota = (emp.gender === 'male') ? (settings.leaveQuotas.ordination || 15) : 0;
@@ -3508,7 +3558,10 @@ function getLeaveBalance(employeeId) {
  maternity: { quota: ov.maternity ?? settings.leaveQuotas.maternity, used: used.maternity, pending: pending.maternity, remaining: (ov.maternity ?? settings.leaveQuotas.maternity) - used.maternity },
  ordination: { quota: ov.ordination ?? ordinationQuota, used: used.ordination, pending: pending.ordination, remaining: (ov.ordination ?? ordinationQuota) - used.ordination, available: emp.gender === 'male' },
  unpaid: { used: used.unpaid, pending: pending.unpaid }, // no quota - tracked only
- compOff: { quota: compOffBalance, used: used['comp-off'], pending: pending['comp-off'], remaining: compOffBalance - used['comp-off'] }
+ // v1.6.13: remaining = ใบที่ยังไม่ถูกใช้และยังไม่หมดอายุ (ไม่ต่ำกว่า 0)
+ // quota ตั้งให้ quota − used = remaining เหมือนประเภทลาอื่น · overUsed บอกกรณีอนุมัติเกินสิทธิ์
+ compOff: { quota: _co.available + _co.used, used: _co.used, pending: pending['comp-off'],
+   remaining: _co.available, earned: _co.earned, expired: _co.expired, overUsed: _co.overUsed }
  };
 }
 
@@ -4881,7 +4934,9 @@ function renderMyCompOff() {
  const reqs = DB.load('compOffRequests').filter(r => r.employeeId === currentUser.id)
  .sort((a,b) => new Date(b.requestDate) - new Date(a.requestDate));
  const myStock = DB.load('accumulatedHolidays').filter(a => a.employeeId === currentUser.id);
- const active = myStock.filter(a => !a.used && new Date(a.expireDate) >= new Date());
+ // v1.6.13: เดิมนับใบที่ยังไม่หมดอายุทั้งหมด ไม่สนว่าใช้ไปแล้วหรือยัง — คนที่ใช้ครบแล้วยังเห็นว่าเหลือ
+ const _coA = compOffAllocation(currentUser.id, { stocks: myStock });
+ const active = _coA.slots;
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
@@ -4890,7 +4945,7 @@ function renderMyCompOff() {
  </div>
 
  <div class="stats-grid">
- <div class="stat-card green"><div class="label">วันหยุดสะสมคงเหลือ</div><div class="value">${active.length} <small>วัน</small></div></div>
+ <div class="stat-card green"><div class="label">วันหยุดสะสมคงเหลือ</div><div class="value">${_coA.available} <small>วัน</small></div>${_coA.overUsed > 0 ? `<div class="sub" style="color:var(--danger);">⚠ อนุมัติเกินสิทธิ์ ${_coA.overUsed} วัน</div>` : ''}</div>
  <div class="stat-card"><div class="label">ขอทั้งหมด</div><div class="value">${reqs.length}</div></div>
  <div class="stat-card orange"><div class="label">รออนุมัติ</div><div class="value">${reqs.filter(r => r.status === 'pending').length}</div></div>
  </div>
@@ -12444,21 +12499,12 @@ function drawReport() {
  usedByEmp[r.employeeId] = (usedByEmp[r.employeeId] || 0) + (r.days || 0);
  });
  // Summary per employee: earned, used, available, expired (v1.5.7 semantics)
+ // v1.6.13: ใช้ compOffAllocation() ตัวเดียวกับหน้าสิทธิ์ของพนักงาน — เดิมนับ "หมดอายุ" จากวันที่
+ // อย่างเดียว ใบที่ใช้ไปแล้วจึงถูกนับซ้ำเป็นทั้งใช้แล้วและหมดอายุ
  const byEmp = {};
- stocks.forEach(s => {
- const key = s.employeeId;
- if (!byEmp[key]) byEmp[key] = { earned: 0, used: 0, available: 0, expired: 0 };
- byEmp[key].earned++;
- if (new Date(s.expireDate) < today) byEmp[key].expired++;
- });
- // v1.5.7: also include emps with leave usage but no stocks (edge case)
- Object.keys(usedByEmp).forEach(key => {
- if (!byEmp[key]) byEmp[key] = { earned: 0, used: 0, available: 0, expired: 0 };
- });
- // Compute used + available from leaveRequests cross-reference
- Object.keys(byEmp).forEach(key => {
- byEmp[key].used = usedByEmp[key] || 0;
- byEmp[key].available = Math.max(0, byEmp[key].earned - byEmp[key].expired - byEmp[key].used);
+ const _coCtx = { stocks, leaves: DB.load('leaveRequests', []), today: today() };
+ new Set([...stocks.map(s => s.employeeId), ...Object.keys(usedByEmp)]).forEach(key => {
+ byEmp[key] = compOffAllocation(key, _coCtx);
  });
  const summary = Object.entries(byEmp).sort((a,b) => b[1].earned - a[1].earned);
 
@@ -12468,7 +12514,7 @@ function drawReport() {
  <div class="card-body" style="padding:0;">
  ${summary.length ? `<table><thead><tr>
  <th>รหัส</th><th>ชื่อ</th><th>แผนก</th>
- <th>ได้รับ</th><th>ใช้แล้ว</th><th>คงเหลือ</th><th>หมดอายุ</th>
+ <th>ได้รับ</th><th>ใช้แล้ว</th><th>คงเหลือ</th><th>หมดอายุ</th><th>เกินสิทธิ์</th>
  </tr></thead><tbody>
  ${summary.map(([eid, s]) => {
  const e = getEmployee(eid);
@@ -12480,6 +12526,7 @@ function drawReport() {
  <td>${s.used}</td>
  <td><strong style="color:var(--success);">${s.available}</strong></td>
  <td style="color:${s.expired > 0 ? 'var(--danger)' : 'var(--gray-500)'};">${s.expired}</td>
+ <td style="color:${s.overUsed > 0 ? 'var(--danger)' : 'var(--gray-500)'};" title="${s.overUsed > 0 ? 'อนุมัติลาสะสมมากกว่าวันที่สะสมไว้ — ต้องตรวจ' : ''}">${s.overUsed > 0 ? '⚠ ' + s.overUsed : 0}</td>
  </tr>`;
  }).join('')}
  </tbody></table>` : '<div class="empty-state" style="padding:40px;text-align:center;">ยังไม่มีการสะสมวันหยุดในขอบเขตนี้</div>'}

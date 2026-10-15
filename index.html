@@ -877,12 +877,12 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <input type="password" id="currentPass" required minlength="1" placeholder="••••••" autocomplete="current-password">
  </div>
  <div class="form-group">
- <label>รหัสผ่านใหม่ (อย่างน้อย 4 ตัวอักษร)</label>
- <input type="password" id="newPass1" required minlength="4" placeholder="••••••" autocomplete="new-password">
+ <label>รหัสผ่านใหม่ (อย่างน้อย 6 ตัว ห้ามเลขเรียงหรือเลขซ้ำ)</label>
+ <input type="password" id="newPass1" required minlength="6" placeholder="••••••" autocomplete="new-password">
  </div>
  <div class="form-group">
  <label>ยืนยันรหัสผ่านใหม่</label>
- <input type="password" id="newPass2" required minlength="4" placeholder="••••••" autocomplete="new-password">
+ <input type="password" id="newPass2" required minlength="6" placeholder="••••••" autocomplete="new-password">
  </div>
  <button type="submit" class="btn btn-primary btn-block">บันทึกรหัสผ่านใหม่</button>
  </form>
@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.16';
+const APP_VERSION = '1.6.17';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -15572,8 +15572,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
  if (entered) {
  alertEl.innerHTML = '';
- if (currentUser.forceChangePassword) {
- showChangePasswordPage();
+ // v1.6.17: คนที่ยังใช้รหัสเดิมที่อ่อนเกินเกณฑ์ ถูกพาไปตั้งใหม่ตรงนี้เลย
+ // ตรวจจากรหัสที่เพิ่งพิมพ์ จึงไม่ต้องไล่ตั้งธงให้ทีละคนและไม่มีใครถูกล็อกออก
+ const weak = weakPasswordReason(id, pass);
+ if (currentUser.forceChangePassword || weak) {
+ showChangePasswordPage(weak);
  } else {
  showApp();
  }
@@ -15607,8 +15610,9 @@ document.addEventListener('DOMContentLoaded', async () => {
  return;
  }
 
- if (p1.length < 4) {
- alertDiv.innerHTML = '<div class="alert alert-error">รหัสผ่านต้องอย่างน้อย 4 ตัวอักษร</div>';
+ const weakReason = weakPasswordReason(currentUser.id, p1);
+ if (weakReason) {
+ alertDiv.innerHTML = '<div class="alert alert-error">' + weakReason + '</div>';
  return;
  }
  if (p1 !== p2) {
@@ -15671,10 +15675,41 @@ document.addEventListener('DOMContentLoaded', async () => {
 });
 
 
-function showChangePasswordPage() {
+/**
+ * v1.6.17: เกณฑ์รหัสผ่านขั้นต่ำ — เดิมรับ 4 ตัว และบัญชีตั้งต้นเป็น 1234
+ *
+ * บัญชีชุดนี้กำลังจะถูกใช้กับระบบงานอื่นในเครือด้วย รหัสสั้น 4 ตัวจึงไม่พออีกต่อไป
+ *
+ * คืนข้อความบอกเหตุผลเมื่อรหัสอ่อนเกินไป คืน '' เมื่อผ่านเกณฑ์
+ */
+function weakPasswordReason(empId, pw) {
+ const p = String(pw || '');
+ if (p.length < 6) return 'รหัสผ่านต้องยาวอย่างน้อย 6 ตัว';
+ if (new Set(p).size === 1) return 'รหัสผ่านเป็นตัวเดิมซ้ำกันทั้งหมด เดาง่ายเกินไป';
+ if (isDigitRun(p)) return 'รหัสผ่านเป็นเลขเรียงกัน เดาง่ายเกินไป';
+ if (p.toUpperCase() === String(empId || '').trim().toUpperCase()) return 'รหัสผ่านซ้ำกับรหัสพนักงานของตัวเอง';
+ if (['123456', 'password', 'qwerty', 'abcdef', 'admin123'].indexOf(p.toLowerCase()) >= 0) return 'รหัสผ่านนี้ถูกใช้กันทั่วไป เดาง่ายเกินไป';
+ return '';
+}
+
+/** 123456 หรือ 654321 — ตัวเลขที่ขยับทีละหนึ่งไปทางเดียวตลอด */
+function isDigitRun(p) {
+ if (!/^\d+$/.test(p)) return false;
+ let up = true, down = true;
+ for (let i = 1; i < p.length; i++) {
+  const step = p.charCodeAt(i) - p.charCodeAt(i - 1);
+  if (step !== 1) up = false;
+  if (step !== -1) down = false;
+ }
+ return up || down;
+}
+
+function showChangePasswordPage(reason) {
  document.getElementById('loginPage').classList.add('hidden');
  document.getElementById('changePasswordPage').classList.remove('hidden');
- document.getElementById('changePassAlert').innerHTML = '';
+ document.getElementById('changePassAlert').innerHTML = reason
+  ? '<div class="alert alert-info">' + reason + ' — กรุณาตั้งรหัสผ่านใหม่ก่อนเข้าใช้งาน</div>'
+  : '';
  document.getElementById('currentPass').value = '';
  document.getElementById('newPass1').value = '';
  document.getElementById('newPass2').value = '';

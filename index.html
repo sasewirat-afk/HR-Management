@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.17';
+const APP_VERSION = '1.6.18';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2781,14 +2781,35 @@ async function loginViaAuth(empId, password) {
  }
 }
 
+// v1.6.18: ติดธงว่ารหัสใน Supabase Auth ไม่ตรงกับรหัสในแอปแล้ว
+//
+// เดิม authStatus() นับแค่ "เคยสร้างบัญชีสำเร็จ" ซึ่งไม่ได้แปลว่ารหัสยังใช้ได้ ถ้าการซิงก์
+// ตอนเปลี่ยนรหัสล้มเหลว บัญชีจะค้างอยู่ที่รหัสเก่า แต่หน้าจอยังรายงานว่าเรียบร้อย
+// แอดมินจึงอาจสลับ policy ทั้งที่มีคนใช้งานไม่ได้
+function markAuthStale(empId, reason) {
+ try {
+  const list = DB.load('authProvisioned', []);
+  const row = list.find(x => x.id === empId);
+  if (row) { row.stale = true; row.staleReason = String(reason || '').slice(0, 200); row.staleAt = new Date().toISOString(); }
+  else list.push({ id: empId, at: new Date().toISOString(), mode: 'failed', stale: true, staleReason: String(reason || '').slice(0, 200) });
+  DB.save('authProvisioned', list);
+ } catch (e) { console.warn('[Phase4a] could not mark auth stale:', e.message); }
+}
+
 // Progress marker so an admin can tell when it is safe to flip the policies.
 // auth.users is not readable with the anon key, so track it in hr_data instead.
 // Idempotent — writes once per employee, on their first successful provision.
 function recordAuthProvisioned(empId, mode) {
  try {
   const list = DB.load('authProvisioned', []);
-  if (list.some(x => x.id === empId)) return;
-  list.push({ id: empId, at: new Date().toISOString(), mode });
+  const row = list.find(x => x.id === empId);
+  if (row) {
+   if (!row.stale) return;                       // v1.6.18: มีอยู่แล้วและไม่ติดธง — ไม่ต้องเขียนซ้ำ
+   delete row.stale; delete row.staleReason; delete row.staleAt;
+   row.at = new Date().toISOString(); row.mode = mode;
+  } else {
+   list.push({ id: empId, at: new Date().toISOString(), mode });
+  }
   DB.save('authProvisioned', list);
  } catch (e) { console.warn('[Phase4a] could not record provisioning:', e.message); }
 }
@@ -2798,17 +2819,41 @@ function recordAuthProvisioned(empId, mode) {
 async function syncAuthPassword(empId, oldPassword, newPassword) {
  if (!cloudSync || !supa || !supa.auth) return { ok: false, reason: 'no-cloud' };
  try {
+  const email = authEmailFor(empId);
   const newPw = await deriveAuthPassword(empId, newPassword);
   const { data: sess } = await supa.auth.getSession();
   if (!sess || !sess.session) {
    // not signed in — sign in with the OLD credential first
    const si = await supa.auth.signInWithPassword({
-    email: authEmailFor(empId), password: await deriveAuthPassword(empId, oldPassword)
+    email, password: await deriveAuthPassword(empId, oldPassword)
    });
-   if (si.error) return { ok: false, reason: si.error.message };
+   if (si.error) {
+    // v1.6.18: ยังไม่มีบัญชี Auth เลย → สร้างด้วยรหัสใหม่ตรงนี้
+    //
+    // เดิมจบแค่ return error แล้วไม่มีใครสร้างบัญชีให้ ทำให้คนกลุ่มนี้ล็อกอิน PR System
+    // ไม่ได้ และเข้า e-HR ไม่ได้หลังสลับ policy (Phase 4 step 6)
+    //
+    // v1.6.17 ทำให้โอกาสเกิดสูงขึ้นมาก เพราะด่านรหัสอ่อนพาไปหน้าเปลี่ยนรหัสทันทีที่
+    // ล็อกอินครั้งแรก ซึ่งเร็วกว่าที่ provisionSupabaseAuth() เบื้องหลังจะสร้างบัญชีเสร็จ
+    const su = await supa.auth.signUp({ email, password: newPw });
+    if (!su.error) {
+     if (!su.data || !su.data.session) {
+      return { ok: false, configError: true,
+       reason: 'ต้องปิด "Confirm email" ใน Supabase ก่อน — บัญชีที่สร้างจะ login ไม่ได้' };
+     }
+     return { ok: true, mode: 'signup' };
+    }
+    // ชนกับ provisioning เบื้องหลังที่เพิ่งสร้างบัญชีด้วยรหัสเก่าพอดี → ลองรหัสเก่าอีกครั้ง
+    const si2 = await supa.auth.signInWithPassword({
+     email, password: await deriveAuthPassword(empId, oldPassword)
+    });
+    if (si2.error) return { ok: false, reason: su.error.message };
+    const up2 = await supa.auth.updateUser({ password: newPw });
+    return up2.error ? { ok: false, reason: up2.error.message } : { ok: true, mode: 'update-after-race' };
+   }
   }
   const up = await supa.auth.updateUser({ password: newPw });
-  return up.error ? { ok: false, reason: up.error.message } : { ok: true };
+  return up.error ? { ok: false, reason: up.error.message } : { ok: true, mode: 'update' };
  } catch (e) {
   return { ok: false, reason: e.message };
  }
@@ -2820,15 +2865,23 @@ window.authStatus = function () {
  const done = DB.load('authProvisioned', []);
  const doneIds = new Set(done.map(x => x.id));
  const missing = emps.filter(e => !doneIds.has(e.id)).map(e => e.id);
+ // v1.6.18: บัญชีที่มีอยู่แต่รหัสไม่ตรงกับในแอป ใช้ล็อกอินไม่ได้จริง ต้องแยกออกมา
+ const stale = done.filter(x => x.stale);
+ const staleIds = stale.map(x => x.id);
+ const usable = done.filter(x => !x.stale).length;
  const out = {
   activeEmployees: emps.length,
-  provisioned: done.length,
+  provisioned: usable,
+  needsAdminReset: stale.length,
   remaining: missing.length,
-  percent: emps.length ? Math.round(100 * done.length / emps.length) + '%' : '-',
-  missingIds: missing
+  percent: emps.length ? Math.round(100 * usable / emps.length) + '%' : '-',
+  readyToFlip: missing.length === 0 && stale.length === 0,
+  missingIds: missing,
+  staleIds
  };
- console.table([{ ...out, missingIds: missing.length }]);
+ console.table([{ ...out, missingIds: missing.length, staleIds: staleIds.length }]);
  console.log('ยังไม่ได้ provision:', missing);
+ if (staleIds.length) console.warn('รหัสใน Auth ไม่ตรงกับในแอป ต้องให้แอดมินรีเซ็ต:', staleIds);
  return out;
 };
 
@@ -2867,6 +2920,7 @@ async function login(empId, password) {
    }
   } else if (r.reason !== 'no-cloud') {
    console.warn(`[Phase4a] auth provisioning skipped for ${empId}: ${r.reason} — จะต้องให้ admin reset ก่อนสลับ policy`);
+   markAuthStale(empId, r.reason);               // v1.6.18
   }
  });
  return true;
@@ -15663,7 +15717,10 @@ document.addEventListener('DOMContentLoaded', async () => {
  // the app password change still stands and the employee needs an admin reset.
  syncAuthPassword(currentUser.id, currentP, p1).then(r => {
   if (r.ok) { console.log('[Phase4a] auth password synced'); recordAuthProvisioned(currentUser.id, 'password-change'); }
-  else if (r.reason !== 'no-cloud') console.warn('[Phase4a] auth password NOT synced:', r.reason, '— ต้องให้ admin reset ก่อนสลับ policy');
+  else if (r.reason !== 'no-cloud') {
+   console.warn('[Phase4a] auth password NOT synced:', r.reason, '— ต้องให้ admin reset ก่อนสลับ policy');
+   markAuthStale(currentUser.id, r.reason);      // v1.6.18: ให้ authStatus() บอกความจริง
+  }
  });
 
  alertDiv.innerHTML = '<div class="alert alert-success"> เปลี่ยนรหัสผ่านสำเร็จ</div>';

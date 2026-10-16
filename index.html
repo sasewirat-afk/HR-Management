@@ -855,6 +855,14 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <label>รหัสผ่าน</label>
  <input type="password" id="loginPassword" placeholder="••••••" required>
  </div>
+ <!-- v1.6.20: ซ่อนไว้จนกว่าจะเปิดใช้ระบบใบขอซื้อในหน้าตั้งค่า -->
+ <div class="form-group hidden" id="loginTargetGroup">
+ <label>เข้าใช้งานระบบ</label>
+ <select id="loginTarget">
+ <option value="ehr">ระบบบริหารงานบุคคล (e-HR)</option>
+ <option value="pr">ระบบใบขอซื้อ (PR)</option>
+ </select>
+ </div>
  <button type="submit" class="btn btn-primary btn-block">เข้าสู่ระบบ</button>
  </form>
  </div>
@@ -929,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.19';
+const APP_VERSION = '1.6.20';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2550,6 +2558,10 @@ function seedData() {
  leaveCarryOverMax: 5, // ยกยอดลาพักร้อนข้ามปีได้สูงสุด (วัน)
  leaveCarryOverCutoff: '03-31', // ตัดยอดยกข้ามปี (MM-DD)
  leaveCarryOverFromYear: 2026, // v1.6.6: ปีแรกที่ยอดเหลือยกไปปีถัดไป (2026 → 2027)
+ // v1.6.20: ระบบใบขอซื้อ (PR) — คนละเว็บแต่ใช้บัญชี Supabase Auth ร่วมกัน
+ // ปิดไว้ก่อนจนกว่า PR จะขึ้นจริง เปิดแล้วหน้า login จะมีตัวเลือกระบบ
+ prSystemEnabled: false,
+ prSystemUrl: '/pr',          // ต้องเป็นโดเมนเดียวกับ e-HR ไม่งั้นเซสชันไม่ข้ามไป
  backDatedLeaveMaxDays: 7, // ห้ามยื่นลาย้อนหลังเกิน (วัน)
  payrollCutoffDay: 21, // v1.4.48: วันตัดรอบเงินเดือน — events วันที่ > cutoff → คิดในรอบเดือนถัดไป (leave quota ยังนับปีปฏิทิน)
  slipMonthDefault: 'calendar', // v1.4.54: 'calendar' or 'payroll' — how _slipMonth is defaulted on render
@@ -2889,6 +2901,28 @@ window.authStatus = function () {
  if (staleIds.length) console.warn('รหัสใน Auth ไม่ตรงกับในแอป ต้องให้แอดมินรีเซ็ต:', staleIds);
  return out;
 };
+
+// ============================================================
+// v1.6.20: สิทธิ์เข้าระบบใบขอซื้อ (PR)
+// ============================================================
+// ธงนี้เก็บใน employees[].canAccessPR ของ e-HR แล้วให้ฝั่ง PR คัดลอกไปไว้ใน pr.profile
+// (กฎในเอกสารออกแบบ: PR ห้ามอ่าน hr_data สด ๆ)
+//
+// สำคัญ: ตัวเลือกบนหน้า login และเมนูนี้เป็นแค่ความสะดวก ไม่ใช่กำแพง
+// ใครพิมพ์ URL ของ PR ตรง ๆ ก็เข้าหน้านั้นได้ กำแพงจริงต้องเป็น RLS ของ schema pr
+// ที่อ่านจาก pr.profile — ถ้า sync ไม่ตัดสิทธิ์คนที่ปิดบัญชี คนที่ออกไปแล้วจะยังอนุมัติได้
+function canUsePR(emp) {
+ return !!(emp && emp.active !== false && emp.canAccessPR === true);
+}
+
+function prSystemUrl() {
+ const u = String(DB.load('settings', {}).prSystemUrl || '/pr').trim();
+ return u || '/pr';
+}
+
+function prSystemEnabled() {
+ return DB.load('settings', {}).prSystemEnabled === true;
+}
 
 // v1.4.28: login() now async — computes hash of input password, matches against stored hash OR legacy plaintext
 async function login(empId, password) {
@@ -3863,6 +3897,12 @@ function renderNav() {
  // v1.4.17: Manager team reports — เห็นเฉพาะลูกน้องในทีม (Admin เห็นทั้งระบบที่เมนู Admin ด้านล่าง)
  if (role === 'manager') html += navLink('reports', 'รายงานทีม');
  // v1.5.12: team-evaluations removed (evaluation system deprecated)
+ }
+
+ // v1.6.20: ทางลัดไประบบใบขอซื้อ สำหรับคนที่ได้รับสิทธิ์ (คนละเว็บ จึงไม่ใช่ navLink)
+ if (prSystemEnabled() && canUsePR(currentUser)) {
+ html += '<div class="nav-section">ระบบอื่น</div>';
+ html += `<a class="nav-item" href="${esc(prSystemUrl())}" style="text-decoration:none;display:block;">ระบบใบขอซื้อ (PR) ↗</a>`;
  }
 
  // Maintenance ticket — visible to all roles (request) + special view for maintenance MGR
@@ -7855,6 +7895,12 @@ function showEmployeeForm(id) {
  <div style="margin-top:8px;">
  <label class="ios-toggle"><input type="checkbox" id="empCanViewAttendanceReport" ${emp?.canViewAttendanceReport ? 'checked' : ''}><span>ดูรายงานเข้างานได้ (เห็นทั้งระบบ ไม่ใช่แค่ทีม)</span></label>
  </div>
+ <hr style="margin:12px 0;border:none;border-top:1px dashed var(--gray-300);">
+ <div style="font-size:12px;color:var(--gray-500);margin-bottom:6px;">🧾 ระบบใบขอซื้อ (PR)</div>
+ <div style="margin-top:6px;">
+ <label class="ios-toggle"><input type="checkbox" id="empCanAccessPR" ${emp?.canAccessPR ? 'checked' : ''}><span>เข้าใช้งานระบบใบขอซื้อได้</span></label>
+ <div class="field-hint">ปิดบัญชีพนักงานเมื่อไหร่ สิทธิ์นี้ถือว่าถูกตัดทันที</div>
+ </div>
  </div>
  </div>
  <div class="form-row">
@@ -7942,7 +7988,8 @@ async function submitEmployee(e, editId) {
  customStartTime: (document.getElementById('empCustomStartTime')?.value || '').trim() || undefined,
  exemptFromAttendance: document.getElementById('empExemptAttendance')?.checked || false,
  canUploadAttendance: document.getElementById('empCanUploadAttendance')?.checked || false,
- canViewAttendanceReport: document.getElementById('empCanViewAttendanceReport')?.checked || false
+ canViewAttendanceReport: document.getElementById('empCanViewAttendanceReport')?.checked || false,
+ canAccessPR: document.getElementById('empCanAccessPR')?.checked || false   // v1.6.20
  // v1.6.6: เอา vacationQuota: 6 ออกจากตรงนี้ — ก้อน data ถูก spread ทับข้อมูลเดิมตอนแก้ไข
  // ({...emps[idx], ...data}) ทำให้การแก้ข้อมูลพนักงานช่องไหนก็ตาม รีเซ็ตโควตาลาพักร้อน
  // ที่ตกลงไว้กลับเป็น 6 ทุกครั้ง ตอนนี้ตั้งค่าเฉพาะตอนสร้างพนักงานใหม่ (ด้านล่าง)
@@ -13873,6 +13920,23 @@ function renderSettings() {
 
  </div>
  <div class="settings-panel" data-settab="system" hidden>
+ <div class="card">
+ <div class="card-header"><h3>🧾 ระบบใบขอซื้อ (PR)</h3></div>
+ <div class="card-body">
+  <div class="toggle-grid">
+  <label class="ios-toggle"><input type="checkbox" id="qPrEnabled" ${s.prSystemEnabled ? 'checked' : ''}><span>เปิดใช้งาน — หน้า login จะมีตัวเลือกระบบ</span></label>
+  </div>
+  <div class="form-group" style="margin-top:12px;">
+  <label>ที่อยู่ของระบบใบขอซื้อ</label>
+  <input type="text" id="qPrUrl" value="${esc(s.prSystemUrl || '/pr')}" placeholder="/pr">
+  <div class="field-hint">ต้องเป็นโดเมนเดียวกับ e-HR (เช่น <code>/pr</code>) ถ้าคนละโดเมน พนักงานจะต้องล็อกอินใหม่อีกครั้งที่ PR</div>
+  </div>
+  <div class="alert alert-info" style="font-size:12px;">
+  ตัวเลือกนี้เป็นความสะดวกเท่านั้น ไม่ใช่การคุมสิทธิ์ — กำแพงจริงอยู่ที่ฝั่ง PR ซึ่งอ่านสิทธิ์จากสำเนาใน <code>pr.profile</code><br>
+  สิทธิ์รายคนตั้งที่ <strong>จัดการพนักงาน → แก้ไขพนักงาน → ระบบใบขอซื้อ</strong>
+  </div>
+ </div>
+ </div>
   <div class="text-sm" style="color:var(--gray-500);margin:-4px 0 14px 4px;">ข้อมูลเวอร์ชันและการรีเซ็ตข้อมูล</div>
  <div class="card">
  <div class="card-header"><h3>สรุปการตั้งค่าที่ใช้อยู่</h3></div>
@@ -14073,6 +14137,9 @@ function saveSettings() {
  s.compOffExpireMonths = parseInt(document.getElementById('qCompOffExpire').value) || 12;
  s.sickCertThreshold = parseFloat(document.getElementById('qSickCertThreshold').value) || 0;
  s.backDatedLeaveMaxDays = parseInt(document.getElementById('qBackDatedMax').value) || 0;
+ // v1.6.20
+ s.prSystemEnabled = document.getElementById('qPrEnabled')?.checked || false;
+ s.prSystemUrl = (document.getElementById('qPrUrl')?.value || '/pr').trim() || '/pr';
  s.leaveCarryOverMax = parseFloat(document.getElementById('qCarryOverMax').value) || 0;
  s.leaveCarryOverCutoff = document.getElementById('qCarryOverCutoff').value.trim() || '03-31';
  // v1.4.48: Payroll cutoff day (1-31), default 21. Validate range.
@@ -15605,6 +15672,11 @@ document.addEventListener('DOMContentLoaded', async () => {
  showApp();
  }
 
+ // v1.6.20: โชว์ตัวเลือกระบบเฉพาะเมื่อเปิดใช้ PR แล้ว
+ try {
+ if (prSystemEnabled()) document.getElementById('loginTargetGroup')?.classList.remove('hidden');
+ } catch (e) { /* ค่าตั้งค่ายังไม่มา — ปล่อยซ่อนไว้ */ }
+
  document.getElementById('loginForm').addEventListener('submit', async e => {
  e.preventDefault();
  const id = document.getElementById('loginEmpId').value.trim().toUpperCase();
@@ -15631,11 +15703,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
  if (entered) {
  alertEl.innerHTML = '';
+ // v1.6.20: ปลายทางที่เลือกไว้ — ด่านรหัสผ่านอ่อนต้องมาก่อนเสมอ
+ const _target = document.getElementById('loginTarget')?.value || 'ehr';
  // v1.6.17: คนที่ยังใช้รหัสเดิมที่อ่อนเกินเกณฑ์ ถูกพาไปตั้งใหม่ตรงนี้เลย
  // ตรวจจากรหัสที่เพิ่งพิมพ์ จึงไม่ต้องไล่ตั้งธงให้ทีละคนและไม่มีใครถูกล็อกออก
  const weak = weakPasswordReason(id, pass);
  if (currentUser.forceChangePassword || weak) {
  showChangePasswordPage(weak);
+ } else if (_target === 'pr' && prSystemEnabled()) {
+ if (canUsePR(currentUser)) {
+  auditLog('login-pr', 'user', currentUser.id, 'ไปยังระบบใบขอซื้อ');
+  window.location.href = prSystemUrl();
+  return;
+ }
+ alertEl.innerHTML = '<div class="alert alert-error">บัญชีนี้ยังไม่ได้รับสิทธิ์ใช้ระบบใบขอซื้อ — ติดต่อ Admin</div>';
+ showApp();
  } else {
  showApp();
  }

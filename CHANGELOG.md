@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) · Versi
 
 ---
 
+## [1.6.19] — 2026-10-16 (authStatus นับเฉพาะคนที่ยังทำงาน)
+
+### Fixed
+- `authStatus()` นับ `provisioned` จากทุกแถวใน `authProvisioned` รวมคนที่ลาออกไปแล้ว — ของจริง 16 ต.ค. แสดง 128/136 = 94% ทั้งที่คนทำงานอยู่ซึ่งมีบัญชีจริงคือ 125 คน · ตอนนี้กรองด้วยรายชื่อ active ก่อนนับ และเพิ่ม `provisionedRowsTotal` ไว้เทียบ
+- `needsAdminReset` / `staleIds` ก็กรองด้วยเงื่อนไขเดียวกัน
+- `readyToFlip` ไม่เปลี่ยนตรรกะ (ยังดูจาก remaining + stale) แต่ตัวเลขที่ใช้ตัดสินใจตรงความจริงขึ้น
+
+### Verified
+`tests/auth.test.js` 9 ข้อ (เพิ่ม 1) — v1.6.18 ผ่าน 4 · ชุดเดิม 79 ข้อผ่านเท่าเดิม
+
+---
+
 ## [1.6.18] — 2026-10-15 (ปิดช่องที่ทำให้บัญชี Supabase Auth ค้างรหัสเก่า)
 
 **ทำไมเร่ง:** บัญชีชุดนี้กำลังจะเป็นประตูของระบบใบขอซื้อ (PR System) ซึ่งพึ่ง Supabase Auth ล้วน ๆ

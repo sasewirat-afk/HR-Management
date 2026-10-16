@@ -929,7 +929,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.18';
+const APP_VERSION = '1.6.19';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2866,12 +2866,17 @@ window.authStatus = function () {
  const doneIds = new Set(done.map(x => x.id));
  const missing = emps.filter(e => !doneIds.has(e.id)).map(e => e.id);
  // v1.6.18: บัญชีที่มีอยู่แต่รหัสไม่ตรงกับในแอป ใช้ล็อกอินไม่ได้จริง ต้องแยกออกมา
- const stale = done.filter(x => x.stale);
+ // v1.6.19: นับเฉพาะคนที่ยัง active — เดิมนับทุกแถวใน authProvisioned รวมคนที่ลาออกแล้ว
+ // ทำให้เปอร์เซ็นต์สูงกว่าความจริง (เห็น 128/136 = 94% ทั้งที่คนทำงานจริงที่มีบัญชีคือ 125)
+ const activeIds = new Set(emps.map(e => e.id));
+ const doneActive = done.filter(x => activeIds.has(x.id));
+ const stale = doneActive.filter(x => x.stale);
  const staleIds = stale.map(x => x.id);
- const usable = done.filter(x => !x.stale).length;
+ const usable = doneActive.filter(x => !x.stale).length;
  const out = {
   activeEmployees: emps.length,
   provisioned: usable,
+  provisionedRowsTotal: done.length,          // รวมคนที่ลาออกแล้ว — ไว้เทียบเฉย ๆ
   needsAdminReset: stale.length,
   remaining: missing.length,
   percent: emps.length ? Math.round(100 * usable / emps.length) + '%' : '-',

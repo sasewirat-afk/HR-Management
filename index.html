@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.20';
+const APP_VERSION = '1.6.21';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2806,6 +2806,57 @@ function markAuthStale(empId, reason) {
   else list.push({ id: empId, at: new Date().toISOString(), mode: 'failed', stale: true, staleReason: String(reason || '').slice(0, 200) });
   DB.save('authProvisioned', list);
  } catch (e) { console.warn('[Phase4a] could not mark auth stale:', e.message); }
+}
+
+// ============================================================
+// v1.6.21: แอดมินรีเซ็ตรหัสผ่าน → สร้างบัญชี Supabase Auth ให้ด้วย
+// ============================================================
+// เดิม resetPassword() แก้แค่รหัสในแอป ไม่แตะบัญชี Auth เลย ทั้งที่เอกสารออกแบบระบุว่า
+// "กู้รหัสผ่านทำได้ทางเดียวคือให้แอดมินรีเซ็ต" — หลัง Phase 4 step 6 การรีเซ็ตจึงกู้ไม่ได้จริง
+// เพราะรหัสฝั่ง Auth ไม่เปลี่ยนตาม และเครื่องใหม่จะอ่านรายชื่อพนักงานไม่ได้อีกแล้ว
+//
+// ต้องใช้ตัวเชื่อมต่อ "แยก" เพราะ signUp()/signInWithPassword() บนตัวหลักจะเปลี่ยน session
+// ของเบราว์เซอร์ทันที — แอดมินจะกลายเป็นพนักงานคนนั้นกลางคัน
+// persistSession:false + storageKey แยก ทำให้ session ของแอดมินไม่ถูกแตะ
+function createIsolatedAuthClient() {
+ if (!cloudSync || !window.supabase || !SUPABASE_URL || !SUPABASE_ANON_KEY) return null;
+ try {
+  return window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+   auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false,
+           storageKey: 'hr_auth_provision_tmp' }
+  });
+ } catch (e) {
+  console.warn('[Phase4a] สร้างตัวเชื่อมต่อแยกไม่สำเร็จ:', e.message);
+  return null;
+ }
+}
+
+// สร้างบัญชี Auth ให้พนักงานด้วยรหัสที่แอดมินเพิ่งตั้ง
+// คืน { ok, mode } · existing:true = มีบัญชีอยู่แล้วและรหัสไม่ตรง ซึ่งเบราว์เซอร์แก้ไม่ได้
+// (ต้องใช้สิทธิ์ service_role ซึ่งไม่ควรอยู่ในหน้าเว็บ) → ให้พนักงานล็อกอินด้วยรหัสเดิมเพื่อซิงก์เอง
+// หรือแก้ใน Supabase Dashboard
+async function provisionAuthForEmployee(empId, password, clientOverride) {
+ const c = clientOverride || createIsolatedAuthClient();
+ if (!c) return { ok: false, reason: 'no-cloud' };
+ const done = async (r) => { try { await c.auth.signOut(); } catch (e) { /* ไม่เป็นไร */ } return r; };
+ try {
+  const email = authEmailFor(empId);
+  const pw = await deriveAuthPassword(empId, password);
+  const su = await c.auth.signUp({ email, password: pw });
+  if (!su.error) {
+   if (!su.data || !su.data.session) {
+    return done({ ok: false, configError: true,
+     reason: 'ต้องปิด "Confirm email" ใน Supabase ก่อน — บัญชีที่สร้างจะ login ไม่ได้' });
+   }
+   return done({ ok: true, mode: 'signup' });
+  }
+  // มีบัญชีอยู่แล้ว — ถ้ารหัสที่ตั้งใหม่ตรงกับของเดิมอยู่แล้วก็ถือว่าใช้ได้
+  const si = await c.auth.signInWithPassword({ email, password: pw });
+  if (!si.error) return done({ ok: true, mode: 'already-matches' });
+  return done({ ok: false, existing: true, reason: su.error.message });
+ } catch (e) {
+  return done({ ok: false, reason: e.message });
+ }
 }
 
 // Progress marker so an admin can tell when it is safe to flip the policies.
@@ -8069,6 +8120,23 @@ async function resetPassword(id) {
  emp._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
  DB.save('employees', emps);
  toast(`รีเซ็ตรหัสผ่านของ ${esc(emp.firstName)} เป็น "${newPass}" (จะต้องเปลี่ยนตอน Login ครั้งถัดไป)`);
+
+ // v1.6.21: สร้าง/ตรวจบัญชี Supabase Auth ให้ด้วย ไม่งั้นการรีเซ็ตจะกู้การเข้าถึงไม่ได้จริงหลัง step 6
+ const r = await provisionAuthForEmployee(id, newPass);
+ if (r.ok) {
+  recordAuthProvisioned(id, 'admin-reset');
+  auditLog('auth-provision', 'user', id, `แอดมินรีเซ็ตรหัสผ่าน → บัญชี Auth ${r.mode}`);
+  toast(`สร้างบัญชีเข้าระบบ (Supabase Auth) ให้ ${esc(emp.firstName)} แล้ว`, 'success');
+ } else if (r.existing) {
+  markAuthStale(id, r.reason);
+  auditLog('auth-provision-failed', 'user', id, `บัญชี Auth มีอยู่แล้วและรหัสไม่ตรง: ${r.reason}`);
+  toast(`⚠ รหัสในแอปเปลี่ยนแล้ว แต่บัญชีเข้าระบบของ ${esc(emp.firstName)} ยังเป็นรหัสเดิม — ให้พนักงานล็อกอินด้วยรหัสเดิมหนึ่งครั้งเพื่อซิงก์ หรือแก้ใน Supabase`, 'error');
+ } else if (r.configError) {
+  toast(`⚠ ${r.reason}`, 'error');
+ } else if (r.reason !== 'no-cloud') {
+  markAuthStale(id, r.reason);
+  toast(`⚠ สร้างบัญชีเข้าระบบไม่สำเร็จ: ${esc(r.reason)}`, 'error');
+ }
 }
 
 function adjustVacation(id) {

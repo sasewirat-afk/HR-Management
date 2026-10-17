@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.24';
+const APP_VERSION = '1.6.25';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -15742,9 +15742,18 @@ document.addEventListener('DOMContentLoaded', async () => {
  // still wire up the UI so the user can authenticate.
  let bootBlocked = false;
  if (!alreadyInitialized) {
- if (cloudSync && !pullResult.ok) {
+ // v1.6.25: "ดึงสำเร็จแต่ได้ 0 คีย์" ต้องถือว่ายังไม่ได้ข้อมูล ไม่ใช่ฐานข้อมูลว่าง
+ //
+ // หลังสลับ policy (Phase 4 step 6) การอ่านของ anon ไม่ได้คืน error — RLS กรองแถวออก
+ // จนหมด แล้ว select สำเร็จด้วยผลลัพธ์ 0 แถว เงื่อนไขเดิมเช็กแค่ pullResult.ok จึงหลุด
+ // แอปเข้าใจว่าเป็นการติดตั้งใหม่ → สร้างข้อมูลตัวอย่าง (EMP001/MGR001) ลงเครื่อง
+ // แล้วพยายามดันขึ้น cloud → RLS ปฏิเสธ → ขึ้น error แดงตั้งแต่ยังไม่ล็อกอิน
+ // (เจอจริงบนเครื่องใหม่ 17 ต.ค. 2569 หลังปิดประตู)
+ const gotNothing = cloudSync && pullResult.ok && !(pullResult.count > 0);
+ if (cloudSync && (!pullResult.ok || gotNothing)) {
  bootBlocked = true;
- console.warn('[Startup] No local data and cloud pull failed — waiting for the user to sign in');
+ console.warn('[Startup] ยังไม่มีข้อมูลในเครื่องและยังดึงจาก cloud ไม่ได้ (ok=' + pullResult.ok +
+  ' count=' + (pullResult.count || 0) + ') — รอให้ผู้ใช้ล็อกอินก่อน');
  } else {
  seedData();
  if (cloudSync) {

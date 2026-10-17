@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.26';
+const APP_VERSION = '1.6.27';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2787,6 +2787,7 @@ async function loginViaAuth(empId, password) {
   if (DB._skipCount) DB._skipCount = {};
   auditLog('login', 'user', emp.id, `Role: ${emp.role} (supabase-auth)`);
   recordAuthProvisioned(empId, 'signin');
+  recordAppVersion(empId);                        // v1.6.27 — ไม่ await เพื่อไม่ให้ล็อกอินช้า
   return { ok: true };
  } catch (e) {
   return { ok: false, reason: e.message };
@@ -2885,6 +2886,58 @@ async function provisionAuthForEmployee(empId, password, clientOverride) {
   return done({ ok: false, reason: e.message });
  }
 }
+
+// ============================================================
+// v1.6.27: บันทึกว่าเครื่องที่ล็อกอินใช้แอปเวอร์ชันอะไร
+// ============================================================
+// ฐานข้อมูลไม่มีทางรู้ว่าแอปเวอร์ชันไหนกำลังถูกใช้อยู่ สคริปต์ที่ต้องรันหลังแอปขึ้นระบบ
+// (เช่น 40b ที่บังคับว่าไฟล์แนบต้องมีเจ้าของ) จึงตรวจเองไม่ได้ว่าปลอดภัยที่จะรันหรือยัง
+//
+// 17 ต.ค. 2569: 40b ถูกรันก่อนที่แอปจะขึ้น → การแนบไฟล์ล้มเหลวทั้งระบบจนต้องถอนกลับ
+// คีย์นี้ทำให้ guard ใน 40b ตรวจได้ว่ายังมีใครใช้เวอร์ชันเก่าอยู่ไหม
+//
+// เขียนไม่บ่อย: เวอร์ชันเดิมที่เพิ่งบันทึกไปภายใน 6 ชั่วโมงจะไม่เขียนซ้ำ
+async function recordAppVersion(empId) {
+ try {
+  let seen = DB.load('appVersionSeen', {});
+  if (!seen || typeof seen !== 'object' || Array.isArray(seen)) return;
+  const row = seen[APP_VERSION];
+  const sixHoursAgo = Date.now() - 6 * 3600 * 1000;
+  if (row && row.lastAt && new Date(row.lastAt).getTime() > sixHoursAgo) return;
+
+  // อ่านค่าล่าสุดจากฐานก่อนรวม — trigger รวมข้อมูลทำงานเฉพาะคีย์คำขอ
+  // คีย์นี้จึงเป็นแบบเขียนทับทั้งก้อน ถ้าใช้สำเนาเก่าในเครื่อง ร่องรอยของเครื่องอื่นจะหาย
+  // แล้ว guard ใน 40b จะเข้าใจว่าไม่มีใครใช้เวอร์ชันเก่าแล้ว
+  if (cloudSync && typeof supa !== 'undefined' && supa) {
+   try {
+    const { data } = await supa.from('hr_data').select('value').eq('key', 'appVersionSeen').maybeSingle();
+    const fresh = data && data.value;
+    if (fresh && typeof fresh === 'object' && !Array.isArray(fresh)) {
+     const merged = Object.assign({}, fresh);
+     // เวอร์ชันเดียวกันที่มีสองที่ — เอาครั้งที่ใหม่กว่า
+     for (const [v, x] of Object.entries(seen)) {
+      const a = merged[v] && merged[v].lastAt ? String(merged[v].lastAt) : '';
+      const b = x && x.lastAt ? String(x.lastAt) : '';
+      if (!merged[v] || b > a) merged[v] = x;
+     }
+     seen = merged;
+    }
+   } catch (e) { console.warn('[v1.6.27] อ่านเวอร์ชันจากฐานไม่สำเร็จ:', e.message); }
+  }
+
+  seen[APP_VERSION] = { lastAt: new Date().toISOString(), by: empId || null };
+  DB.save('appVersionSeen', seen);
+ } catch (e) { console.warn('[v1.6.27] บันทึกเวอร์ชันไม่สำเร็จ:', e.message); }
+}
+
+// ดูว่าตอนนี้ยังมีใครค้างอยู่เวอร์ชันเก่าไหม — พิมพ์ appVersions() ใน console
+window.appVersions = function () {
+ const seen = DB.load('appVersionSeen', {});
+ const rows = Object.entries(seen).map(([v, x]) => ({ version: v, lastAt: x && x.lastAt, by: x && x.by }))
+  .sort((a, b) => String(b.lastAt).localeCompare(String(a.lastAt)));
+ console.table(rows);
+ return rows;
+};
 
 // Progress marker so an admin can tell when it is safe to flip the policies.
 // auth.users is not readable with the anon key, so track it in hr_data instead.
@@ -3021,6 +3074,7 @@ async function login(empId, password) {
  if (DB._localDirty) DB._localDirty = {};
  if (DB._skipCount) DB._skipCount = {};
  auditLog('login', 'user', user.id, `Role: ${user.role}`);
+ recordAppVersion(user.id);                       // v1.6.27 — ไม่ await เพื่อไม่ให้ล็อกอินช้า
  // v1.5.30 (Phase 4a): provision the Supabase Auth account in the background using
  // the password the employee just proved they know. Deliberately not awaited — login
  // must succeed and the UI must appear whether or not this works.

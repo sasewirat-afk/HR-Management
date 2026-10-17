@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.27';
+const APP_VERSION = '1.6.28';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2859,6 +2859,17 @@ function createIsolatedAuthClient() {
  }
 }
 
+// v1.6.28: แยก "ปิดการสมัครไว้ที่โปรเจกต์" ออกจาก "มีบัญชีอยู่แล้ว"
+//
+// หลังปิด Allow new users to sign up (Phase 4 ขั้น 6 · 17 ต.ค. 2569) signUp() จะ error เสมอ
+// โค้ดเดิมเหมาเอาว่า signUp ล้ม = มีบัญชีอยู่แล้ว จึงบอกแอดมินให้ไปลบบัญชีใน Dashboard
+// ทั้งที่บัญชีนั้นไม่เคยมี — เสียเวลาหาของที่ไม่มีอยู่ (เจอกับ 691012001)
+function isSignupDisabledError(err) {
+ const m = String((err && err.message) || '');
+ const c = String((err && (err.code || err.error_code)) || '');
+ return c === 'signup_disabled' || /signups?\s+not\s+allowed|signups?\s+(are\s+)?disabled/i.test(m);
+}
+
 // สร้างบัญชี Auth ให้พนักงานด้วยรหัสที่แอดมินเพิ่งตั้ง
 // คืน { ok, mode } · existing:true = มีบัญชีอยู่แล้วและรหัสไม่ตรง ซึ่งเบราว์เซอร์แก้ไม่ได้
 // (ต้องใช้สิทธิ์ service_role ซึ่งไม่ควรอยู่ในหน้าเว็บ) → ให้พนักงานล็อกอินด้วยรหัสเดิมเพื่อซิงก์เอง
@@ -2881,6 +2892,10 @@ async function provisionAuthForEmployee(empId, password, clientOverride) {
   // มีบัญชีอยู่แล้ว — ถ้ารหัสที่ตั้งใหม่ตรงกับของเดิมอยู่แล้วก็ถือว่าใช้ได้
   const si = await c.auth.signInWithPassword({ email, password: pw });
   if (!si.error) return done({ ok: true, mode: 'already-matches' });
+  // v1.6.28: ปิดการสมัครไว้ = ยังไม่มีบัญชีและเบราว์เซอร์สร้างให้ไม่ได้ คนละเรื่องกับบัญชีค้าง
+  if (isSignupDisabledError(su.error)) {
+   return done({ ok: false, signupDisabled: true, reason: su.error.message });
+  }
   return done({ ok: false, existing: true, reason: su.error.message });
  } catch (e) {
   return done({ ok: false, reason: e.message });
@@ -2990,7 +3005,14 @@ async function syncAuthPassword(empId, oldPassword, newPassword) {
     const si2 = await supa.auth.signInWithPassword({
      email, password: await deriveAuthPassword(empId, oldPassword)
     });
-    if (si2.error) return { ok: false, reason: su.error.message };
+    if (si2.error) {
+     // v1.6.28: บอกให้ตรงสาเหตุ แอดมินต้องสร้างบัญชีให้ก่อน พนักงานทำเองไม่ได้
+     if (isSignupDisabledError(su.error)) {
+      return { ok: false, signupDisabled: true,
+       reason: 'ยังไม่มีบัญชีเข้าระบบ และโปรเจกต์ปิดการสมัครไว้ — ให้ฝ่ายบุคคลสร้างบัญชีให้ก่อน' };
+     }
+     return { ok: false, reason: su.error.message };
+    }
     const up2 = await supa.auth.updateUser({ password: newPw });
     return up2.error ? { ok: false, reason: up2.error.message } : { ok: true, mode: 'update-after-race' };
    }
@@ -3001,6 +3023,20 @@ async function syncAuthPassword(empId, oldPassword, newPassword) {
   return { ok: false, reason: e.message };
  }
 }
+
+// v1.6.28: ตัวช่วยสร้างบัญชีด้วยมือ เมื่อโปรเจกต์ปิดการสมัครไว้
+// ใช้: await authManualSetup('691012001', 'รหัสชั่วคราวที่เพิ่งรีเซ็ต')
+// แล้วเอาค่าที่ได้ไปสร้างใน Supabase → Authentication → Users → Add user (ติ๊ก Auto Confirm User)
+// เสร็จแล้วสั่ง recordAuthProvisioned('691012001', 'manual-dashboard') เพื่อให้ authStatus() นับถูก
+window.authManualSetup = async function (empId, plainPassword) {
+ const out = { email: authEmailFor(empId), password: await deriveAuthPassword(empId, plainPassword) };
+ console.log('Supabase → Authentication → Users → Add user');
+ console.log('  Email:    ' + out.email);
+ console.log('  Password: ' + out.password);
+ console.log('  ติ๊ก Auto Confirm User');
+ console.log("เสร็จแล้วสั่ง: recordAuthProvisioned('" + empId + "', 'manual-dashboard')");
+ return out;
+};
 
 // Admin diagnostic — run authStatus() in the console to decide when to flip.
 window.authStatus = function () {
@@ -8226,6 +8262,16 @@ async function resetPassword(id) {
   recordAuthProvisioned(id, 'admin-reset');
   auditLog('auth-provision', 'user', id, `แอดมินรีเซ็ตรหัสผ่าน → บัญชี Auth ${r.mode}`);
   toast(`สร้างบัญชีเข้าระบบ (Supabase Auth) ให้ ${esc(emp.firstName)} แล้ว`, 'success');
+ } else if (r.signupDisabled) {
+  // v1.6.28: โปรเจกต์ปิดการสมัครไว้ (Phase 4 ขั้น 6) เบราว์เซอร์จึงสร้างบัญชีใหม่ไม่ได้
+  // ต้องสร้างใน Dashboard ด้วยรหัสที่ผ่านสูตร deriveAuthPassword แล้วเท่านั้น
+  markAuthStale(id, 'signup-disabled');
+  auditLog('auth-provision-failed', 'user', id, 'โปรเจกต์ปิดการสมัคร — ต้องสร้างบัญชีใน Dashboard');
+  const _manual = await deriveAuthPassword(id, newPass);
+  console.log('[v1.6.28] สร้างบัญชีใน Supabase Dashboard ด้วยค่านี้' + String.fromCharCode(10) + '  Email: ' + authEmailFor(id) + String.fromCharCode(10) + '  Password: ' + _manual + String.fromCharCode(10) + '  ติ๊ก Auto Confirm User ด้วย');
+  toast(`⚠ ระบบสร้างบัญชีเข้าระบบให้ ${esc(emp.firstName)} อัตโนมัติไม่ได้ เพราะปิดการสมัครไว้ที่ Supabase<br>`
+   + `รหัสในระบบ e-HR เปลี่ยนแล้ว แต่ยังล็อกอินไม่ได้จนกว่าจะสร้างบัญชี<br>`
+   + `<strong>เปิด Console (F12)</strong> จะมี Email กับ Password สำหรับสร้างใน Dashboard รออยู่`, 'error');
  } else if (r.existing) {
   markAuthStale(id, r.reason);
   auditLog('auth-provision-failed', 'user', id, `บัญชี Auth มีอยู่แล้วและรหัสไม่ตรง: ${r.reason}`);

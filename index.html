@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.25';
+const APP_VERSION = '1.6.26';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -3092,12 +3092,23 @@ function uid(prefix) {
 // Reads are backward compatible: a record still carrying an inline `attachment`
 // renders straight from it, so this works whether or not the data migration has run.
 
-async function uploadAttachment(recordId, sourceKey, dataUrl, fileName) {
+// v1.6.26: ส่ง "เจ้าของไฟล์" ไปด้วย เพื่อให้ฐานข้อมูลจำกัดการอ่านเป็นรายคนได้
+//
+// เดิมตารางมีแต่ id/source_key/attachment/attachment_name ไม่มีอะไรบอกว่าไฟล์เป็นของใคร
+// policy จึงทำได้แค่ "ต้องล็อกอิน" — พนักงานทุกคนเปิดใบรับรองแพทย์ของคนอื่นได้
+// และเมื่อ PR System เปิดใช้ ผู้ใช้ PR ก็เป็น authenticated เดียวกัน
+//
+// ownerId = เจ้าของคำขอ (ไม่ใช่คนกดอัปโหลด — Admin อัปโหลดแทนพนักงานได้)
+// managerId = ผู้อนุมัติ ณ ตอนยื่น · ขั้น 40b จะเช็กหัวหน้าปัจจุบันให้ด้วย เผื่อย้ายสังกัด
+async function uploadAttachment(recordId, sourceKey, dataUrl, fileName, ownerId, managerId) {
  if (!cloudSync || !supa) return { ok: false, reason: 'no-cloud' };
  try {
+  const _owner = String(ownerId || (typeof currentUser !== 'undefined' && currentUser ? currentUser.id : '') || '').trim().toUpperCase();
+  const _mgr = String(managerId || '').trim().toUpperCase();
   const { error } = await supa.from('hr_attachments').upsert({
    id: recordId, source_key: sourceKey,
-   attachment: dataUrl, attachment_name: fileName || null
+   attachment: dataUrl, attachment_name: fileName || null,
+   owner_id: _owner || null, manager_id: _mgr || null
   }, { onConflict: 'id' });
   return error ? { ok: false, reason: error.message } : { ok: true };
  } catch (e) { return { ok: false, reason: e.message }; }
@@ -4649,7 +4660,7 @@ async function submitLeave(e, editId) {
  // v1.5.34: store the blob out of band BEFORE saving, so a failed upload does not
  // leave a record claiming an attachment that cannot be opened.
  if (_newAttachmentData) {
- const up = await uploadAttachment(editId, 'leaveRequests', _newAttachmentData, attachmentName);
+ const up = await uploadAttachment(editId, 'leaveRequests', _newAttachmentData, attachmentName, editReq.employeeId, editReq.managerId);
  if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
  }
  DB.save('leaveRequests', reqs);
@@ -4685,7 +4696,7 @@ async function submitLeave(e, editId) {
 
  // v1.5.34: upload before saving — a record must never claim an attachment that is not there
  if (_newAttachmentData) {
- const up = await uploadAttachment(req.id, 'leaveRequests', _newAttachmentData, attachmentName);
+ const up = await uploadAttachment(req.id, 'leaveRequests', _newAttachmentData, attachmentName, req.employeeId, req.managerId);
  if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
  }
 
@@ -5005,7 +5016,7 @@ async function submitOT(e, editId) {
  };
  // v1.5.34: upload before saving — never record an attachment that is not there
  if (_newAttachmentData) {
- const up = await uploadAttachment(editId, 'otRequests', _newAttachmentData, attachmentName);
+ const up = await uploadAttachment(editId, 'otRequests', _newAttachmentData, attachmentName, editReq.employeeId, editReq.managerId);
  if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
  }
  DB.save('otRequests', reqs);
@@ -5033,7 +5044,7 @@ async function submitOT(e, editId) {
 
  // v1.5.34: upload before saving — never record an attachment that is not there
  if (_newAttachmentData) {
- const up = await uploadAttachment(req.id, 'otRequests', _newAttachmentData, attachmentName);
+ const up = await uploadAttachment(req.id, 'otRequests', _newAttachmentData, attachmentName, req.employeeId, req.managerId);
  if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
  }
 
@@ -5162,14 +5173,14 @@ async function submitTimeCert(e, editId) {
  const idx = reqs.findIndex(r => r.id === editId);
  // v1.5.34: upload before saving — never record an attachment that is not there
  if (_newAttachmentData) {
- const up = await uploadAttachment(editId, 'timeCertRequests', _newAttachmentData, attachmentName);
+ const up = await uploadAttachment(editId, 'timeCertRequests', _newAttachmentData, attachmentName, editReq.employeeId, editReq.managerId);
  if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
  }
  reqs[idx] = { ...editReq, date, claimedCheckIn, claimedCheckOut, reason, attachment, attachmentName, hasAttachment, status: 'pending', lastEditedAt: new Date().toISOString() };
  } else {
  const _tcId = uid('TC');
  if (_newAttachmentData) {
- const up = await uploadAttachment(_tcId, 'timeCertRequests', _newAttachmentData, attachmentName);
+ const up = await uploadAttachment(_tcId, 'timeCertRequests', _newAttachmentData, attachmentName, currentUser.id, currentUser.managerId);
  if (!up.ok) { toast('อัปโหลดไฟล์แนบไม่สำเร็จ: ' + up.reason, 'error'); return; }
  }
  reqs.push({

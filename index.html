@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.22';
+const APP_VERSION = '1.6.23';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -8157,7 +8157,11 @@ async function resetPassword(id) {
  } else if (r.existing) {
   markAuthStale(id, r.reason);
   auditLog('auth-provision-failed', 'user', id, `บัญชี Auth มีอยู่แล้วและรหัสไม่ตรง: ${r.reason}`);
-  toast(`⚠ รหัสในแอปเปลี่ยนแล้ว แต่บัญชีเข้าระบบของ ${esc(emp.firstName)} ยังเป็นรหัสเดิม — ให้พนักงานล็อกอินด้วยรหัสเดิมหนึ่งครั้งเพื่อซิงก์ หรือแก้ใน Supabase`, 'error');
+  // v1.6.23: บอกขั้นตอนที่ใช้ได้จริง — การกดรีเซ็ตซ้ำในแอปแก้เคสนี้ไม่ได้ เพราะบัญชีมีอยู่แล้ว
+  // (ทำจริงมาแล้ว 17 ต.ค. กับ 690801003 และ 690813001 — ลบใน Dashboard แล้วรีเซ็ตใหม่ได้ผล)
+  toast(`⚠ บัญชีเข้าระบบของ ${esc(emp.firstName)} ยังค้างรหัสเดิม กดรีเซ็ตซ้ำไม่ช่วย<br>`
+   + `<strong>วิธีแก้:</strong> Supabase → Authentication → Users → ลบ <code>${esc(String(id).toLowerCase())}@hr.crochet.local</code> → กลับมากดรีเซ็ตรหัสผ่านอีกครั้ง<br>`
+   + `หรือให้พนักงานล็อกอินด้วย<strong>รหัสเดิมก่อนหน้า</strong>หนึ่งครั้ง ถ้ายังจำได้`, 'error');
  } else if (r.configError) {
   toast(`⚠ ${r.reason}`, 'error');
  } else if (r.reason !== 'no-cloud') {

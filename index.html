@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.31';
+const APP_VERSION = '1.6.32';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -14736,29 +14736,47 @@ function exportAuditCSV() {
 // ============================================================
 // ONBOARDING / OFFBOARDING (Admin)
 // ============================================================
-// v1.6.31: เพิ่มขั้น 'ลบบัญชีเข้าระบบ' ให้ระบบที่ติดตั้งไปแล้ว
-// 19 ต.ค. 2569 เจอบัญชี Auth ของพนักงานที่ลาออกค้างอยู่ 4 ใบ ย้อนไปถึงปีก่อน
-// ปิด active ในแอปไม่ได้ลบบัญชีฝั่ง Auth ให้ คนที่ออกไปแล้วจึงยังดึงข้อมูลตรงจากฐานได้
-// (ตอนนี้ policy กันไว้อีกชั้นแล้ว แต่บัญชีที่ไม่ใช้ไม่ควรค้างอยู่ตั้งแต่แรก)
+// ============================================================
+// v1.6.32: ค่าเริ่มต้นของเช็คลิสต์อยู่ในโค้ด ไม่ใช่ในฐานข้อมูล
+// ============================================================
+// 19 ต.ค. 2569 ตรวจพบว่า settings ในฐานไม่เคยมีช่อง checklist ทั้งสองอันเลย
+// (38 ช่องอื่นครบหมด) แต่ละเครื่องจึงเห็นเช็คลิสต์ไม่เหมือนกัน ขึ้นกับค่าที่ค้าง
+// อยู่ในเครื่องนั้นตั้งแต่ติดตั้งครั้งแรก บางเครื่องเห็น 5 ขั้น บางเครื่องเห็น 0
 //
-// เขียนครั้งเดียว มีธงกำกับ ถ้าแอดมินลบขั้นนี้ทิ้งภายหลังจะไม่ถูกใส่กลับ
-function ensureOffboardAuthStep() {
- try {
-  const s = DB.load('settings');
-  if (!s || s._offboardAuthStepAdded) return;
-  const list = Array.isArray(s.offboardingChecklist) ? s.offboardingChecklist : [];
-  if (!list.some(c => c && c.id === 'authdel')) {
-   list.push({ id: 'authdel', label: 'ลบบัญชีเข้าระบบ (Supabase Auth)' });
-   s.offboardingChecklist = list;
-  }
-  s._offboardAuthStepAdded = true;
-  DB.save('settings', s);
- } catch (e) { console.warn('[v1.6.31] เพิ่มขั้นลบบัญชีไม่สำเร็จ:', e.message); }
+// v1.6.31 แก้ด้วยการเขียนเพิ่มลงฐาน ซึ่งผิดทาง: เพิ่มจุดที่พังได้โดยไม่จำเป็น
+// และเมื่อการเขียนไม่ขึ้นจริง ระบบก็เงียบ ไม่มีใครรู้ (เกิดขึ้นแล้วจริง)
+//
+// ค่าเริ่มต้นอยู่ในโค้ดแทน ทุกเครื่องจึงเห็นตรงกันทันทีโดยไม่ต้องเขียนอะไรลงฐาน
+// ถ้าแอดมินตั้งรายการเองใน settings ระบบจะใช้ของแอดมินแทนทั้งชุด
+const DEFAULT_ONBOARDING_CHECKLIST = [
+ { id: 'esign', label: 'เซ็นสัญญาจ้าง (e-Sign)' },
+ { id: 'email', label: 'สร้างบัญชี Email / AD / ระบบ' },
+ { id: 'asset', label: 'เบิกอุปกรณ์ (Notebook, ซิม)' },
+ { id: 'eval60', label: 'ประเมินทดลองงาน 60 วัน' },
+ { id: 'pass', label: 'บรรจุพนักงานประจำ' }
+];
+
+// ขั้น authdel มาจากบทเรียน 19 ต.ค. 2569: เจอบัญชี Auth ของพนักงานที่ลาออกค้าง 4 ใบ
+// ย้อนไปถึงปีก่อน เพราะการปิด active ในแอปไม่ได้ลบบัญชีฝั่ง Auth ให้
+const DEFAULT_OFFBOARDING_CHECKLIST = [
+ { id: 'resign', label: 'รับเอกสารลาออก' },
+ { id: 'return', label: 'คืนอุปกรณ์' },
+ { id: 'close', label: 'ปิดบัญชีระบบ / AD' },
+ { id: 'exit', label: 'Exit Interview' },
+ { id: 'clear', label: 'เคลียร์ค่าใช้จ่าย + ออกหนังสือรับรอง' },
+ { id: 'authdel', label: 'ลบบัญชีเข้าระบบ (Supabase Auth)' }
+];
+
+// ใช้ของแอดมินถ้าตั้งไว้ ไม่งั้นใช้ค่าเริ่มต้นในโค้ด
+function checklistFor(phase, settings) {
+ const custom = phase === 'on' ? (settings && settings.onboardingChecklist)
+                               : (settings && settings.offboardingChecklist);
+ if (Array.isArray(custom) && custom.length > 0) return custom;
+ return phase === 'on' ? DEFAULT_ONBOARDING_CHECKLIST : DEFAULT_OFFBOARDING_CHECKLIST;
 }
 
 let _onbTab = 'on';
 function renderOnboarding() {
- ensureOffboardAuthStep();                       // v1.6.31
  const settings = DB.load('settings');
  const emps = DB.load('employees');
  const tasks = DB.load('onboardingTasks', []);
@@ -14774,7 +14792,7 @@ function renderOnboarding() {
  const offboardingEmps = emps.filter(e => e.offboardingDate);
 
  const tabList = _onbTab === 'on' ? onboardingEmps : offboardingEmps;
- const checklist = _onbTab === 'on' ? (settings.onboardingChecklist || []) : (settings.offboardingChecklist || []);
+ const checklist = checklistFor(_onbTab, settings);   // v1.6.32
 
  document.getElementById('mainContent').innerHTML = `
   <div class="page-header">

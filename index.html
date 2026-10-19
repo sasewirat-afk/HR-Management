@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.33';
+const APP_VERSION = '1.6.34';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -1061,6 +1061,7 @@ const DB = {
  // ตั้งใจไม่หน่วงเวลาการเขียนครั้งแรก: ถ้าหน่วงแล้วแท็บถูกปิดหรือแครชในช่วงนั้น
  // ข้อมูลจะอยู่แค่ในเครื่อง แล้วหายตอนดึงข้อมูลครั้งถัดไป
  _queueOrUpsert(key, val, changed) {
+  // v1.6.34: ตัวจำการเขียนที่ไม่สำเร็จ — ดูคำอธิบายที่ _noteSyncFailure
  this._writing = this._writing || {};
  if (this._writing[key]) {
   this._pendingWrite = this._pendingWrite || {};
@@ -1074,6 +1075,42 @@ const DB = {
  }
  // อ่านค่าล่าสุดจากเครื่อง โดยมี val เป็นค่าสำรอง — ห้ามปล่อยให้ load() คืน [] แล้วไปลบของบนคลาวด์
  this._cloudUpsert(key, this.load(key, val), changed);
+ },
+
+ // ============================================================
+ // v1.6.34: การเขียนที่ไม่ขึ้นฐานต้องเงียบไม่ได้
+ // ============================================================
+ // 19 ต.ค. 2569: การเขียน settings ไม่ขึ้นฐานโดยไม่มีใครรู้ กว่าจะเจอก็ต่อเมื่อ
+ // ไล่ตรวจฐานเอง ของเดิมมีแค่ toast แดงที่หายเองใน 3 วินาที และเส้นทาง catch
+ // (เครือข่ายล่ม) ไม่แจ้งผู้ใช้เลย เขียนลง console อย่างเดียว
+ //
+ // ตัวนี้จำคีย์ที่เขียนไม่สำเร็จไว้ แล้วขึ้นแถบค้างบนหัวจอจนกว่าจะส่งสำเร็จ
+ // ผู้ใช้จึงรู้ทันทีว่างานที่เพิ่งทำยังไม่ถึงฐาน แทนที่จะรู้ตอนข้อมูลหายไปแล้ว
+ _syncFailures: {},
+
+ _noteSyncFailure(key, reason) {
+  this._syncFailures = this._syncFailures || {};
+  const prev = this._syncFailures[key];
+  this._syncFailures[key] = {
+   reason: String(reason || 'ไม่ทราบสาเหตุ'),
+   at: prev ? prev.at : new Date().toISOString(),
+   tries: (prev ? prev.tries : 0) + 1
+  };
+  if (typeof renderSyncBanner === 'function') renderSyncBanner();
+ },
+
+ _clearSyncFailure(key) {
+  if (this._syncFailures && this._syncFailures[key]) {
+   delete this._syncFailures[key];
+   if (typeof renderSyncBanner === 'function') renderSyncBanner();
+  }
+ },
+
+ // ส่งคีย์ที่ค้างทั้งหมดใหม่ด้วยค่าล่าสุดในเครื่อง
+ retryFailedWrites() {
+  const keys = Object.keys(this._syncFailures || {});
+  keys.forEach(k => this._cloudUpsert(k, this.load(k, null), null));
+  return keys.length;
  },
 
  // v1.6.15: ซิงก์ "เวลาประทับ" ของรายการที่เนื้อหาตรงกับในระบบอยู่แล้ว
@@ -1479,6 +1516,7 @@ const DB = {
  const { data: _back, error } = _merged ? await _q.select('value').maybeSingle() : await _q;
  if (!error && _merged && _back && Array.isArray(_back.value)) this._adoptMerged(key, val, _back.value, changedIds);
  if (error) {
+ this._noteSyncFailure(key, error.message);       // v1.6.34
  console.error(`[CloudUpsert] failed for '${key}':`, error.message);
  // v1.4.33 (H1): detect RLS violation (Postgres error code 42501)
  if (error.code === '42501' || (error.message && error.message.toLowerCase().includes('row-level security'))) {
@@ -1486,8 +1524,12 @@ const DB = {
  } else {
  toast(`Cloud sync failed (${key}): ${esc(error.message)}`, 'error');
  }
+ } else {
+ this._clearSyncFailure(key);                     // v1.6.34: ส่งสำเร็จแล้ว
  }
  } catch (e) {
+ // v1.6.34: เส้นทางนี้เคยเงียบสนิท เขียนลง console อย่างเดียว
+ this._noteSyncFailure(key, e.message || 'เครือข่ายล่ม');
  console.warn(' Cloud sync failed for', key, e);
  } finally {
  this._pendingWrites--;
@@ -2635,6 +2677,47 @@ function seedData() {
  ]
  });
  DB.save('initialized', true);
+}
+
+// ============================================================
+// v1.6.34: แถบเตือนว่ามีข้อมูลยังไม่ขึ้นฐาน
+// ============================================================
+// ค้างอยู่จนกว่าจะส่งสำเร็จ ไม่หายเอง เพราะ toast ที่หายใน 3 วินาทีทำให้
+// ความล้มเหลวผ่านไปโดยไม่มีใครเห็น (เกิดขึ้นแล้ว 19 ต.ค. 2569)
+//
+// ชื่อคีย์เป็นภาษาอังกฤษในระบบ แปลงเป็นคำที่คนอ่านรู้เรื่องก่อนแสดง
+const SYNC_KEY_LABELS = {
+ leaveRequests: 'ใบลา', otRequests: 'คำขอ OT', compOffRequests: 'คำขอสะสมวันหยุด',
+ fieldWorkRequests: 'คำขอทำงานนอกสถานที่', timeCertRequests: 'คำขอรับรองเวลา',
+ accumulatedHolidays: 'วันสะสม', employees: 'ข้อมูลพนักงาน', shifts: 'ตารางกะ',
+ settings: 'การตั้งค่า', attendanceRecords: 'เวลาเข้างาน', paySlips: 'สลิปเงินเดือน',
+ notifications: 'การแจ้งเตือน', auditLog: 'บันทึกการใช้งาน'
+};
+
+function renderSyncBanner() {
+ if (typeof document === 'undefined') return;
+ const fails = (DB._syncFailures && Object.keys(DB._syncFailures)) || [];
+ let el = document.getElementById('syncFailBanner');
+ // แถบลอยทับหัวจอ ต้องดันเนื้อหาลงมา ไม่งั้นจะบังแถบหัวเรื่องและปุ่มของหน้านั้น
+ if (!fails.length) {
+  if (el) el.remove();
+  document.body.style.paddingTop = '';
+  return;
+ }
+ if (!el) {
+  el = document.createElement('div');
+  el.id = 'syncFailBanner';
+  el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;background:#b91c1c;color:#fff;padding:10px 14px;font-size:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;box-shadow:0 2px 8px rgba(0,0,0,.25);';
+  document.body.appendChild(el);
+ }
+ const names = fails.map(k => SYNC_KEY_LABELS[k] || k).join(' · ');
+ const oldest = fails.map(k => DB._syncFailures[k].at).sort()[0];
+ const mins = Math.max(0, Math.round((Date.now() - new Date(oldest).getTime()) / 60000));
+ el.innerHTML = '<strong>ข้อมูลยังไม่ถูกบันทึกขึ้นฐาน</strong>'
+  + '<span>' + esc(names) + (mins > 0 ? ' · ค้างมา ' + mins + ' นาที' : '') + '</span>'
+  + '<span style="font-size:12px;opacity:.9;">งานที่ทำไว้ยังอยู่แค่ในเครื่องนี้ อย่าเพิ่งปิดหน้าต่าง</span>'
+  + '<button onclick="DB.retryFailedWrites()" style="margin-left:auto;background:#fff;color:#b91c1c;border:0;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">ลองส่งใหม่</button>';
+ document.body.style.paddingTop = el.offsetHeight + 'px';
 }
 
 // ============================================================

@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.32';
+const APP_VERSION = '1.6.33';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2755,7 +2755,12 @@ async function provisionSupabaseAuth(empId, password) {
 //
 // Legacy hash login stays as a fallback for employees who have not been provisioned
 // yet. Set PHASE4_LEGACY_LOGIN = false at step 7 to close that door.
-const PHASE4_LEGACY_LOGIN = true;
+// ขั้น 7 ปิดแล้ว 19 ต.ค. 2569 — ทางเก่าไม่สร้าง session ของ Supabase
+// เครื่องที่เข้าทางนั้นจึงเขียนขึ้นฐานไม่ได้เลยหลังขั้น 6 ทั้งที่หน้าจอดูเหมือนทำงานปกติ
+// งานที่ทำไปค้างอยู่ในเครื่องแล้วหายตอนรีเฟรช เป็นความเสียหายแบบเงียบที่แย่ที่สุด
+// เงื่อนไขที่ทำให้ปิดได้: พนักงานที่ยังทำงานอยู่ทุกคนมีบัญชี Auth ครบ
+// และแอดมินสร้าง/รีเซ็ตบัญชีให้คนใหม่ได้เองผ่าน Edge Function admin-reset-password
+const PHASE4_LEGACY_LOGIN = false;
 
 async function loginViaAuth(empId, password) {
  if (!cloudSync || !supa || !supa.auth) return { ok: false, reason: 'no-cloud' };
@@ -16038,8 +16043,14 @@ document.addEventListener('DOMContentLoaded', async () => {
  } else {
  showApp();
  }
+ } else if (viaAuth.reason === 'no-cloud' || String(viaAuth.reason || '').startsWith('pull-failed')) {
+ // v1.6.33: แยกปัญหาเครือข่าย/ฐานข้อมูล ออกจากรหัสผิด ไม่งั้นคนจะพิมพ์รหัสซ้ำไปเรื่อย ๆ
+ alertEl.innerHTML = '<div class="alert alert-error">เชื่อมต่อฐานข้อมูลไม่ได้ — ตรวจอินเทอร์เน็ตแล้วลองใหม่</div>';
  } else {
- alertEl.innerHTML = '<div class="alert alert-error">รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง</div>';
+ // v1.6.33: ปิดทางเก่าแล้ว คนที่ยังไม่มีบัญชีจะเข้าไม่ได้จนกว่าแอดมินจะสร้างให้
+ // จึงต้องบอกทางออกไว้ด้วย ไม่ใช่บอกแค่ว่ารหัสผิด
+ alertEl.innerHTML = '<div class="alert alert-error">รหัสพนักงานหรือรหัสผ่านไม่ถูกต้อง'
+  + '<br><span style="font-size:12px;">ถ้าเพิ่งเริ่มงาน หรือไม่เคยเข้าระบบมาก่อน แจ้งฝ่ายบุคคลให้กดรีเซ็ตรหัสผ่านให้หนึ่งครั้ง</span></div>';
  }
  });
 

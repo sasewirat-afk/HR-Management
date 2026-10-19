@@ -18,13 +18,34 @@
 2. ชื่อ `admin-reset-password` (ต้องตรงตัว แอปเรียกด้วยชื่อนี้)
 3. วางเนื้อไฟล์ `admin-reset-password/index.ts` ทั้งไฟล์ → Deploy
 
+4. **ปิด Verify JWT ของฟังก์ชันนี้** — เข้าไปที่ฟังก์ชัน → Details/Settings → ปิด
+   "Verify JWT with legacy secret" → Save
+
 **ทางที่ 2 — CLI**
 
 ```bash
 npx supabase@latest login
 npx supabase@latest link --project-ref <project-ref>
-npx supabase@latest functions deploy admin-reset-password
+npx supabase@latest functions deploy admin-reset-password --no-verify-jwt
 ```
+
+## ⚠ ต้องปิด Verify JWT ไม่งั้นเรียกจากหน้าเว็บไม่ได้เลย
+
+เบราว์เซอร์ยิง `OPTIONS` ไปถามสิทธิ์ก่อนทุกครั้ง (CORS preflight) และคำขอนั้น
+**ไม่มี Authorization header ติดไปด้วยตามมาตรฐาน** ถ้าเปิด Verify JWT ไว้
+แพลตฟอร์มจะปฏิเสธ preflight ตั้งแต่ก่อนถึงโค้ดในฟังก์ชัน คำขอจริงจึงไม่เคยถูกส่ง
+
+อาการที่เห็นใน Console (19 ต.ค. 2569):
+
+```
+Access to fetch ... has been blocked by CORS policy:
+Response to preflight request doesn't pass access control check:
+It does not have HTTP ok status.
+```
+
+ปิดแล้ว **ไม่ได้หละหลวมลง** เพราะฟังก์ชันตรวจเองครบอยู่แล้ว: ต้องมี token ที่ใช้ได้จริง
+คนเรียกต้องเป็น `role = admin` ที่ยัง active และเป้าหมายต้องเป็นพนักงานจริง
+ด่านของแพลตฟอร์มตรวจแค่ว่า token ถูกต้อง ไม่ได้ตรวจว่าเป็นแอดมิน
 
 ไม่ต้องตั้ง secret เอง `SUPABASE_URL` และ `SUPABASE_SERVICE_ROLE_KEY` เป็น env ที่ Supabase
 ใส่ให้ทุก Edge Function อยู่แล้ว

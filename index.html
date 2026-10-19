@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.29';
+const APP_VERSION = '1.6.30';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -8298,6 +8298,9 @@ async function resetPassword(id) {
  // v1.6.21: สร้าง/ตรวจบัญชี Supabase Auth ให้ด้วย ไม่งั้นการรีเซ็ตจะกู้การเข้าถึงไม่ได้จริงหลัง step 6
  // v1.6.29: ลองผ่าน Edge Function ก่อน — ทางเดียวที่แก้รหัสของบัญชีที่มีอยู่แล้วได้
  let r = await adminSetAuthPassword(id, newPass);
+ // v1.6.30: เก็บเหตุผลจริงของ Edge ไว้เสมอ การถอยไปทางเดิมเคยกลืนสาเหตุจนหาไม่เจอ
+ const _edge = r;
+ if (!r.ok) console.warn('[v1.6.30] Edge Function ไม่สำเร็จ:', JSON.stringify(_edge));
  if (!r.ok && (r.notDeployed || r.reason === 'no-session' || r.reason === 'no-cloud')) {
   r = await provisionAuthForEmployee(id, newPass);       // ยังไม่ได้ติดตั้ง → วิธีเดิม
  }
@@ -8322,7 +8325,8 @@ async function resetPassword(id) {
   // (ทำจริงมาแล้ว 17 ต.ค. กับ 690801003 และ 690813001 — ลบใน Dashboard แล้วรีเซ็ตใหม่ได้ผล)
   toast(`⚠ บัญชีเข้าระบบของ ${esc(emp.firstName)} ยังค้างรหัสเดิม กดรีเซ็ตซ้ำไม่ช่วย<br>`
    + `<strong>วิธีแก้:</strong> Supabase → Authentication → Users → ลบ <code>${esc(String(id).toLowerCase())}@hr.crochet.local</code> → กลับมากดรีเซ็ตรหัสผ่านอีกครั้ง<br>`
-   + `หรือให้พนักงานล็อกอินด้วย<strong>รหัสเดิมก่อนหน้า</strong>หนึ่งครั้ง ถ้ายังจำได้`, 'error');
+   + `หรือให้พนักงานล็อกอินด้วย<strong>รหัสเดิมก่อนหน้า</strong>หนึ่งครั้ง ถ้ายังจำได้`
+   + (_edge && _edge.reason ? `<br><small>Edge Function: ${esc(String(_edge.reason))}</small>` : ''), 'error');
  } else if (r.configError) {
   toast(`⚠ ${r.reason}`, 'error');
  } else if (r.reason !== 'no-cloud') {

@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.28';
+const APP_VERSION = '1.6.29';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2868,6 +2868,45 @@ function isSignupDisabledError(err) {
  const m = String((err && err.message) || '');
  const c = String((err && (err.code || err.error_code)) || '');
  return c === 'signup_disabled' || /signups?\s+not\s+allowed|signups?\s+(are\s+)?disabled/i.test(m);
+}
+
+// ============================================================
+// v1.6.29: ตั้งรหัสผ่านบัญชี Auth ผ่าน Edge Function
+// ============================================================
+// เบราว์เซอร์แก้รหัสของบัญชีคนอื่นไม่ได้เลย updateUser() แก้ได้เฉพาะบัญชีที่ล็อกอินอยู่
+// ส่วน auth.admin.updateUserById() ต้องใช้ service_role ซึ่งห้ามอยู่ในหน้าเว็บ
+// ที่ผ่านมาจึงใช้ signUp() ซึ่งได้ผลเฉพาะบัญชีที่ยังไม่มี พอพนักงานมีบัญชีแล้วลืมรหัส
+// แอดมินต้องเข้าไปลบบัญชีใน Dashboard ก่อนทุกครั้ง (19 ต.ค. 2569)
+//
+// ส่งไปเฉพาะรหัสที่ผ่านสูตร deriveAuthPassword แล้ว รหัสจริงไม่เคยออกจากเบราว์เซอร์
+// ถ้ายังไม่ได้ติดตั้งฟังก์ชัน จะคืน notDeployed เพื่อให้ผู้เรียกถอยไปใช้วิธีเดิม
+// ติดตั้ง: supabase/functions/README.md
+async function adminSetAuthPassword(empId, plainPassword) {
+ if (!cloudSync || !supa || typeof SUPABASE_URL === 'undefined' || !SUPABASE_URL) {
+  return { ok: false, reason: 'no-cloud' };
+ }
+ try {
+  const { data: sess } = await supa.auth.getSession();
+  const token = sess && sess.session && sess.session.access_token;
+  if (!token) return { ok: false, reason: 'no-session' };   // แอดมินล็อกอินด้วยทางเดิม
+  const pw = await deriveAuthPassword(empId, plainPassword);
+  const res = await fetch(SUPABASE_URL + '/functions/v1/admin-reset-password', {
+   method: 'POST',
+   headers: {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + token,
+    'apikey': SUPABASE_ANON_KEY
+   },
+   body: JSON.stringify({ empId: empId, password: pw })
+  });
+  if (res.status === 404) return { ok: false, notDeployed: true, reason: 'ยังไม่ได้ติดตั้ง Edge Function' };
+  const out = await res.json().catch(function () { return {}; });
+  if (!res.ok || !out.ok) return { ok: false, reason: (out && out.error) || ('HTTP ' + res.status) };
+  return { ok: true, mode: out.mode };
+ } catch (e) {
+  // ฟังก์ชันไม่มีอยู่จริงหรือเครือข่ายล่ม → ให้ผู้เรียกถอยไปทางเดิม ไม่ใช่ล้มทั้งงาน
+  return { ok: false, notDeployed: true, reason: e.message };
+ }
 }
 
 // สร้างบัญชี Auth ให้พนักงานด้วยรหัสที่แอดมินเพิ่งตั้ง
@@ -8257,7 +8296,11 @@ async function resetPassword(id) {
  toast(`รีเซ็ตรหัสผ่านของ ${esc(emp.firstName)} เป็น "${newPass}" (จะต้องเปลี่ยนตอน Login ครั้งถัดไป)`);
 
  // v1.6.21: สร้าง/ตรวจบัญชี Supabase Auth ให้ด้วย ไม่งั้นการรีเซ็ตจะกู้การเข้าถึงไม่ได้จริงหลัง step 6
- const r = await provisionAuthForEmployee(id, newPass);
+ // v1.6.29: ลองผ่าน Edge Function ก่อน — ทางเดียวที่แก้รหัสของบัญชีที่มีอยู่แล้วได้
+ let r = await adminSetAuthPassword(id, newPass);
+ if (!r.ok && (r.notDeployed || r.reason === 'no-session' || r.reason === 'no-cloud')) {
+  r = await provisionAuthForEmployee(id, newPass);       // ยังไม่ได้ติดตั้ง → วิธีเดิม
+ }
  if (r.ok) {
   recordAuthProvisioned(id, 'admin-reset');
   auditLog('auth-provision', 'user', id, `แอดมินรีเซ็ตรหัสผ่าน → บัญชี Auth ${r.mode}`);

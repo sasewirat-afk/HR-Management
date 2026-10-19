@@ -937,7 +937,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.30';
+const APP_VERSION = '1.6.31';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -2630,7 +2630,8 @@ function seedData() {
   { id: 'return', label: 'คืนอุปกรณ์' },
   { id: 'close', label: 'ปิดบัญชีระบบ / AD' },
   { id: 'exit', label: 'Exit Interview' },
-  { id: 'clear', label: 'เคลียร์ค่าใช้จ่าย + ออกหนังสือรับรอง' }
+  { id: 'clear', label: 'เคลียร์ค่าใช้จ่าย + ออกหนังสือรับรอง' },
+  { id: 'authdel', label: 'ลบบัญชีเข้าระบบ (Supabase Auth)' }
  ]
  });
  DB.save('initialized', true);
@@ -14735,8 +14736,29 @@ function exportAuditCSV() {
 // ============================================================
 // ONBOARDING / OFFBOARDING (Admin)
 // ============================================================
+// v1.6.31: เพิ่มขั้น 'ลบบัญชีเข้าระบบ' ให้ระบบที่ติดตั้งไปแล้ว
+// 19 ต.ค. 2569 เจอบัญชี Auth ของพนักงานที่ลาออกค้างอยู่ 4 ใบ ย้อนไปถึงปีก่อน
+// ปิด active ในแอปไม่ได้ลบบัญชีฝั่ง Auth ให้ คนที่ออกไปแล้วจึงยังดึงข้อมูลตรงจากฐานได้
+// (ตอนนี้ policy กันไว้อีกชั้นแล้ว แต่บัญชีที่ไม่ใช้ไม่ควรค้างอยู่ตั้งแต่แรก)
+//
+// เขียนครั้งเดียว มีธงกำกับ ถ้าแอดมินลบขั้นนี้ทิ้งภายหลังจะไม่ถูกใส่กลับ
+function ensureOffboardAuthStep() {
+ try {
+  const s = DB.load('settings');
+  if (!s || s._offboardAuthStepAdded) return;
+  const list = Array.isArray(s.offboardingChecklist) ? s.offboardingChecklist : [];
+  if (!list.some(c => c && c.id === 'authdel')) {
+   list.push({ id: 'authdel', label: 'ลบบัญชีเข้าระบบ (Supabase Auth)' });
+   s.offboardingChecklist = list;
+  }
+  s._offboardAuthStepAdded = true;
+  DB.save('settings', s);
+ } catch (e) { console.warn('[v1.6.31] เพิ่มขั้นลบบัญชีไม่สำเร็จ:', e.message); }
+}
+
 let _onbTab = 'on';
 function renderOnboarding() {
+ ensureOffboardAuthStep();                       // v1.6.31
  const settings = DB.load('settings');
  const emps = DB.load('employees');
  const tasks = DB.load('onboardingTasks', []);
@@ -14777,11 +14799,15 @@ function renderOnboarding() {
       ${checklist.map((c, i) => {
        const t = empTasks.find(x => x.taskId === c.id);
        const isDone = t?.done;
+       // v1.6.31: ขั้นลบบัญชีต้องรู้ว่าลบอีเมลไหน ไม่งั้นต้องไปเปิดหาเอง
+       const _sub = (c.id === 'authdel' && !isDone)
+        ? 'Supabase → Authentication → Users → ' + esc(String(emp.id).toLowerCase()) + '@hr.crochet.local'
+        : (isDone ? 'เสร็จแล้ว' : 'รอดำเนินการ');
        return `<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--gray-100);cursor:pointer;" onclick="toggleOnbTask('${emp.id}','${c.id}','${_onbTab}')">
         <div style="width:24px;height:24px;border-radius:50%;background:${isDone?'var(--success)':'var(--gray-200)'};color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;">${isDone?'✓':i+1}</div>
         <div style="flex:1;">
          <div style="font-weight:600;font-size:13px;text-decoration:${isDone?'line-through':'none'};color:${isDone?'var(--gray-500)':'inherit'};">${c.label}</div>
-         <div class="text-sm">${isDone ? 'เสร็จแล้ว' : 'รอดำเนินการ'}</div>
+         <div class="text-sm">${_sub}</div>
         </div>
        </div>`;
       }).join('')}

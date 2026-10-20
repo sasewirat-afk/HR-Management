@@ -798,21 +798,39 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  font-size: 12.5px;
  white-space: nowrap;
  }
- /* Action button column — always visible by sticking to right edge */
- .card-body table td:last-child,
- .card-body table th:last-child {
+ /* v1.6.41: เลิกตรึงคอลัมน์สุดท้ายไว้ขวา
+  *
+  * กฎเดิมตรึง td:last-child ของ *ทุกตาราง* โดยสมมติว่าคอลัมน์สุดท้ายคือปุ่มเสมอ
+  * ซึ่งไม่จริง: หน้า Audit Log คอลัมน์สุดท้ายคือ 'รายละเอียด' ที่เป็นข้อความยาว
+  * และพื้นหลังที่ใช้คือ --glass-bg = ขาวโปร่ง 70% ข้อความที่เลื่อนอยู่ข้างใต้จึง
+  * ทะลุขึ้นมาซ้อนกับคอลัมน์ที่ตรึงไว้ อ่านไม่ออกทั้งคู่
+  *
+  * เห็นจากเครื่องจริง 20 ต.ค. 2569 สี่หน้า: Audit Log · คลังเครื่องเขียน ·
+  * สลิปเงินเดือน · จัดการพนักงาน
+  *
+  * แทนด้วยการตรึงคอลัมน์แรก ซึ่งเป็นตัวบอกว่าแถวนี้คือใครหรืออะไร
+  * เลื่อนไปทางขวาแล้วยังรู้ว่ากำลังดูแถวไหน ซึ่งมีค่ากว่าการเห็นปุ่มตลอดเวลา
+  * และใช้พื้นหลังทึบ ไม่ใช่กระจกโปร่ง */
+ .card-body table td:first-child,
+ .card-body table th:first-child {
  position: sticky;
- right: 0;
- background: var(--glass-bg, #fff);
- box-shadow: -4px 0 6px rgba(30,58,138,0.05);
+ left: 0;
+ background: #fff;
+ box-shadow: 4px 0 6px rgba(30,58,138,0.06);
  z-index: 2;
  }
- /* Visual hint: subtle gradient on right edge of card to suggest scrollability */
- .card-body::after {
- content: '';
- position: sticky;
- right: 0;
- pointer-events: none;
+ .card-body table th:first-child { background: var(--gray-100); }
+
+ /* v1.6.41: เงาที่ขอบบอกว่ายังมีคอลัมน์ต่อไปทางขวา
+  * ปุ่มจัดการอยู่ท้ายตาราง ถ้าไม่มีสัญญาณอะไรเลย คนจะคิดว่าตารางจบแค่ที่เห็น
+  * เทคนิค background-attachment: local/scroll ทำให้เงาหายเองเมื่อเลื่อนสุดแล้ว
+  * :has() ไม่รองรับในเบราว์เซอร์เก่า ซึ่งกรณีนั้นจะไม่มีเงา ไม่ใช่หน้าพัง */
+ .card-body:has(table) {
+  background:
+   linear-gradient(to right, #fff 30%, rgba(255,255,255,0)) left / 28px 100% no-repeat local,
+   linear-gradient(to left, #fff 30%, rgba(255,255,255,0)) right / 28px 100% no-repeat local,
+   radial-gradient(farthest-side at 0 50%, rgba(30,58,138,0.16), transparent) left / 14px 100% no-repeat scroll,
+   radial-gradient(farthest-side at 100% 50%, rgba(30,58,138,0.16), transparent) right / 14px 100% no-repeat scroll;
  }
  /* Modal full-screen on portrait
   * v1.6.39: ถอด .modal-content ออก — showModal() ไม่เคยสร้าง element ชื่อนี้
@@ -1146,7 +1164,7 @@ th,
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.40';
+const APP_VERSION = '1.6.41';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again

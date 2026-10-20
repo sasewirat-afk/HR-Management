@@ -1075,11 +1075,15 @@ th,
  <div id="loginAlert"></div>
  <form id="loginForm">
  <div class="form-group">
- <label>รหัสพนักงาน</label>
- <input type="text" id="loginEmpId" name="username" autocomplete="username" inputmode="numeric" placeholder="690105007" required>
+ <label for="loginEmpId">รหัสพนักงาน</label>
+ <!-- v1.6.42: ห้ามใส่ inputmode="numeric" ที่ช่องนี้
+      v1.6.40 ใส่ไว้เพราะรหัสพนักงานส่วนใหญ่เป็นตัวเลข แต่บัญชีผู้ดูแลระบบคือ
+      ADMIN001 ซึ่งมีตัวอักษร พอมือถือขึ้นแป้นตัวเลขอย่างเดียว แอดมินจึงพิมพ์
+      รหัสตัวเองไม่ได้เลย — รหัสพนักงานเป็นข้อความ ไม่ใช่ตัวเลข -->
+ <input type="text" id="loginEmpId" name="username" autocomplete="username" autocapitalize="characters" spellcheck="false" placeholder="รหัสพนักงาน" required>
  </div>
  <div class="form-group">
- <label>รหัสผ่าน</label>
+ <label for="loginPassword">รหัสผ่าน</label>
  <input type="password" id="loginPassword" name="password" autocomplete="current-password" placeholder="รหัสผ่าน" required>
  </div>
  <!-- v1.6.20: ซ่อนไว้จนกว่าจะเปิดใช้ระบบใบขอซื้อในหน้าตั้งค่า -->
@@ -1164,7 +1168,7 @@ th,
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.41';
+const APP_VERSION = '1.6.42';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again

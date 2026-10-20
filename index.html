@@ -816,6 +816,54 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  .tabs::-webkit-scrollbar { height: 4px; }
  .tab { flex-shrink: 0; white-space: nowrap; }
 
+}
+
+/* ============================================================
+   v1.6.35: แถบเลือกทั้งหมดในหน้าอนุมัติ
+   ============================================================
+   เดิมใช้ position:sticky;top:0 ซึ่งไม่เคยทำงานเลย และวัดยืนยันแล้ว:
+   หลังเลื่อนลง 800px แถบอยู่ที่ top:-645px คือหลุดจอไปแล้ว
+
+   สาเหตุ: .main / #app / body ตั้ง overflow-y:auto ไว้ทั้งสามชั้น
+   แต่ไม่มีชั้นไหนเลื่อนจริง (ความสูงเท่ากับเนื้อหา) การเลื่อนเกิดที่ window
+   ส่วน sticky ผูกกับตัวครอบที่เลื่อนได้ตัวใกล้สุด = .main ซึ่งไม่เคยเลื่อน
+   จึงไม่มีวันถูกกระตุ้น
+
+   ทางแก้ที่ถูกต้องระยะยาวคือทำให้ .main เป็นตัวเลื่อนจริง แต่นั่นกระทบ
+   ทุกหน้าในแอป จึงใช้ position:fixed ที่ขอบล่างแทน — ได้ผลแน่นอนโดยไม่
+   แตะโครงหน้า และอยู่ในระยะนิ้วโป้งบนมือถือด้วย
+
+   หัวตาราง (thead) ตายด้วยเหตุผลเดียวกัน และแก้ด้วย fixed ไม่ได้
+   จึงยังค้างไว้ ดู docs/ux-remediation-plan.md ขั้นที่ 6 */
+.apv-bulk-bar {
+ position: fixed;
+ left: 284px;            /* ความกว้าง sidebar 260px + ระยะห่าง 24px */
+ right: 24px;
+ bottom: 24px;
+ z-index: 1200;
+ background: #fff;
+ padding: 12px 16px;
+ border: 1px solid var(--gray-300);
+ border-radius: 12px;
+ box-shadow: 0 -4px 16px rgba(30,58,138,0.18);
+ display: flex;
+ align-items: center;
+ gap: 12px;
+ flex-wrap: wrap;
+}
+
+/* กันไม่ให้แถบลอยทับรายการสุดท้าย */
+#approvalList { padding-bottom: 96px; }
+
+@media (max-width: 768px) {
+ .apv-bulk-bar {
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  opacity: 1 !important;
+ }
+}
+@media (max-width: 768px) {
  /* v1.4.16: collapse 2-column inline grids to 1-column on mobile.
   * Attribute selector handles places using inline style="grid-template-columns:1fr 1fr" */
  [style*="grid-template-columns:1fr 1fr"],
@@ -937,7 +985,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.34';
+const APP_VERSION = '1.6.35';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -7691,29 +7739,130 @@ function _updateApprovalBulkBar() {
  if (bar) bar.style.opacity = count === 0 ? '0.65' : '1';
 }
 
+// ============================================================
+// v1.6.35: ตรวจสิทธิ์คงเหลือตอนอนุมัติ — ตรรกะชุดเดียวที่ใช้ร่วมกันทุกทาง
+// ============================================================
+// เดิมด่านนี้มีเฉพาะใน approveRequest() ส่วน bulkApproveApprovals() ไม่มีเลย
+// ทางที่เร็วกว่าจึงเป็นทางที่ไม่มีการ์ด: กดอนุมัติ 20 ใบรวดเดียวผ่านได้ทั้งที่เกินสิทธิ์
+// และไม่เหลือร่องรอยใน audit log (พบจาก critique 20 ต.ค. 2569)
+//
+// แก้ด้วยการแยกเป็นฟังก์ชันเดียว ไม่ใช่คัดลอกเงื่อนไขไปวางอีกชุด
+// เพราะต้นเหตุของบั๊กนี้คือการมีตรรกะสองชุดที่ต้องจำว่าต้องแก้พร้อมกัน
+//
+// คืน null เมื่อไม่ใช่คำขอลา หรือประเภทลาที่ไม่มีโควตา — ผู้เรียกไม่ต้องรู้รายละเอียด
+function quotaCheckForApproval(type, r) {
+ if (type !== 'leave' || !r) return null;
+ const _bal = getLeaveBalance(r.employeeId);
+ const _map = { personal:'personal', vacation:'vacation', 'sick-with-cert':'sick',
+   'sick-without-cert':'sick', maternity:'maternity', ordination:'ordination', 'comp-off':'compOff' };
+ const _slot = _map[r.type] && _bal[_map[r.type]];
+ if (!_slot) return null;
+ const _emp = typeof getEmployee === 'function' ? getEmployee(r.employeeId) : null;
+ const days = Number(r.days) || 0;
+ return {
+  over: days > _slot.remaining,
+  remaining: _slot.remaining,
+  excess: Math.round((days - _slot.remaining) * 100) / 100,
+  days,
+  name: _emp ? `${_emp.firstName} ${_emp.lastName}` : r.employeeId,
+  typeName: getLeaveTypeName(r.type)
+ };
+}
+
+// ข้อความ audit ต้องเหมือนกันทุกทาง ไม่งั้นรายงานย้อนหลังจะนับไม่ตรง
+function auditOverQuotaApproval(r, chk) {
+ auditLog('leave-approve-over-quota', 'leave', r.id,
+  `${chk.name} ${chk.typeName} ${chk.days} วัน · คงเหลือ ${chk.remaining} · เกิน ${chk.excess.toFixed(1)} วัน · อนุมัติโดย ${currentUser?.id}`);
+}
+
+// สรุปสิ่งที่กำลังจะอนุมัติ ก่อนถามยืนยัน — แยกจากการแสดงผลเพื่อให้ทดสอบได้
+// คืน: eligible (ใบที่ยัง pending) · skipped (ใบที่สถานะเปลี่ยนไปแล้ว) ·
+//      over (ใบที่อนุมัติแล้วจะเกินสิทธิ์) · counts (จำนวนแยกตามประเภท)
+function bulkApprovalPlan(type, ids, reqs) {
+ const eligible = [], skipped = [], over = [], counts = {};
+ (ids || []).forEach(id => {
+  const r = (reqs || []).find(x => x && x.id === id);
+  if (!r || r.status !== 'pending') { skipped.push(id); return; }
+  eligible.push(r);
+  const label = type === 'leave' ? getLeaveTypeName(r.type) : type;
+  counts[label] = (counts[label] || 0) + 1;
+  const chk = quotaCheckForApproval(type, r);
+  if (chk && chk.over) over.push({ id: r.id, chk });
+ });
+ return { eligible, skipped, over, counts };
+}
+
 function bulkApproveApprovals(approve) {
  const count = _selectedApprovalIds.size;
  if (count === 0) return;
- const action = approve ? 'อนุมัติ' : 'ปฏิเสธ';
  let note = '';
  if (!approve) {
- note = prompt(`เหตุผลที่ปฏิเสธ ${count} รายการ:`) || '';
- if (!note) return;
- } else {
- if (!confirm(`ยืนยัน${action} ${count} รายการ?`)) return;
+  note = prompt(`เหตุผลที่ปฏิเสธ ${count} รายการ:`) || '';
+  if (!note) return;
+  applyBulkApproval(approvalTab, [..._selectedApprovalIds], false, note);
+  return;
  }
 
- const type = approvalTab;
+ // v1.6.35: แทนคำถามใช่/ไม่ใช่ด้วยใบสรุปที่บอกว่ากำลังอนุมัติอะไรอยู่
+ // และแยกใบที่เกินสิทธิ์ออกมาให้ตัดสินใจทีละใบ แทนที่จะผ่านไปพร้อมกันเงียบ ๆ
+ const keyMapPlan = {leave: 'leaveRequests', ot: 'otRequests', 'comp-off': 'compOffRequests', 'field-work': 'fieldWorkRequests', 'time-cert': 'timeCertRequests'};
+ const planKey = keyMapPlan[approvalTab];
+ if (!planKey) return;
+ const plan = bulkApprovalPlan(approvalTab, [..._selectedApprovalIds], DB.load(planKey));
+ if (plan.eligible.length === 0) { toast('ไม่มีรายการที่ยังรออนุมัติในชุดที่เลือก', 'error'); return; }
+
+ const _okCount = plan.eligible.length - plan.over.length;
+ const _summary = Object.entries(plan.counts).map(([k, n]) => `${esc(k)} ${n}`).join(' · ');
+ const _overRows = plan.over.map(o => `
+  <label style="display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid var(--danger);border-radius:8px;margin-bottom:8px;cursor:pointer;">
+   <input type="checkbox" class="bulk-over" value="${esc(o.id)}" style="margin-top:3px;width:18px;height:18px;flex:none;">
+   <span style="font-size:13px;"><strong>${esc(o.chk.name)}</strong> · ${esc(o.chk.typeName)} ${o.chk.days} วัน<br>
+   <span style="color:var(--danger);">คงเหลือ ${o.chk.remaining} วัน · เกินไป ${o.chk.excess.toFixed(1)} วัน</span></span>
+  </label>`).join('');
+
+ showModal('ยืนยันอนุมัติ ' + plan.eligible.length + ' รายการ', `
+  <div style="font-size:14px;margin-bottom:12px;">${_summary}</div>
+  ${plan.skipped.length ? `<div class="text-sm" style="margin-bottom:10px;">ข้าม ${plan.skipped.length} รายการ (สถานะเปลี่ยนไปแล้ว)</div>` : ''}
+  ${plan.over.length ? `
+   <div style="font-weight:700;color:var(--danger);margin-bottom:8px;">⚠ เกินสิทธิ์ ${plan.over.length} รายการ</div>
+   <div class="text-sm" style="margin-bottom:10px;">ไม่ติ๊ก = ไม่อนุมัติใบนั้น · ติ๊ก = อนุมัติทั้งที่เกินสิทธิ์ และจะถูกบันทึกไว้ใน Audit Log</div>
+   ${_overRows}` : '<div class="text-sm">ทุกรายการอยู่ในสิทธิ์คงเหลือ</div>'}
+ `, `
+  <button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button>
+  <button class="btn btn-primary" onclick="_bulkApproveCommit()">อนุมัติ ${_okCount} รายการที่อยู่ในสิทธิ์</button>
+ `);
+}
+
+// อ่านผลการติ๊กจากใบสรุป แล้วลงมืออนุมัติเฉพาะใบที่ตกลงแล้ว
+function _bulkApproveCommit() {
+ const overPicked = [...document.querySelectorAll('.bulk-over:checked')].map(c => c.value);
+ const overAll = [...document.querySelectorAll('.bulk-over')].map(c => c.value);
+ const dropped = overAll.filter(id => !overPicked.includes(id));
+ const ids = [..._selectedApprovalIds].filter(id => !dropped.includes(id));
+ closeModal();
+ if (ids.length === 0) { toast('ไม่ได้อนุมัติรายการใด', 'info'); return; }
+ applyBulkApproval(approvalTab, ids, true, '');
+}
+
+// การเขียนจริงทั้งหมดอยู่ที่นี่ที่เดียว — เรียกได้ทั้งจากใบสรุปและจากทางปฏิเสธ
+function applyBulkApproval(type, idList, approve, note) {
+ const count = idList.length;
+ const action = approve ? 'อนุมัติ' : 'ปฏิเสธ';
  const keyMap = {leave: 'leaveRequests', ot: 'otRequests', 'comp-off': 'compOffRequests', 'field-work': 'fieldWorkRequests', 'time-cert': 'timeCertRequests'};
  const key = keyMap[type];
  if (!key) return;
  const reqs = DB.load(key);
- const ids = [...(_selectedApprovalIds)];
+ const ids = idList;
  let successCount = 0;
  const compOffAdditions = [];
  ids.forEach(id => {
  const r = reqs.find(x => x.id === id);
  if (!r || r.status !== 'pending') return;
+ // v1.6.35: ด่านเดียวกับทางอนุมัติทีละใบ — ถึงจะถูกเรียกจากที่อื่นในอนาคตก็ยังลง audit
+ if (approve) {
+  const _chk = quotaCheckForApproval(type, r);
+  if (_chk && _chk.over) auditOverQuotaApproval(r, _chk);
+ }
  r.status = approve ? 'approved' : 'rejected';
  r.approverNote = note;
  r.approvedDate = today();
@@ -7785,7 +7934,7 @@ function renderApprovals() {
  <div class="tab ${approvalTab==='time-cert'?'active':''}" onclick="setApprovalTab('time-cert')"> รับรองเวลา (${tcs.length})</div>
  </div>
  <!-- v1.4.63: Sticky bulk action bar (Q6.1 A + Q6.2 B always visible + Q8 A bulk approve) -->
- <div id="apvBulkBar" style="position:sticky;top:0;z-index:10;background:#fff;padding:12px 16px;margin-bottom:12px;border:1px solid var(--gray-300);border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,0.06);display:flex;align-items:center;gap:12px;flex-wrap:wrap;opacity:0.65;">
+ <div id="apvBulkBar" class="apv-bulk-bar" style="opacity:0.65;">
  <span id="apvBulkCount" style="font-weight:600;color:var(--gray-700);">ยังไม่ได้เลือกรายการ</span>
  <div style="flex:1;"></div>
  <button id="apvBulkApprove" class="btn btn-success" style="padding:8px 18px;font-weight:600;" onclick="bulkApproveApprovals(true)" disabled>✅ อนุมัติทั้งหมด</button>
@@ -7926,16 +8075,13 @@ function approveRequest(type, id, approve) {
  // actually holds. Warn rather than hard-block: the approver may legitimately want to
  // grant it, but they must see that it goes over quota.
  if (type === 'leave' && approve) {
- const _bal = getLeaveBalance(r.employeeId);
- const _map = { personal:'personal', vacation:'vacation', 'sick-with-cert':'sick',
-   'sick-without-cert':'sick', maternity:'maternity', ordination:'ordination', 'comp-off':'compOff' };
- const _slot = _map[r.type] && _bal[_map[r.type]];
- if (_slot && r.days > _slot.remaining) {
-  const _emp = getEmployee(r.employeeId);
-  const _name = _emp ? `${_emp.firstName} ${_emp.lastName}` : r.employeeId;
+ // v1.6.35: ใช้ตรรกะชุดเดียวกับทางอนุมัติกลุ่ม
+ const _chk = quotaCheckForApproval(type, r);
+ if (_chk && _chk.over) {
+  const _name = _chk.name;
+  const _slot = { remaining: _chk.remaining };
   if (!confirm(`⚠️ อนุมัติแล้วจะเกินสิทธิ์\n\nพนักงาน: ${_name}\nประเภท: ${getLeaveTypeName(r.type)}\nขอลา: ${r.days} วัน\nคงเหลือจริง: ${_slot.remaining} วัน\nจะเกินไป: ${(r.days - _slot.remaining).toFixed(1)} วัน\n\nยืนยันอนุมัติทั้งที่เกินสิทธิ์?`)) return;
-  auditLog('leave-approve-over-quota', 'leave', r.id,
-   `${_name} ${getLeaveTypeName(r.type)} ${r.days} วัน · คงเหลือ ${_slot.remaining} · เกิน ${(r.days - _slot.remaining).toFixed(1)} วัน · อนุมัติโดย ${currentUser?.id}`);
+  auditOverQuotaApproval(r, _chk);
  }
  }
 

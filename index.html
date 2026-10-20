@@ -840,6 +840,23 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 }
 
 /* ============================================================
+   v1.6.40: ช่องกรอกต้องไม่ต่ำกว่า 16px
+   ============================================================
+   iOS Safari ซูมหน้าจอเองทุกครั้งที่โฟกัสช่องที่ตัวอักษรเล็กกว่า 16px
+   วัดที่หน้าล็อกอินก่อนแก้: ช่องรหัสพนักงานและรหัสผ่านเป็น 14px
+   พนักงานจึงเจอหน้าจอกระโดดซูมทุกครั้งที่จะพิมพ์รหัส แล้วต้องซูมกลับเอง */
+.form-group input,
+.form-group select,
+.form-group textarea,
+#loginEmpId,
+#loginPassword {
+ font-size: 16px;
+}
+
+/* แท็บที่ไม่มีรายการ ไม่ควรเด่นเท่าแท็บที่มี 20 รายการรออยู่ */
+.tab.is-empty { opacity: 0.55; }
+
+/* ============================================================
    v1.6.39: กริดที่ย่อหน้าจอได้จริง
    ============================================================
    เดิมกริดเหล่านี้เขียนเป็น inline style แล้วอาศัยกฎที่จับคู่จาก *ข้อความ*
@@ -1041,11 +1058,11 @@ th,
  <form id="loginForm">
  <div class="form-group">
  <label>รหัสพนักงาน</label>
- <input type="text" id="loginEmpId" placeholder="EMP001" required>
+ <input type="text" id="loginEmpId" name="username" autocomplete="username" inputmode="numeric" placeholder="690105007" required>
  </div>
  <div class="form-group">
  <label>รหัสผ่าน</label>
- <input type="password" id="loginPassword" placeholder="••••••" required>
+ <input type="password" id="loginPassword" name="password" autocomplete="current-password" placeholder="รหัสผ่าน" required>
  </div>
  <!-- v1.6.20: ซ่อนไว้จนกว่าจะเปิดใช้ระบบใบขอซื้อในหน้าตั้งค่า -->
  <div class="form-group hidden" id="loginTargetGroup">
@@ -1129,7 +1146,7 @@ th,
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.39';
+const APP_VERSION = '1.6.40';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -4294,6 +4311,54 @@ function getPendingApprovals(managerId) {
 // ============================================================
 // MODAL
 // ============================================================
+// ============================================================
+// v1.6.40: ถามข้อความด้วย modal แทน prompt()
+// ============================================================
+// prompt() ของเบราว์เซอร์: ตัดข้อความยาวบน iOS · คัดลอกไม่ได้ · ตรวจค่าไม่ได้
+// · หน้าตาไม่เหมือนส่วนอื่นของแอป · และกดพลาดแล้วงานหายทันทีโดยไม่มีทางแก้
+// เหลือใช้อยู่ 3 จุด ซึ่งล้วนเป็นงานที่ย้อนกลับไม่ได้: เหตุผลปฏิเสธคำขอ (ทีละใบ
+// และแบบกลุ่ม) และการตั้งกะทั้งทีมทั้งเดือน
+//
+// คืน Promise ที่ได้ข้อความ หรือ null เมื่อผู้ใช้ยกเลิก/กด Escape
+let _askTextResolve = null;
+function askText(opts) {
+ const o = opts || {};
+ return new Promise(resolve => {
+  _askTextResolve = resolve;
+  const field = o.multiline === false
+   ? `<input id="askTextInput" type="text" value="${esc(o.value || '')}" placeholder="${esc(o.placeholder || '')}">`
+   : `<textarea id="askTextInput" rows="3" placeholder="${esc(o.placeholder || '')}">${esc(o.value || '')}</textarea>`;
+  showModal(o.title || 'ระบุข้อความ', `
+   ${o.note ? `<div class="text-sm" style="margin-bottom:12px;">${o.note}</div>` : ''}
+   <div class="form-group">
+    <label for="askTextInput">${esc(o.label || '')}</label>
+    ${field}
+   </div>
+   <div id="askTextError"></div>
+  `, `
+   <button class="btn btn-secondary" onclick="_askTextCancel()">ยกเลิก</button>
+   <button class="btn btn-primary" onclick="_askTextSubmit(${o.required === false ? 'false' : 'true'})">${esc(o.confirmText || 'ยืนยัน')}</button>
+  `);
+  setTimeout(() => { const el = document.getElementById('askTextInput'); if (el) el.focus(); }, 60);
+ });
+}
+
+function _askTextSubmit(required) {
+ const el = document.getElementById('askTextInput');
+ const val = el ? el.value.trim() : '';
+ if (required && !val) {
+  const box = document.getElementById('askTextError');
+  if (box) box.innerHTML = '<div class="alert alert-error" style="margin-top:4px;">กรุณาระบุข้อความก่อน</div>';
+  if (el) el.focus();
+  return;
+ }
+ const r = _askTextResolve; _askTextResolve = null;
+ closeModal();
+ if (r) r(val);
+}
+
+function _askTextCancel() { closeModal(); }   // closeModal คืนค่า null ให้เอง
+
 // v1.6.37: ปิดด้วย Escape ได้ และล็อกการเลื่อนพื้นหลังระหว่างเปิด
 // เดิมไม่มีทั้งสองอย่าง — บนมือถือเลื่อนทะลุไปหน้าหลังระหว่างกรอกฟอร์ม
 // และคนที่ใช้แป้นพิมพ์ออกจาก modal ไม่ได้ถ้าไม่เล็งปุ่ม × ด้วยเมาส์
@@ -4318,6 +4383,8 @@ function showModal(title, body, footer) {
 }
 
 function closeModal() {
+ // v1.6.40: ถ้ามี askText() ค้างอยู่ ต้องคืน null ไม่งั้นผู้เรียกรอตลอดไป
+ if (_askTextResolve) { const r = _askTextResolve; _askTextResolve = null; r(null); }
  document.removeEventListener('keydown', _modalEscHandler);   // v1.6.37
  document.body.style.overflow = '';
  document.getElementById('modalContainer').innerHTML = '';
@@ -4625,7 +4692,7 @@ function renderEmployeeDashboard() {
  `).join('')}
  </tbody>
  </table>
- ` : '<div class="empty-state"><div class="icon"></div>ยังไม่มีคำขอ</div>'}
+ ` : '<div class="empty-state">ยังไม่มีคำขอ</div>'}
  </div>
  </div>
  `;
@@ -4734,7 +4801,7 @@ function renderMyLeaves() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> ขอลา</h1>
+ <h1>ขอลา</h1>
  <button class="btn btn-primary" onclick="showLeaveForm()">+ ขอลาใหม่</button>
  </div>
 
@@ -4763,7 +4830,7 @@ function renderMyLeaves() {
  `).join('')}
  </tbody>
  </table>
- ` : '<div class="empty-state"><div class="icon"></div>ยังไม่มีคำขอลา</div>'}
+ ` : '<div class="empty-state">ยังไม่มีคำขอลา</div>'}
  </div>
  </div>
  `;
@@ -5269,7 +5336,7 @@ function renderMyOT() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> ขอทำ OT</h1>
+ <h1>ขอทำ OT</h1>
  <button class="btn btn-primary" onclick="showOTForm()">+ ขอ OT ใหม่</button>
  </div>
  <div class="card" style="margin-bottom:12px;">
@@ -5309,7 +5376,7 @@ function renderMyOT() {
  `).join('')}
  </tbody>
  </table>
- ` : '<div class="empty-state"><div class="icon"></div>ยังไม่มีคำขอ OT</div>'}
+ ` : '<div class="empty-state">ยังไม่มีคำขอ OT</div>'}
  </div>
  </div>
  `;
@@ -5660,7 +5727,7 @@ function renderMyCompOff() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> ขอสะสมวันหยุด</h1>
+ <h1>ขอสะสมวันหยุด</h1>
  <button class="btn btn-primary" onclick="showCompOffForm()">+ ขอสะสมใหม่</button>
  </div>
 
@@ -5687,7 +5754,7 @@ function renderMyCompOff() {
  `).join('')}
  </tbody>
  </table>
- ` : '<div class="empty-state"><div class="icon"></div>ยังไม่มีคำขอ</div>'}
+ ` : '<div class="empty-state">ยังไม่มีคำขอ</div>'}
  </div>
  </div>
 
@@ -5772,7 +5839,7 @@ function renderMyFieldWork() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> ขอปฏิบัติงานนอกสถานที่</h1>
+ <h1>ขอปฏิบัติงานนอกสถานที่</h1>
  <button class="btn btn-primary" onclick="showFieldWorkForm()">+ ขอใหม่</button>
  </div>
  <div class="card">
@@ -5792,7 +5859,7 @@ function renderMyFieldWork() {
  `).join('')}
  </tbody>
  </table>
- ` : '<div class="empty-state"><div class="icon"></div>ยังไม่มีคำขอ</div>'}
+ ` : '<div class="empty-state">ยังไม่มีคำขอ</div>'}
  </div>
  </div>
  `;
@@ -6015,7 +6082,7 @@ function _calCellContent(st) {
 function renderMyCalendar() {
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> ปฏิทินของฉัน</h1>
+ <h1>ปฏิทินของฉัน</h1>
  </div>
  <div class="card">
  <div class="card-body">
@@ -6239,7 +6306,7 @@ function renderOrgChart() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> ผังองค์กร</h1>
+ <h1>ผังองค์กร</h1>
  <div class="text-sm">${reports.length > 0 ? `${reports.length} คนใต้บังคับบัญชา` : 'ไม่มีลูกทีม'}</div>
  </div>
 
@@ -6252,7 +6319,7 @@ function renderOrgChart() {
  ` : ''}
 
  <div class="card">
- <div class="card-header"><h3> สายบังคับบัญชา</h3></div>
+ <div class="card-header"><h3>สายบังคับบัญชา</h3></div>
  <div class="card-body" style="padding:24px;background:#fafafa;">
  <div style="display:flex;flex-direction:column;align-items:center;gap:0;">
 
@@ -6275,7 +6342,7 @@ function renderOrgChart() {
 
  ${peers.length > 0 ? `
  <div class="card">
- <div class="card-header"><h3> เพื่อนร่วมสายบังคับบัญชาเดียวกัน (${peers.length} คน)</h3></div>
+ <div class="card-header"><h3>เพื่อนร่วมสายบังคับบัญชาเดียวกัน (${peers.length} คน)</h3></div>
  <div class="card-body">
  <div style="display:flex;flex-wrap:wrap;gap:12px;">
  ${peers.map(p => card(p, { peer: true })).join('')}
@@ -6286,7 +6353,7 @@ function renderOrgChart() {
 
  ${reports.length > 0 ? `
  <div class="card">
- <div class="card-header"><h3> รายชื่อลูกทีม (${reports.length} คน)</h3></div>
+ <div class="card-header"><h3>รายชื่อลูกทีม (${reports.length} คน)</h3></div>
  <div class="card-body" style="padding:0;">
  <table>
  <thead><tr><th>รหัส</th><th>ชื่อ-นามสกุล</th><th>เพศ</th><th>ตำแหน่ง</th><th>แผนก</th><th>วันเริ่มงาน</th></tr></thead>
@@ -6397,7 +6464,7 @@ function renderAdminOrgChart() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> ผังองค์กรทั้งระบบ</h1>
+ <h1>ผังองค์กรทั้งระบบ</h1>
  <div class="flex" style="gap:8px;">
  <button class="btn btn-success btn-sm" onclick="downloadOrgImage()"> ดาวน์โหลด PNG</button>
  <button class="btn btn-primary btn-sm" onclick="shareOrgImage()"> แชร์</button>
@@ -6437,7 +6504,7 @@ function renderAdminOrgChart() {
 
  ${deptList.length > 1 ? `
  <div class="card mb-3">
- <div class="card-header"><h3> จำนวนคนต่อแผนก</h3></div>
+ <div class="card-header"><h3>จำนวนคนต่อแผนก</h3></div>
  <div class="card-body" style="padding:14px;">
  <div style="display:flex;flex-wrap:wrap;gap:8px;">
  ${deptList.map(([d, n]) => `
@@ -6452,11 +6519,11 @@ function renderAdminOrgChart() {
 
  <div class="card" id="orgChartCard">
  <div class="card-header">
- <h3> แผนผังสายบังคับบัญชา</h3>
+ <h3>แผนผังสายบังคับบัญชา</h3>
  <small style="color:var(--gray-500);">คลิกที่ ▼/▶ เพื่อขยาย/ย่อ • คลิกที่การ์ดเพื่อดูรายละเอียด</small>
  </div>
  <div class="card-body" style="padding:24px;background:#fafafa;overflow:auto;">
- ${roots.length === 0 ? '<div class="empty-state"><div class="icon"></div>ไม่พบพนักงานตามเงื่อนไขที่เลือก</div>' : `
+ ${roots.length === 0 ? '<div class="empty-state">ไม่พบพนักงานตามเงื่อนไขที่เลือก</div>' : `
  <div class="org-tree" style="display:flex;flex-direction:column;gap:20px;align-items:center;min-width:max-content;">
  ${roots.map(r => renderOrgNode(r, 0)).join('')}
  </div>
@@ -6712,7 +6779,7 @@ function renderShiftSchedule() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> ตารางลงกะงาน</h1>
+ <h1>ตารางลงกะงาน</h1>
  <div class="flex" style="gap:8px;flex-wrap:wrap;">
  <input type="month" value="${_shiftMonth}" onchange="_shiftMonth=this.value; renderShiftSchedule()" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
  <input type="text" id="shiftSearchInput" placeholder="🔍 ค้นหาชื่อหรือรหัส..." oninput="filterShiftScheduleRows(this.value)" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;min-width:200px;" title="v1.4.58: ค้นหาแบบ contains (ชื่อ + รหัส) — highlight matches; ไม่ซ่อน rows อื่น">
@@ -6762,7 +6829,7 @@ function renderShiftSchedule() {
  </div>
 
  <div class="card" id="shiftCardForExport">
- <div class="card-header"><h3> ตารางกะเดือน ${monthName}</h3></div>
+ <div class="card-header"><h3>ตารางกะเดือน ${monthName}</h3></div>
  <div class="card-body" style="padding:0;">
  <div id="shiftScrollWrapper" style="overflow-x:auto;overflow-y:visible;max-width:100%;">
  <table id="shiftTable" style="border-collapse:separate;border-spacing:0;font-size:12px;width:max-content;min-width:100%;">
@@ -6840,7 +6907,7 @@ function renderShiftSchedule() {
  </div>
 
  <div class="card">
- <div class="card-header"><h3> การจัดการเร็ว (v1.5.0)</h3></div>
+ <div class="card-header"><h3>การจัดการเร็ว (v1.5.0)</h3></div>
  <div class="card-body">
  <div class="flex" style="gap:8px;flex-wrap:wrap;">
  <button class="btn btn-primary btn-sm" onclick="fillAllShifts()">📝 ตั้งกะทั้งทีมทั้งเดือน (พิมพ์ค่าเดียว)</button>
@@ -7285,7 +7352,8 @@ Semantic: MERGE — ช่องว่างใน Excel = "คงเดิม"
 }
 
 // v1.5.0 (ADR-0004, Q9.1 A): Adapt to numeric input — prompt for value, validate, apply.
-function fillAllShifts(rawInput) {
+// v1.6.40: ถามด้วย modal แทน prompt() - งานนี้เขียนทับกะทั้งทีมทั้งเดือน
+async function fillAllShifts(rawInput) {
  const role = currentUser.role;
  const me = currentUser;
  const emps = DB.load('employees').filter(e => e.active && e.countInAttendance !== false);
@@ -7296,8 +7364,15 @@ function fillAllShifts(rawInput) {
  // v1.5.0: if called without value (legacy), prompt for numeric input
  let type = rawInput;
  if (!type || type === 'W' || type === 'M' || type === 'A' || type === 'N') {
- const answer = prompt(`ตั้งกะทั้งทีมทั้งเดือน (${team.length} คน × ${daysInMonth} วัน)\n\nพิมพ์ค่า:\n· 9 = เข้า 09:00\n· 6.5 = เข้า 06:30\n· O = หยุด\n· (ว่าง = ยกเลิก)`);
- if (!answer || answer.trim() === '') return;
+ const answer = await askText({
+  title: 'ตั้งกะทั้งทีมทั้งเดือน',
+  note: `จะตั้งให้ <strong>${team.length} คน</strong> ตลอด <strong>${daysInMonth} วัน</strong> ของเดือนนี้ และข้อมูลกะเดิมจะถูกเขียนทับ`,
+  label: 'เวลาเข้างาน',
+  placeholder: '9 = เข้า 09:00 · 6.5 = เข้า 06:30 · O = หยุด',
+  multiline: false,
+  confirmText: 'ถัดไป'
+ });
+ if (!answer) return;
  type = answer.trim();
  }
  const parsed = parseShiftValue(type);
@@ -7976,11 +8051,17 @@ function bulkApprovalPlan(type, ids, reqs) {
 function bulkApproveApprovals(approve) {
  const count = _selectedApprovalIds.size;
  if (count === 0) return;
- let note = '';
  if (!approve) {
-  note = prompt(`เหตุผลที่ปฏิเสธ ${count} รายการ:`) || '';
-  if (!note) return;
-  applyBulkApproval(approvalTab, [..._selectedApprovalIds], false, note);
+  // v1.6.40: เหตุผลเดียวใช้กับทุกใบในชุด จึงต้องบอกให้ชัดว่ากำลังปฏิเสธกี่รายการ
+  askText({
+   title: `ปฏิเสธ ${count} รายการ`,
+   note: 'เหตุผลนี้จะถูกส่งให้พนักงานทุกคนในชุดที่เลือก',
+   label: 'เหตุผลที่ปฏิเสธ',
+   confirmText: `ปฏิเสธ ${count} รายการ`
+  }).then(note => {
+   if (!note) return;
+   applyBulkApproval(approvalTab, [..._selectedApprovalIds], false, note);
+  });
   return;
  }
 
@@ -8105,14 +8186,14 @@ function renderApprovals() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> รายการรออนุมัติ</h1>
+ <h1>รายการรออนุมัติ</h1>
  </div>
  <div class="tabs">
- <div class="tab ${approvalTab==='leave'?'active':''}" onclick="setApprovalTab('leave')"> ลา (${leaves.length})</div>
- <div class="tab ${approvalTab==='ot'?'active':''}" onclick="setApprovalTab('ot')"> OT (${ots.length})</div>
- <div class="tab ${approvalTab==='comp-off'?'active':''}" onclick="setApprovalTab('comp-off')"> สะสมวันหยุด (${cos.length})</div>
- <div class="tab ${approvalTab==='field-work'?'active':''}" onclick="setApprovalTab('field-work')"> งานนอกสถานที่ (${fws.length})</div>
- <div class="tab ${approvalTab==='time-cert'?'active':''}" onclick="setApprovalTab('time-cert')"> รับรองเวลา (${tcs.length})</div>
+ <div class="tab ${approvalTab==='leave'?'active':''}${leaves.length===0?' is-empty':''}" onclick="setApprovalTab('leave')"> ลา (${leaves.length})</div>
+ <div class="tab ${approvalTab==='ot'?'active':''}${ots.length===0?' is-empty':''}" onclick="setApprovalTab('ot')"> OT (${ots.length})</div>
+ <div class="tab ${approvalTab==='comp-off'?'active':''}${cos.length===0?' is-empty':''}" onclick="setApprovalTab('comp-off')"> สะสมวันหยุด (${cos.length})</div>
+ <div class="tab ${approvalTab==='field-work'?'active':''}${fws.length===0?' is-empty':''}" onclick="setApprovalTab('field-work')"> งานนอกสถานที่ (${fws.length})</div>
+ <div class="tab ${approvalTab==='time-cert'?'active':''}${tcs.length===0?' is-empty':''}" onclick="setApprovalTab('time-cert')"> รับรองเวลา (${tcs.length})</div>
  </div>
  <!-- v1.4.63: Sticky bulk action bar (Q6.1 A + Q6.2 B always visible + Q8 A bulk approve) -->
  <div id="apvBulkBar" class="apv-bulk-bar" style="opacity:0.65;">
@@ -8230,7 +8311,7 @@ function drawApprovalList() {
  <td style="max-width:200px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, " ") : ''}</td>
  <td>${_apvActionButtons('leave', r.id)}</td>
  </tr>`;
- }).join('')}</tbody></table></div></div>`) : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
+ }).join('')}</tbody></table></div></div>`) : '<div class="empty-state">ไม่มีคำขอรออนุมัติ</div>';
  }
 
  else if (approvalTab === 'ot') {
@@ -8263,7 +8344,7 @@ function drawApprovalList() {
  <td style="max-width:250px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, "📎 ") : ''}</td>
  <td>${_apvActionButtons('ot', r.id)}</td>
  </tr>`;
- }).join('')}</tbody></table></div></div>`) : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
+ }).join('')}</tbody></table></div></div>`) : '<div class="empty-state">ไม่มีคำขอรออนุมัติ</div>';
  }
 
  else if (approvalTab === 'comp-off') {
@@ -8292,7 +8373,7 @@ function drawApprovalList() {
  <td style="max-width:300px;">${esc(r.reason)}</td>
  <td>${_apvActionButtons('comp-off', r.id)}</td>
  </tr>`;
- }).join('')}</tbody></table></div></div>`) : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
+ }).join('')}</tbody></table></div></div>`) : '<div class="empty-state">ไม่มีคำขอรออนุมัติ</div>';
  }
 
  else if (approvalTab === 'field-work') {
@@ -8323,7 +8404,7 @@ function drawApprovalList() {
  <td style="max-width:300px;">${esc(r.purpose)}</td>
  <td>${_apvActionButtons('field-work', r.id)}</td>
  </tr>`;
- }).join('')}</tbody></table></div></div>`) : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
+ }).join('')}</tbody></table></div></div>`) : '<div class="empty-state">ไม่มีคำขอรออนุมัติ</div>';
  }
 
  else if (approvalTab === 'time-cert') {
@@ -8365,9 +8446,24 @@ function drawApprovalList() {
  document.getElementById('approvalList').innerHTML = html;
 }
 
-function approveRequest(type, id, approve) {
- const note = approve ? '' : prompt('เหตุผลที่ปฏิเสธ:') || '';
- if (!approve && !note) return;
+async function approveRequest(type, id, approve) {
+ // v1.6.40: ถามเหตุผลด้วย modal — พนักงานจะได้อ่านเหตุผลนี้ในการแจ้งเตือน
+ // การยกเลิกกลางคันคืน null ซึ่งแปลว่าไม่ทำอะไรเลย (พฤติกรรมเดิม)
+ let note = '';
+ if (!approve) {
+  const _emp = (DB.load({leave:'leaveRequests', ot:'otRequests', 'comp-off':'compOffRequests',
+    'field-work':'fieldWorkRequests', 'time-cert':'timeCertRequests'}[type] || 'leaveRequests', [])
+    .find(x => x.id === id) || {}).employeeId;
+  const _e = _emp ? getEmployee(_emp) : null;
+  note = await askText({
+   title: 'ปฏิเสธคำขอ',
+   note: _e ? `คำขอของ <strong>${esc(_e.firstName)} ${esc(_e.lastName)}</strong>` : '',
+   label: 'เหตุผลที่ปฏิเสธ',
+   placeholder: 'พนักงานจะเห็นข้อความนี้ในการแจ้งเตือน',
+   confirmText: 'ปฏิเสธคำขอ'
+  });
+  if (!note) return;
+ }
 
  const keyMap = {leave: 'leaveRequests', ot: 'otRequests', 'comp-off': 'compOffRequests', 'field-work': 'fieldWorkRequests', 'time-cert': 'timeCertRequests'};
  const key = keyMap[type];
@@ -8453,7 +8549,7 @@ function renderEmployees() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> จัดการพนักงาน <small style="font-size:14px;color:var(--gray-500);">(${q ? `${emps.length} จาก ${all.length}` : all.length} คน)</small></h1>
+ <h1>จัดการพนักงาน <small style="font-size:14px;color:var(--gray-500);">(${q ? `${emps.length} จาก ${all.length}` : all.length} คน)</small></h1>
  <div style="display:flex;gap:8px;flex-wrap:wrap;">
  ${salaryToggleButton('renderEmployees')}
  <button class="btn btn-success" onclick="exportEmployeesXLSX()">Export Excel</button>
@@ -9126,7 +9222,7 @@ function renderUploadAttendance() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> อัปโหลดเวลาเข้างาน</h1>
+ <h1>อัปโหลดเวลาเข้างาน</h1>
  </div>
 
  <div class="card">
@@ -9166,7 +9262,7 @@ function renderUploadAttendance() {
  `).join('')}
  </tbody>
  </table>
- ` : '<div class="empty-state"><div class="icon"></div>ยังไม่มีข้อมูลการเข้างาน</div>'}
+ ` : '<div class="empty-state">ยังไม่มีข้อมูลการเข้างาน</div>'}
  </div>
  </div>
  `;
@@ -10010,7 +10106,7 @@ function renderAttendanceReport() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> รายงานเข้างาน</h1>
+ <h1>รายงานเข้างาน</h1>
  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
  <label class="text-sm">เลือกวันที่: </label>
  <select onchange="_attReportDate=this.value; renderAttendanceReport()" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
@@ -11935,7 +12031,7 @@ function renderCommissions() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> จัดการค่าคอมมิชชั่น</h1>
+ <h1>จัดการค่าคอมมิชชั่น</h1>
  <div class="flex" style="gap:10px;">
  <button class="btn btn-success" onclick="showBulkCommissionForm()"> เพิ่มหลายคนพร้อมกัน</button>
  <button class="btn btn-primary" onclick="showCommissionForm()">+ เพิ่ม 1 รายการ</button>
@@ -11982,7 +12078,7 @@ function renderCommissions() {
  }).join('')}
  </tbody>
  </table>
- ` : '<div class="empty-state"><div class="icon"></div>ยังไม่มีรายการค่าคอมมิชชั่นในเดือนนี้</div>'}
+ ` : '<div class="empty-state">ยังไม่มีรายการค่าคอมมิชชั่นในเดือนนี้</div>'}
  </div>
  </div>
 
@@ -12257,7 +12353,7 @@ function renderCommissionReport() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> จัดการค่าคอมมิชชั่น</h1>
+ <h1>จัดการค่าคอมมิชชั่น</h1>
  <div class="flex" style="gap:10px;">
  <button class="btn btn-success" onclick="showBulkCommissionForm()"> เพิ่มหลายคนพร้อมกัน</button>
  <button class="btn btn-primary" onclick="showCommissionForm()">+ เพิ่ม 1 รายการ</button>
@@ -12339,7 +12435,7 @@ function renderCommissionReport() {
  </tr>
  </tfoot>
  </table>
- ` : '<div class="empty-state"><div class="icon"></div>ยังไม่มีรายการค่าคอมมิชชั่นในปีนี้</div>'}
+ ` : '<div class="empty-state">ยังไม่มีรายการค่าคอมมิชชั่นในปีนี้</div>'}
  </div>
  </div>
  `;
@@ -12402,7 +12498,7 @@ function renderPaySlipAdmin() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> สลิปเงินเดือน (Admin)</h1>
+ <h1>สลิปเงินเดือน (Admin)</h1>
  <div>
  <input type="month" value="${_slipMonth}" onchange="_slipMonth=this.value; renderPaySlipAdmin()" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
  </div>
@@ -13054,7 +13150,7 @@ function renderMyPaySlip() {
 
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> สลิปเงินเดือนของฉัน</h1>
+ <h1>สลิปเงินเดือนของฉัน</h1>
  </div>
 
  ${!hasAttendance ? `
@@ -13095,7 +13191,7 @@ function renderMyPaySlip() {
  }).join('')}
  </tbody>
  </table>
- ` : '<div class="empty-state"><div class="icon"></div>ยังไม่มีสลิปเงินเดือน<br><small>HR จะสร้างสลิปให้หลังสิ้นเดือน</small></div>'}
+ ` : '<div class="empty-state">ยังไม่มีสลิปเงินเดือน<br><small>HR จะสร้างสลิปให้หลังสิ้นเดือน</small></div>'}
  </div>
  </div>
  `;
@@ -13371,17 +13467,14 @@ function renderReports() {
  const myTeam = DB.load('employees').filter(e => e.active && e.managerId === currentUser.id);
  return `<div class="alert alert-info mb-3" style="font-size:13px;"><strong>ขอบเขต:</strong> ลูกน้องในทีมของคุณ <strong>${myTeam.length}</strong> คน (สำหรับใช้สนทนา/อบรมรายบุคคล)</div>`;
  })() : '';
- // v1.4.51: One-time notice about payroll month rollout on reports
- const noticeSeen = localStorage.getItem('hr__seenPayrollReportsNotice_v1_4_51');
- const noticeBanner = !noticeSeen ? `
- <div class="alert alert-info mb-3" style="font-size:13px;position:relative;padding-right:36px;">
- <strong>ℹ️ v1.4.51 Update:</strong> รายงาน <strong>OT</strong> และ <strong>มาสาย</strong> ตอนนี้ใช้<strong>รอบเงินเดือน</strong> ตามที่บริษัทตั้งค่าใน "ตั้งค่า → รอบเงินเดือน" (default: วันที่ 22 - 21) แทนปฏิทิน (1-31) — Events หลังวันตัดรอบจะไปคิดในรอบเดือนถัดไป
- <button onclick="localStorage.setItem('hr__seenPayrollReportsNotice_v1_4_51','1');this.parentElement.style.display='none';" style="position:absolute;top:8px;right:8px;background:none;border:none;font-size:20px;cursor:pointer;color:var(--gray-500);" title="ปิดข้อความนี้">×</button>
- </div>
- ` : '';
+ // v1.6.40: ตัดแบนเนอร์ changelog ของนักพัฒนาออก
+ // ผู้ใช้หน้านี้คือเจ้าหน้าที่ที่มาดูรายงาน ไม่ใช่คนที่ตามเวอร์ชันของระบบ
+ // และมันกลับมาทุกครั้งที่เปิดหน้า เพราะ drawReport() สร้างใหม่ทุกรอบ
+ // ถ้าต้องประกาศเรื่องแบบนี้อีก ใช้หน้า 'ประกาศ & นโยบาย' ที่มีอยู่แล้ว
+ const noticeBanner = '';
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
- <h1> ${title}</h1>
+ <h1>${title}</h1>
  </div>
  ${scopeBanner}
  ${noticeBanner}
@@ -14429,7 +14522,7 @@ function renderSettings() {
  const _dilEx = new Set((DB.load('settings', {}).diligenceExemptLeaveTypes) || ['comp-off']);
  const s = DB.load('settings');
  document.getElementById('mainContent').innerHTML = `
- <div class="page-header"><h1> ตั้งค่าระบบ</h1></div>
+ <div class="page-header"><h1>ตั้งค่าระบบ</h1></div>
  <div class="tabs" style="margin-bottom:18px;flex-wrap:wrap;">
  <div class="tab active" data-settab="payroll" onclick="switchSettingsTab('payroll')">เงินเดือน</div>
  <div class="tab" data-settab="leave" onclick="switchSettingsTab('leave')">การลา & วันหยุด</div>
@@ -14440,7 +14533,7 @@ function renderSettings() {
  <div class="settings-panel" data-settab="payroll">
   <div class="text-sm" style="color:var(--gray-500);margin:-4px 0 14px 4px;">คำนวณค่าจ้าง เบี้ยขยัน และเงินสมทบ</div>
  <div class="card">
- <div class="card-header"><h3> เวลาทำงาน และ การคำนวณเงินเดือน</h3></div>
+ <div class="card-header"><h3>เวลาทำงาน และ การคำนวณเงินเดือน</h3></div>
  <div class="card-body">
  <div class="form-row">
  <div class="form-group"><label>เวลาเริ่มงาน (เกินถือว่าหลังเวลา)</label><input type="time" id="qWorkStart" value="${s.workStartTime || '08:45'}"></div>
@@ -14513,7 +14606,7 @@ function renderSettings() {
 
 
  <div class="card">
- <div class="card-header"><h3> เบี้ยขยัน · ขาดงาน · เพดานการหัก <small style="color:var(--gray-500);font-weight:400;">(v1.6.0)</small></h3></div>
+ <div class="card-header"><h3>เบี้ยขยัน · ขาดงาน · เพดานการหัก <small style="color:var(--gray-500);font-weight:400;">(v1.6.0)</small></h3></div>
  <div class="card-body">
   <div class="form-group">
    <label class="ios-toggle">
@@ -14588,7 +14681,7 @@ function renderSettings() {
 
 
  <div class="card">
- <div class="card-header"><h3> ประกันสังคม (ตามกฎหมายไทย)</h3></div>
+ <div class="card-header"><h3>ประกันสังคม (ตามกฎหมายไทย)</h3></div>
  <div class="card-body">
  <div class="form-group">
  <label class="ios-toggle">
@@ -15095,7 +15188,7 @@ function renderNotifications() {
  DB.save('notifications', all);
 
  document.getElementById('mainContent').innerHTML = `
- <div class="page-header"><h1> การแจ้งเตือน</h1></div>
+ <div class="page-header"><h1>การแจ้งเตือน</h1></div>
  <div class="card">
  <div class="card-body" style="padding:0;">
  ${notifs.length ? notifs.map(n => `
@@ -15103,7 +15196,7 @@ function renderNotifications() {
  <div>${esc(n.message)}</div>
  <div class="time">${formatDateTime(n.createdAt)}</div>
  </div>
- `).join('') : '<div class="empty-state"><div class="icon"></div>ไม่มีการแจ้งเตือน</div>'}
+ `).join('') : '<div class="empty-state">ไม่มีการแจ้งเตือน</div>'}
  </div>
  </div>
  `;

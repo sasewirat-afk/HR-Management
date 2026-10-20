@@ -8,7 +8,10 @@
 <link rel="apple-touch-icon" href="favicon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Sarabun:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<!-- v1.6.38: ลดจาก 15 น้ำหนัก (Inter 7 + Sarabun 6 + ที่ไม่ได้ใช้) เหลือ 8
+     UI นี้ใช้จริงแค่ 400/500/600/700 · ที่เหลือดาวน์โหลดมาโดยไม่มีใครเรียกใช้
+     และ Sarabun ต้องมาก่อน Inter สำหรับภาษาไทย ดูเหตุผลที่ body { font-family } -->
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- v1.4.36: swap SheetJS → xlsx-js-style (drop-in, adds cell border/bold/alignment support) -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
@@ -40,7 +43,10 @@
  --gray-700: #374151;
  --gray-900: #111827;
  --ink: #0f172a;
- --muted: rgba(15,37,87,0.55);
+ /* v1.6.38: เดิม 0.55 = 3.6:1 ต่ำกว่าเกณฑ์ WCAG AA (4.5:1) ทั้งที่ใช้กับ
+    ป้ายกำกับฟอร์ม ข้อความอธิบาย และแท็บที่ไม่ได้เลือกทั้งระบบ
+    0.78 ให้ราว 6:1 บนพื้นขาว — ทั้งเครื่องตรวจอัตโนมัติและคนรีวิวชี้จุดนี้ตรงกัน */
+ --muted: rgba(15,37,87,0.78);
  --radius: 14px;
  --radius-sm: 8px;
  --radius-lg: 22px;
@@ -53,10 +59,17 @@
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
- font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text',
-              'Inter', 'Sarabun', 'Helvetica Neue', system-ui, sans-serif;
- font-feature-settings: 'cv11', 'ss01', 'kern', 'liga', 'tnum';
- letter-spacing: -0.01em;
+ /* v1.6.38: Sarabun มาก่อน Inter
+    เดิม Inter อยู่หน้า Sarabun และมี -apple-system นำหน้าทั้งคู่ ผลคือเครื่อง Apple
+    เรนเดอร์ฟอนต์ไทยของระบบ ส่วน Android เรนเดอร์ Sarabun กลายเป็นคนละแบบอักษร
+    ในฝูงเครื่องเดียวกัน ทั้งที่ดาวน์โหลด Sarabun มาแล้วทุกเครื่อง
+    Sarabun ไม่มีอักขระละติน? มี — และออกแบบมาให้เข้าคู่กับไทยอยู่แล้ว */
+ font-family: 'Sarabun', -apple-system, BlinkMacSystemFont, 'SF Pro Text',
+              'Inter', 'Helvetica Neue', system-ui, sans-serif;
+ font-feature-settings: 'kern', 'liga', 'tnum';
+ /* v1.6.38: เดิมเป็น -0.01em คือบีบตัวอักษรเข้าหากัน
+    ภาษาไทยมีสระและวรรณยุกต์ซ้อนบนล่าง การบีบทำให้มันชนกันและอ่านยากขึ้น */
+ letter-spacing: normal;
  background: #ffffff;
  color: var(--ink);
  min-height: 100vh;
@@ -114,15 +127,18 @@ body::before {
  font-weight: 700;
  letter-spacing: 0.16em;
 }
+/* v1.6.38: ข้อความนี้เป็นภาษาไทย ("ระบบบริหารจัดการงานบุคคล (HR)")
+   เดิมยืดตัวอักษร 0.2em ทำให้อ่านออกมาเป็น ร ะ บ บ บ ริ ห า ร
+   ภาษาไทยไม่มีช่องว่างระหว่างคำ การยืดจึงทำลายเส้นแบ่งคำเพียงอย่างเดียวที่มี
+   และ uppercase ไม่มีผลกับอักษรไทย มีผลแค่กับ (HR) ที่ต่อท้าย */
 .login-card .subtitle {
  text-align: center;
  color: var(--muted);
  margin-bottom: 28px;
  padding-bottom: 18px;
  border-bottom: 1px solid rgba(30,58,138,0.08);
- font-size: 11px;
- letter-spacing: 0.2em;
- text-transform: uppercase;
+ font-size: 13px;
+ letter-spacing: normal;
  font-weight: 500;
 }
 .form-group { margin-bottom: 16px; }
@@ -420,12 +436,14 @@ body::before {
  border-radius: 10px;
  font-weight: 700;
 }
+/* v1.6.38: หัวข้อหมวดในเมนู เป็นภาษาไทยทั้งหมด ("คำขอของฉัน" ฯลฯ)
+   เดิม 10.5px + สีจาง 2.6:1 + ยืดตัวอักษร + uppercase บนพื้นกระจกโปร่ง
+   = ป้ายที่ทำหน้าที่จัดระเบียบเมนู 18 รายการ แต่อ่านยากที่สุดในหน้าจอ */
 .nav-section {
  padding: 14px 20px 6px;
- font-size: 10.5px;
- color: rgba(15,37,87,0.4);
- text-transform: uppercase;
- letter-spacing: 0.12em;
+ font-size: 12px;
+ color: rgba(15,37,87,0.82);
+ letter-spacing: normal;
  font-weight: 700;
 }
 .main {
@@ -819,6 +837,39 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 }
 
 /* ============================================================
+   v1.6.38: เลิกยืดตัวอักษรในที่ที่เป็นข้อความไทย
+   ============================================================
+   ภาษาไทยไม่มีช่องว่างระหว่างคำ ผู้อ่านอาศัยรูปร่างของคำเป็นเส้นแบ่ง
+   การเพิ่ม letter-spacing จึงแยกพยัญชนะออกจากกันและทำลายเส้นแบ่งนั้น
+   ยิ่งที่ขนาดเล็ก สระและวรรณยุกต์ที่ซ้อนอยู่บนล่างจะยิ่งลอยห่างจากตัวที่มันเกาะ
+
+   รายการข้างล่างคือกฎที่วัดแล้วว่าใส่ค่าให้ element ที่มีข้อความไทยจริง
+   (ตรวจด้วยการไล่ DOM หา element ที่มีอักขระช่วง U+0E00–U+0E7F
+    แล้วอ่าน computed letterSpacing)
+
+   ที่ไม่อยู่ในรายการเพราะเป็นข้อความละตินล้วน จึงคงการยืดไว้ตามเดิม:
+   .login-card h1 (CROCHET) · .sidebar-header h2 (CROCHET) · .role-badge (ADMIN/EMPLOYEE) */
+.form-group label,
+.btn,
+.page-header h1,
+.stat-card .label,
+.card-header h3,
+th,
+.status-badge,
+.modal-header h3,
+.calendar-day-header,
+.tab {
+ letter-spacing: normal;
+}
+
+/* ป้ายกำกับฟอร์มเดิม 11.5px — เล็กเกินไปสำหรับอักษรที่มีวรรณยุกต์ซ้อนสองชั้น */
+.form-group label { font-size: 13px; }
+
+/* ป้ายบนการ์ดสถิติเดิม 10.5px และเป็นข้อความไทยล้วน
+   (วันลาพักร้อนคงเหลือ · คำขอรออนุมัติ · ลาป่วยคงเหลือ) */
+.stat-card .label { font-size: 12px; }
+
+/* ============================================================
    v1.6.36: การ์ดคำขอในหน้าอนุมัติ (ใช้แทนตารางที่ความกว้าง ≤768px)
    ============================================================
    เหตุผลอยู่ที่ฟังก์ชัน _apvCardList() — สรุป: ตารางกว้าง 937px ในจอ 375px
@@ -1016,7 +1067,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  <div style="text-align:center;margin-bottom:12px;">
  <img src="logo.png" alt="CROCHET" style="width:120px;height:auto;">
  </div>
- <div style="font-size:11px;color:#9ca3af;margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
+ <div style="font-size:11px;color:rgba(255,255,255,0.82);margin-bottom:2px;text-align:center;letter-spacing:1px;">HR MANAGEMENT SYSTEM</div>
  <div style="font-size:10px;color:#9ca3af;margin-bottom:8px;text-align:center;opacity:0.7;display:flex;align-items:center;justify-content:center;gap:6px;"><span id="loginVersionLabel"></span> <button id="manualRefreshBtn" onclick="manualRefreshCloud()" title="ดึงข้อมูลล่าสุดจาก cloud (แก้ปัญหา iOS Safari sleep)" style="background:transparent;border:1px solid #d1d5db;color:#9ca3af;padding:1px 6px;border-radius:4px;cursor:pointer;font-size:11px;">🔄</button></div>
  <div class="user-info">
  <strong id="userName">-</strong>
@@ -1047,7 +1098,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.37';
+const APP_VERSION = '1.6.38';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again

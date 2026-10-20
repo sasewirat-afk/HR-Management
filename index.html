@@ -819,6 +819,68 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 }
 
 /* ============================================================
+   v1.6.36: การ์ดคำขอในหน้าอนุมัติ (ใช้แทนตารางที่ความกว้าง ≤768px)
+   ============================================================
+   เหตุผลอยู่ที่ฟังก์ชัน _apvCardList() — สรุป: ตารางกว้าง 937px ในจอ 375px
+   ทำให้คอลัมน์ปุ่มที่ถูกตรึงขวาไปทับชื่อพนักงาน หัวหน้าจึงอนุมัติโดยไม่รู้ว่าของใคร */
+.apv-cards-all {
+ display: flex;
+ align-items: center;
+ gap: 10px;
+ padding: 12px 14px;
+ margin-bottom: 10px;
+ background: var(--glass-bg-strong);
+ border: 1px solid var(--gray-200);
+ border-radius: 12px;
+ font-size: 14px;
+ font-weight: 600;
+ cursor: pointer;
+}
+.apv-cards { display: flex; flex-direction: column; gap: 12px; }
+.apv-card {
+ background: #fff;
+ border: 1px solid var(--gray-200);
+ border-radius: 14px;
+ padding: 14px;
+ box-shadow: 0 2px 8px rgba(30,58,138,0.06);
+}
+/* ใบที่ต้องคิดก่อนกด ต้องต่างจากใบปกติตั้งแต่ยังไม่อ่านข้อความ */
+.apv-card-warn { border-color: var(--danger); border-width: 2px; }
+.apv-card-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
+.apv-card-head input[type=checkbox] { margin-top: 3px; flex: none; }
+.apv-card-name { font-size: 16px; font-weight: 700; line-height: 1.35; }
+.apv-card-sub { font-size: 13px; color: var(--gray-700); margin-top: 2px; }
+.apv-card-flag {
+ background: var(--danger-light);
+ color: var(--danger);
+ font-size: 13px;
+ font-weight: 600;
+ padding: 8px 10px;
+ border-radius: 8px;
+ margin-bottom: 10px;
+}
+.apv-card-lines { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.apv-card-lines > div { display: flex; justify-content: space-between; gap: 12px; }
+.apv-card-lines span { color: var(--gray-700); }
+.apv-card-lines b { text-align: right; font-weight: 600; }
+.apv-card-note {
+ margin-top: 10px;
+ padding-top: 10px;
+ border-top: 1px solid var(--gray-100);
+ font-size: 13px;
+ color: var(--gray-700);
+ word-break: break-word;
+}
+/* ปุ่มเต็มความกว้าง สูง 48px — เกณฑ์สัมผัสคือ 44px */
+.apv-card-actions { display: flex; gap: 10px; margin-top: 12px; }
+.apv-card-actions .btn {
+ flex: 1;
+ min-height: 48px;
+ font-size: 15px;
+ font-weight: 700;
+}
+
+/* ============================================================
    v1.6.35: แถบเลือกทั้งหมดในหน้าอนุมัติ
    ============================================================
    เดิมใช้ position:sticky;top:0 ซึ่งไม่เคยทำงานเลย และวัดยืนยันแล้ว:
@@ -985,7 +1047,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.35';
+const APP_VERSION = '1.6.36';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -7953,6 +8015,64 @@ function setApprovalTab(t) {
  renderApprovals();
 }
 
+// ============================================================
+// v1.6.36: หน้าอนุมัติบนมือถือใช้การ์ด ไม่ใช่ตาราง
+// ============================================================
+// วัดที่ 375px ก่อนแก้: ตารางกว้างจริง 937px · คอลัมน์ปุ่มถูกตรึงขวาด้วยพื้นหลัง
+// โปร่ง 70% กินพื้นที่ 53% ของจอ และทับชื่อพนักงานไปราว 80px
+// หัวหน้าจึงกดอนุมัติหรือปฏิเสธใบลาโดยอ่านไม่ออกว่าเป็นของใคร
+//
+// การ์ดวางชื่อไว้บนสุด ปุ่มไว้ล่างสุดเต็มความกว้าง ไม่มีอะไรทับกัน
+// และแสดงธงเตือนเฉพาะใบที่ต้องคิดก่อนกด แทนที่จะให้ทุกแถวหน้าตาเหมือนกันหมด
+function _apvIsMobile() {
+ return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+  && window.matchMedia('(max-width: 768px)').matches;
+}
+
+// ธงเตือน: คืนรายการข้อความที่ต้องเห็นก่อนกดอนุมัติ (ว่าง = ใบปกติ)
+// แยกออกมาเป็นฟังก์ชันล้วนเพื่อให้ทดสอบได้ และใช้ได้ทั้งการ์ดและตารางในอนาคต
+function apvCardWarnings(type, r) {
+ const out = [];
+ if (!r) return out;
+ const chk = typeof quotaCheckForApproval === 'function' ? quotaCheckForApproval(type, r) : null;
+ if (chk && chk.over) out.push(`เกินสิทธิ์ ${chk.excess.toFixed(1)} วัน (คงเหลือ ${chk.remaining} วัน)`);
+ if (type === 'leave' && r.type === 'sick-with-cert' && !hasAnyAttachment(r)) {
+  out.push('ลาป่วยแบบมีใบรับรองแพทย์ แต่ไม่มีไฟล์แนบ');
+ }
+ return out;
+}
+
+// describe(r) คืน { name, sub, lines: [[ป้าย, ค่า]...], note }
+function _apvCardList(type, items, describe) {
+ const cards = items.map(r => {
+  const d = describe(r);
+  const warn = apvCardWarnings(type, r);
+  return `<div class="apv-card${warn.length ? ' apv-card-warn' : ''}">
+   <div class="apv-card-head">
+    ${_apvCheckbox(r.id)}
+    <div>
+     <div class="apv-card-name">${d.name}</div>
+     <div class="apv-card-sub">${d.sub}</div>
+    </div>
+   </div>
+   ${warn.map(w => `<div class="apv-card-flag">⚠ ${esc(w)}</div>`).join('')}
+   <div class="apv-card-lines">
+    ${d.lines.filter(l => l[1]).map(l => `<div><span>${esc(l[0])}</span><b>${l[1]}</b></div>`).join('')}
+   </div>
+   ${d.note ? `<div class="apv-card-note">${d.note}</div>` : ''}
+   <div class="apv-card-actions">
+    <button class="btn btn-success" onclick="approveRequest('${type}','${r.id}',true)">อนุมัติ</button>
+    <button class="btn btn-danger" onclick="approveRequest('${type}','${r.id}',false)">ปฏิเสธ</button>
+   </div>
+  </div>`;
+ }).join('');
+ return `<label class="apv-cards-all">
+   <input type="checkbox" onchange="toggleSelectAllApprovals(this.checked)" style="width:18px;height:18px;">
+   เลือกทั้งหมด ${items.length} รายการ
+  </label>
+  <div class="apv-cards">${cards}</div>`;
+}
+
 function drawApprovalList() {
  const myId = currentUser.id;
  const isAdmin = currentUser.role === 'admin';
@@ -7964,7 +8084,20 @@ function drawApprovalList() {
 
  if (approvalTab === 'leave') {
  const items = DB.load('leaveRequests').filter(r => matchScope(r) && r.status === 'pending');
- html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
+ const _mobileCards = _apvIsMobile() ? _apvCardList('leave', items, r => {
+  const _e = getEmployee(r.employeeId);
+  return {
+   name: `${esc(_e.firstName)} ${esc(_e.lastName)}`,
+   sub: getLeaveTypeName(r.type),
+   lines: [
+    ['วันที่ลา', formatDate(r.startDate) + (r.endDate !== r.startDate ? ' – ' + formatDate(r.endDate) : '') + (r.halfDay ? (r.halfDay === 'morning' ? ' (เช้า)' : ' (บ่าย)') : '')],
+    ['จำนวน', r.days + ' วัน' + leaveShiftGapBadge(r)],
+    ['ยื่นเมื่อ', formatDate(r.requestDate)]
+   ],
+   note: esc(r.reason) + (hasAnyAttachment(r) ? '<br>' + attachmentLinkHtml(r, '📎 ') : '')
+  };
+ }) : null;
+ html = items.length ? (_mobileCards || `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr>${_selectAllTh}<th>วันที่ขอ</th><th>พนักงาน</th><th>ประเภท</th><th>วันที่ลา</th><th>จำนวน</th><th>เหตุผล</th><th style="min-width:200px;">การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {
  const emp = getEmployee(r.employeeId);
@@ -7978,12 +8111,26 @@ function drawApprovalList() {
  <td style="max-width:200px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, " ") : ''}</td>
  <td>${_apvActionButtons('leave', r.id)}</td>
  </tr>`;
- }).join('')}</tbody></table></div></div>` : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
+ }).join('')}</tbody></table></div></div>`) : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
  }
 
  else if (approvalTab === 'ot') {
  const items = DB.load('otRequests').filter(r => matchScope(r) && r.status === 'pending');
- html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
+ const _mobileCards = _apvIsMobile() ? _apvCardList('ot', items, r => {
+  const _e = getEmployee(r.employeeId);
+  return {
+   name: `${esc(_e.firstName)} ${esc(_e.lastName)}`,
+   sub: 'ขอทำ OT',
+   lines: [
+    ['วันที่ทำ OT', formatDate(r.date)],
+    ['เวลา', `${r.startTime} - ${r.endTime}`],
+    ['รวม', r.hours + ' ชม.'],
+    ['ยื่นเมื่อ', formatDate(r.requestDate)]
+   ],
+   note: esc(r.reason) + (hasAnyAttachment(r) ? '<br>' + attachmentLinkHtml(r, '📎 ') : '')
+  };
+ }) : null;
+ html = items.length ? (_mobileCards || `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr>${_selectAllTh}<th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ทำ OT</th><th>เวลา</th><th>ชั่วโมง</th><th>เหตุผล</th><th style="min-width:200px;">การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {
  const emp = getEmployee(r.employeeId);
@@ -7997,12 +8144,24 @@ function drawApprovalList() {
  <td style="max-width:250px;">${esc(r.reason)}${hasAnyAttachment(r) ? `<br>` + attachmentLinkHtml(r, "📎 ") : ''}</td>
  <td>${_apvActionButtons('ot', r.id)}</td>
  </tr>`;
- }).join('')}</tbody></table></div></div>` : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
+ }).join('')}</tbody></table></div></div>`) : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
  }
 
  else if (approvalTab === 'comp-off') {
  const items = DB.load('compOffRequests').filter(r => matchScope(r) && r.status === 'pending');
- html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
+ const _mobileCards = _apvIsMobile() ? _apvCardList('comp-off', items, r => {
+  const _e = getEmployee(r.employeeId);
+  return {
+   name: `${esc(_e.firstName)} ${esc(_e.lastName)}`,
+   sub: 'ขอสะสมวันหยุด',
+   lines: [
+    ['วันที่ทำงาน', formatDate(r.workDate)],
+    ['ยื่นเมื่อ', formatDate(r.requestDate)]
+   ],
+   note: esc(r.reason)
+  };
+ }) : null;
+ html = items.length ? (_mobileCards || `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr>${_selectAllTh}<th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ทำงาน</th><th>เหตุผล</th><th style="min-width:200px;">การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {
  const emp = getEmployee(r.employeeId);
@@ -8014,12 +8173,25 @@ function drawApprovalList() {
  <td style="max-width:300px;">${esc(r.reason)}</td>
  <td>${_apvActionButtons('comp-off', r.id)}</td>
  </tr>`;
- }).join('')}</tbody></table></div></div>` : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
+ }).join('')}</tbody></table></div></div>`) : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
  }
 
  else if (approvalTab === 'field-work') {
  const items = DB.load('fieldWorkRequests').filter(r => matchScope(r) && r.status === 'pending');
- html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
+ const _mobileCards = _apvIsMobile() ? _apvCardList('field-work', items, r => {
+  const _e = getEmployee(r.employeeId);
+  return {
+   name: `${esc(_e.firstName)} ${esc(_e.lastName)}`,
+   sub: 'งานนอกสถานที่',
+   lines: [
+    ['วันที่ปฏิบัติงาน', formatDate(r.date)],
+    ['เวลา', `${r.startTime} - ${r.endTime}`],
+    ['ยื่นเมื่อ', formatDate(r.requestDate)]
+   ],
+   note: esc(r.purpose)
+  };
+ }) : null;
+ html = items.length ? (_mobileCards || `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr>${_selectAllTh}<th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ปฏิบัติงาน</th><th>เวลา</th><th>วัตถุประสงค์</th><th style="min-width:200px;">การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {
  const emp = getEmployee(r.employeeId);
@@ -8032,12 +8204,27 @@ function drawApprovalList() {
  <td style="max-width:300px;">${esc(r.purpose)}</td>
  <td>${_apvActionButtons('field-work', r.id)}</td>
  </tr>`;
- }).join('')}</tbody></table></div></div>` : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
+ }).join('')}</tbody></table></div></div>`) : '<div class="empty-state"><div class="icon"></div>ไม่มีคำขอรออนุมัติ</div>';
  }
 
  else if (approvalTab === 'time-cert') {
  const items = DB.load('timeCertRequests', []).filter(r => matchScope(r) && r.status === 'pending');
- html = items.length ? `<div class="card"><div class="card-body" style="padding:0;"><table>
+ const _mobileCards = _apvIsMobile() ? _apvCardList('time-cert', items, r => {
+  const _e = getEmployee(r.employeeId);
+  const _scan = DB.load('attendanceRecords').find(x => x.employeeId === r.employeeId && x.date === r.date);
+  return {
+   name: _e ? `${esc(_e.firstName)} ${esc(_e.lastName)}` : esc(r.employeeId),
+   sub: 'ขอรับรองเวลา',
+   lines: [
+    ['วันที่ทำงาน', formatDate(r.date)],
+    ['เวลาที่แจ้ง', `${r.claimedCheckIn} - ${r.claimedCheckOut || '-'}`],
+    ['สแกนจริง', _scan ? `${_scan.checkIn || '-'} - ${_scan.checkOut || '-'}` : 'ไม่พบในระบบ'],
+    ['ยื่นเมื่อ', formatDate(r.requestDate)]
+   ],
+   note: esc(r.reason) + (hasAnyAttachment(r) ? '<br>' + attachmentLinkHtml(r, '📎 ') : '')
+  };
+ }) : null;
+ html = items.length ? (_mobileCards || `<div class="card"><div class="card-body" style="padding:0;"><table>
  <thead><tr>${_selectAllTh}<th>วันที่ขอ</th><th>พนักงาน</th><th>วันที่ทำงาน</th><th>เวลาเข้าจริง</th><th>เวลาเลิก</th><th>เหตุผล</th><th>สแกนจริง</th><th style="min-width:200px;">การจัดการ</th></tr></thead>
  <tbody>${items.map(r => {
  const emp = getEmployee(r.employeeId);
@@ -8053,7 +8240,7 @@ function drawApprovalList() {
  <td style="font-size:12px;">${scan ? `เข้า ${scan.checkIn || '-'}<br>ออก ${scan.checkOut || '-'}` : '<span style="color:var(--gray-500);">ไม่พบในระบบ</span>'}</td>
  <td style="white-space:nowrap;">${_apvActionButtons('time-cert', r.id)}</td>
  </tr>`;
- }).join('')}</tbody></table></div></div>` : '<div class="empty-state">ไม่มีคำขอรับรองเวลารออนุมัติ</div>';
+ }).join('')}</tbody></table></div></div>`) : '<div class="empty-state">ไม่มีคำขอรับรองเวลารออนุมัติ</div>';
  }
 
  document.getElementById('approvalList').innerHTML = html;

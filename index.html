@@ -1047,7 +1047,7 @@ tr:hover td { background: rgba(30,58,138,0.04); }
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.36';
+const APP_VERSION = '1.6.37';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -4212,7 +4212,16 @@ function getPendingApprovals(managerId) {
 // ============================================================
 // MODAL
 // ============================================================
+// v1.6.37: ปิดด้วย Escape ได้ และล็อกการเลื่อนพื้นหลังระหว่างเปิด
+// เดิมไม่มีทั้งสองอย่าง — บนมือถือเลื่อนทะลุไปหน้าหลังระหว่างกรอกฟอร์ม
+// และคนที่ใช้แป้นพิมพ์ออกจาก modal ไม่ได้ถ้าไม่เล็งปุ่ม × ด้วยเมาส์
+function _modalEscHandler(e) {
+ if (e.key === 'Escape') closeModal();
+}
+
 function showModal(title, body, footer) {
+ document.addEventListener('keydown', _modalEscHandler);
+ document.body.style.overflow = 'hidden';
  document.getElementById('modalContainer').innerHTML = `
  <div class="modal-overlay" onclick="if(event.target===this) closeModal()">
  <div class="modal">
@@ -4227,6 +4236,8 @@ function showModal(title, body, footer) {
 }
 
 function closeModal() {
+ document.removeEventListener('keydown', _modalEscHandler);   // v1.6.37
+ document.body.style.overflow = '';
  document.getElementById('modalContainer').innerHTML = '';
  // v1.5.28: a cloud pull that arrived while this modal was open had its re-render
  // skipped by _safeRerender guard 2. Plain `onclick="closeModal()"` buttons never
@@ -4234,13 +4245,39 @@ function closeModal() {
  _flushPendingRerender('modal-closed');
 }
 
+// ============================================================
+// v1.6.37: toast ต้องซ้อนกันเอง
+// ============================================================
+// เดิมทุกตัวตรึงที่ top:20px right:20px ตายตัว เวลามีสองตัวขึ้นติดกัน
+// (เช่นตอนรีเซ็ตรหัสผ่าน: ตัวแรกบอกรหัสใหม่ ตัวที่สองบอกผลการสร้างบัญชี)
+// ตัวหลังจะทับตัวแรกพอดี วัดได้ว่าทั้งคู่อยู่ที่ top:20 เท่ากัน
+// แอดมินจึงไม่มีทางอ่านรหัสที่เพิ่งสร้างได้เลย
+//
+// แก้ที่ตัว toast เอง ไม่ใช่ที่หน้ารีเซ็ต เพราะปัญหาเป็นของกลไกนี้
+// และมีจุดเรียก toast() อยู่ 200 กว่าจุดทั่วแอป
+const _toastStack = [];
+function _restackToasts() {
+ let top = 20;
+ _toastStack.forEach(el => {
+  el.style.top = top + 'px';
+  top += el.offsetHeight + 10;
+ });
+}
+
 function toast(message, type = 'success') {
  const div = document.createElement('div');
  div.className = `alert alert-${type === 'success' ? 'success' : type === 'error' ? 'error' : 'info'}`;
- div.style.cssText = 'position:fixed;top:20px;right:20px;z-index:2000;box-shadow:var(--shadow-lg);min-width:300px;';
+ div.style.cssText = 'position:fixed;top:20px;right:20px;z-index:2000;box-shadow:var(--shadow-lg);min-width:300px;max-width:min(420px,calc(100vw - 40px));';
  div.innerHTML = message;
  document.body.appendChild(div);
- setTimeout(() => div.remove(), 3000);
+ _toastStack.push(div);
+ _restackToasts();
+ setTimeout(() => {
+  const i = _toastStack.indexOf(div);
+  if (i >= 0) _toastStack.splice(i, 1);
+  div.remove();
+  _restackToasts();
+ }, 3000);
 }
 
 // ============================================================
@@ -8692,68 +8729,153 @@ async function submitEmployee(e, editId) {
  renderPage();
 }
 
-async function resetPassword(id) {
+// ============================================================
+// v1.6.37: รีเซ็ตรหัสผ่าน — ถามให้ชัด แล้วให้ผลลัพธ์ค้างอยู่
+// ============================================================
+// เดิม: กดปุ่มในตารางแล้วเด้ง prompt() ทันทีโดยไม่บอกว่าของใคร (บนมือถือชื่อถูก
+// ปุ่มทับอยู่ด้วย) จากนั้นแสดงรหัสใหม่ใน toast 3 วินาที ไม่มีปุ่มคัดลอก และมี
+// toast อีกตัวขึ้นทับที่พิกัดเดียวกันพอดี
+//
+// รีเซ็ตพลาดหนึ่งครั้ง = พนักงานยื่นใบลาไม่ได้เลย และหน้าล็อกอินไม่มีทางกู้ด้วย
+// ตัวเอง (คำว่า 'ลืมรหัสผ่าน' ไม่มีอยู่ในระบบ) ข้อมูลนี้จึงหายไม่ได้
+function resetPassword(id) {
  if (currentUser.role !== 'admin') {
- toast('เฉพาะ Admin เท่านั้นที่ Reset Password ได้', 'error');
- return;
+  toast('เฉพาะ Admin เท่านั้นที่ Reset Password ได้', 'error');
+  return;
  }
- // v1.6.22: สุ่มรหัสชั่วคราวให้ แทนค่าเริ่มต้น '1234' เดิม และตรวจด้วยเกณฑ์เดียวกับที่พนักงานใช้
- const _suggested = generateTempPassword();
- const newPass = prompt('รหัสผ่านชั่วคราว — ระบบสุ่มให้แล้ว กด OK เพื่อใช้ค่านี้ (พนักงานจะถูกบังคับเปลี่ยนตอน Login e-HR ครั้งถัดไป):', _suggested);
- if (!newPass) return;
+ const emp = DB.load('employees').find(x => x.id === id);
+ if (!emp) { toast('ไม่พบพนักงาน', 'error'); return; }
+
+ // ถามโดยบอกชื่อและรหัสพนักงาน — กดผิดคนคือความเสียหายที่กู้ยากที่สุดของหน้านี้
+ showModal('รีเซ็ตรหัสผ่าน', `
+  <div style="font-size:15px;margin-bottom:4px;">กำลังรีเซ็ตรหัสผ่านของ</div>
+  <div style="font-size:18px;font-weight:700;">${esc(emp.firstName)} ${esc(emp.lastName)}</div>
+  <div class="text-sm" style="margin-bottom:14px;">รหัสพนักงาน ${esc(emp.id)} · ${esc(emp.position || '-')}</div>
+  <div class="form-group">
+   <label for="resetPassValue">รหัสผ่านชั่วคราว</label>
+   <div style="display:flex;gap:8px;">
+    <input id="resetPassValue" type="text" value="${esc(generateTempPassword())}"
+     style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:16px;letter-spacing:0.04em;">
+    <button type="button" class="btn btn-secondary" style="flex:none;"
+     onclick="document.getElementById('resetPassValue').value = generateTempPassword();">สุ่มใหม่</button>
+   </div>
+   <div class="text-sm" style="margin-top:6px;">พนักงานจะถูกบังคับเปลี่ยนรหัสตอนเข้าระบบครั้งถัดไป</div>
+  </div>
+  <div id="resetPassError"></div>
+ `, `
+  <button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button>
+  <button class="btn btn-primary" onclick="_resetPasswordConfirmed('${esc(id)}')">ยืนยันรีเซ็ต</button>
+ `);
+}
+
+async function _resetPasswordConfirmed(id) {
+ const field = document.getElementById('resetPassValue');
+ const newPass = field ? field.value.trim() : '';
+ const errBox = document.getElementById('resetPassError');
+ const fail = msg => { if (errBox) errBox.innerHTML = `<div class="alert alert-error" style="margin-top:10px;">${msg}</div>`; };
+ if (!newPass) { fail('กรุณาระบุรหัสผ่านชั่วคราว'); return; }
  const _weak = weakPasswordReason(id, newPass);
- if (_weak) {
- toast(`รหัสชั่วคราวไม่ผ่านเกณฑ์: ${_weak} — รหัสนี้ใช้เข้าระบบใบขอซื้อได้ด้วย จึงตั้งอ่อนไม่ได้`, 'error');
- return;
- }
+ if (_weak) { fail(`รหัสชั่วคราวไม่ผ่านเกณฑ์: ${esc(_weak)}<br>รหัสนี้ใช้เข้าระบบใบขอซื้อได้ด้วย จึงตั้งอ่อนไม่ได้`); return; }
+
  const emps = DB.load('employees');
  const emp = emps.find(x => x.id === id);
- if (!emp) { toast('ไม่พบพนักงาน', 'error'); return; }
- // v1.4.28: hash new password, remove plaintext
+ if (!emp) { fail('ไม่พบพนักงาน'); return; }
  emp.passwordHash = await hashPassword(newPass);
  delete emp.password;
  emp.forceChangePassword = true;
- emp._updatedAt = new Date().toISOString(); // v1.4.26 LWW timestamp
+ emp._updatedAt = new Date().toISOString();
  DB.save('employees', emps);
- toast(`รีเซ็ตรหัสผ่านของ ${esc(emp.firstName)} เป็น "${newPass}" (จะต้องเปลี่ยนตอน Login ครั้งถัดไป)`);
 
- // v1.6.21: สร้าง/ตรวจบัญชี Supabase Auth ให้ด้วย ไม่งั้นการรีเซ็ตจะกู้การเข้าถึงไม่ได้จริงหลัง step 6
  // v1.6.29: ลองผ่าน Edge Function ก่อน — ทางเดียวที่แก้รหัสของบัญชีที่มีอยู่แล้วได้
  let r = await adminSetAuthPassword(id, newPass);
- // v1.6.30: เก็บเหตุผลจริงของ Edge ไว้เสมอ การถอยไปทางเดิมเคยกลืนสาเหตุจนหาไม่เจอ
  const _edge = r;
  if (!r.ok) console.warn('[v1.6.30] Edge Function ไม่สำเร็จ:', JSON.stringify(_edge));
  if (!r.ok && (r.notDeployed || r.reason === 'no-session' || r.reason === 'no-cloud')) {
   r = await provisionAuthForEmployee(id, newPass);       // ยังไม่ได้ติดตั้ง → วิธีเดิม
  }
+
+ let manual = null;
  if (r.ok) {
   recordAuthProvisioned(id, 'admin-reset');
   auditLog('auth-provision', 'user', id, `แอดมินรีเซ็ตรหัสผ่าน → บัญชี Auth ${r.mode}`);
-  toast(`สร้างบัญชีเข้าระบบ (Supabase Auth) ให้ ${esc(emp.firstName)} แล้ว`, 'success');
  } else if (r.signupDisabled) {
-  // v1.6.28: โปรเจกต์ปิดการสมัครไว้ (Phase 4 ขั้น 6) เบราว์เซอร์จึงสร้างบัญชีใหม่ไม่ได้
-  // ต้องสร้างใน Dashboard ด้วยรหัสที่ผ่านสูตร deriveAuthPassword แล้วเท่านั้น
   markAuthStale(id, 'signup-disabled');
   auditLog('auth-provision-failed', 'user', id, 'โปรเจกต์ปิดการสมัคร — ต้องสร้างบัญชีใน Dashboard');
-  const _manual = await deriveAuthPassword(id, newPass);
-  console.log('[v1.6.28] สร้างบัญชีใน Supabase Dashboard ด้วยค่านี้' + String.fromCharCode(10) + '  Email: ' + authEmailFor(id) + String.fromCharCode(10) + '  Password: ' + _manual + String.fromCharCode(10) + '  ติ๊ก Auto Confirm User ด้วย');
-  toast(`⚠ ระบบสร้างบัญชีเข้าระบบให้ ${esc(emp.firstName)} อัตโนมัติไม่ได้ เพราะปิดการสมัครไว้ที่ Supabase<br>`
-   + `รหัสในระบบ e-HR เปลี่ยนแล้ว แต่ยังล็อกอินไม่ได้จนกว่าจะสร้างบัญชี<br>`
-   + `<strong>เปิด Console (F12)</strong> จะมี Email กับ Password สำหรับสร้างใน Dashboard รออยู่`, 'error');
+  // v1.6.37: ค่าที่ต้องใช้ต้องอยู่บนหน้าจอ ไม่ใช่ใน console — แอดมินใช้มือถืออยู่ก็ได้
+  manual = { email: authEmailFor(id), password: await deriveAuthPassword(id, newPass) };
  } else if (r.existing) {
   markAuthStale(id, r.reason);
   auditLog('auth-provision-failed', 'user', id, `บัญชี Auth มีอยู่แล้วและรหัสไม่ตรง: ${r.reason}`);
-  // v1.6.23: บอกขั้นตอนที่ใช้ได้จริง — การกดรีเซ็ตซ้ำในแอปแก้เคสนี้ไม่ได้ เพราะบัญชีมีอยู่แล้ว
-  // (ทำจริงมาแล้ว 17 ต.ค. กับ 690801003 และ 690813001 — ลบใน Dashboard แล้วรีเซ็ตใหม่ได้ผล)
-  toast(`⚠ บัญชีเข้าระบบของ ${esc(emp.firstName)} ยังค้างรหัสเดิม กดรีเซ็ตซ้ำไม่ช่วย<br>`
-   + `<strong>วิธีแก้:</strong> Supabase → Authentication → Users → ลบ <code>${esc(String(id).toLowerCase())}@hr.crochet.local</code> → กลับมากดรีเซ็ตรหัสผ่านอีกครั้ง<br>`
-   + `หรือให้พนักงานล็อกอินด้วย<strong>รหัสเดิมก่อนหน้า</strong>หนึ่งครั้ง ถ้ายังจำได้`
-   + (_edge && _edge.reason ? `<br><small>Edge Function: ${esc(String(_edge.reason))}</small>` : ''), 'error');
- } else if (r.configError) {
-  toast(`⚠ ${r.reason}`, 'error');
- } else if (r.reason !== 'no-cloud') {
+ } else if (r.reason !== 'no-cloud' && !r.configError) {
   markAuthStale(id, r.reason);
-  toast(`⚠ สร้างบัญชีเข้าระบบไม่สำเร็จ: ${esc(r.reason)}`, 'error');
+ }
+
+ closeModal();
+ showModal('รีเซ็ตรหัสผ่านแล้ว', resetResultHtml(emp, newPass, r, _edge, manual), `
+  <button class="btn btn-primary" onclick="closeModal()">เสร็จสิ้น</button>
+ `);
+ renderPage();
+}
+
+// แยกการประกอบหน้าผลลัพธ์ออกมา เพื่อให้ทดสอบได้โดยไม่ต้องมีเบราว์เซอร์
+function resetResultHtml(emp, newPass, r, edge, manual) {
+ const name = `${esc(emp.firstName)} ${esc(emp.lastName)}`;
+ let authBlock;
+ if (r.ok) {
+  authBlock = `<div class="alert alert-success">บัญชีเข้าระบบพร้อมใช้งานแล้ว พนักงานเข้าระบบด้วยรหัสนี้ได้ทันที</div>`;
+ } else if (manual) {
+  authBlock = `<div class="alert alert-error">
+   <strong>ยังเข้าระบบไม่ได้จนกว่าจะสร้างบัญชีให้</strong><br>
+   รหัสฝั่ง e-HR เปลี่ยนแล้ว แต่ Supabase ปิดการสมัครไว้ ระบบจึงสร้างบัญชีให้อัตโนมัติไม่ได้<br>
+   สร้างที่ Supabase → Authentication → Users → Add user แล้วติ๊ก Auto Confirm User
+  </div>
+  ${_copyRow('Email', manual.email, 'resetManualEmail')}
+  ${_copyRow('Password', manual.password, 'resetManualPass')}`;
+ } else if (r.existing) {
+  authBlock = `<div class="alert alert-error">
+   <strong>บัญชีเข้าระบบยังค้างรหัสเดิม</strong> กดรีเซ็ตซ้ำไม่ช่วย<br>
+   วิธีแก้: Supabase → Authentication → Users → ลบ <code>${esc(String(emp.id).toLowerCase())}@hr.crochet.local</code> → กลับมากดรีเซ็ตอีกครั้ง<br>
+   หรือให้พนักงานเข้าระบบด้วย<strong>รหัสเดิมก่อนหน้า</strong>หนึ่งครั้ง ถ้ายังจำได้
+   ${edge && edge.reason ? `<br><small>Edge Function: ${esc(String(edge.reason))}</small>` : ''}
+  </div>`;
+ } else if (r.configError) {
+  authBlock = `<div class="alert alert-error">${esc(r.reason)}</div>`;
+ } else if (r.reason === 'no-cloud') {
+  authBlock = `<div class="alert alert-info">ยังไม่ได้เชื่อมต่อฐานข้อมูล — รหัสถูกบันทึกไว้ในเครื่องนี้เท่านั้น</div>`;
+ } else {
+  authBlock = `<div class="alert alert-error">สร้างบัญชีเข้าระบบไม่สำเร็จ: ${esc(String(r.reason || 'ไม่ทราบสาเหตุ'))}</div>`;
+ }
+ return `
+  <div style="font-size:15px;">รหัสผ่านชั่วคราวของ</div>
+  <div style="font-size:18px;font-weight:700;margin-bottom:2px;">${name}</div>
+  <div class="text-sm" style="margin-bottom:14px;">รหัสพนักงาน ${esc(emp.id)}</div>
+  ${_copyRow('รหัสผ่านชั่วคราว', newPass, 'resetNewPass')}
+  <div class="text-sm" style="margin:10px 0 14px;">ส่งให้พนักงานแล้วเขาจะถูกบังคับเปลี่ยนรหัสตอนเข้าระบบครั้งถัดไป · หน้านี้จะไม่แสดงอีกเมื่อปิดไปแล้ว</div>
+  ${authBlock}`;
+}
+
+// ช่องค่าที่คัดลอกได้ — รหัสผ่านต้องคัดลอกได้ ไม่ใช่ให้จำจากหน้าจอ 3 วินาที
+function _copyRow(label, value, id) {
+ return `<div style="margin-bottom:8px;">
+  <div class="text-sm" style="margin-bottom:4px;">${esc(label)}</div>
+  <div style="display:flex;gap:8px;">
+   <input id="${id}" type="text" readonly value="${esc(value)}"
+    onclick="this.select()"
+    style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;background:var(--gray-50);">
+   <button type="button" class="btn btn-secondary" style="flex:none;" onclick="_copyFrom('${id}', this)">คัดลอก</button>
+  </div>
+ </div>`;
+}
+
+function _copyFrom(inputId, btn) {
+ const el = document.getElementById(inputId);
+ if (!el) return;
+ el.select();
+ const done = () => { const t = btn.textContent; btn.textContent = 'คัดลอกแล้ว'; setTimeout(() => { btn.textContent = t; }, 1500); };
+ if (navigator.clipboard && navigator.clipboard.writeText) {
+  navigator.clipboard.writeText(el.value).then(done).catch(() => { try { document.execCommand('copy'); done(); } catch (e) { toast('คัดลอกไม่สำเร็จ กดค้างที่ช่องเพื่อคัดลอกเอง', 'error'); } });
+ } else {
+  try { document.execCommand('copy'); done(); } catch (e) { toast('คัดลอกไม่สำเร็จ กดค้างที่ช่องเพื่อคัดลอกเอง', 'error'); }
  }
 }
 

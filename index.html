@@ -998,6 +998,52 @@ th,
 }
 
 /* ============================================================
+   v1.6.44: การ์ดหน้ารายการบนมือถือ
+   ============================================================
+   ตารางทะเบียนพนักงาน 13 คอลัมน์ สลิปเงินเดือน 15 คอลัมน์ กว้างเกินจอ 375px
+   หลายเท่า ปุ่มจัดการอยู่คอลัมน์สุดท้าย ต้องเลื่อนแนวนอนไปจนสุดถึงจะกดได้
+   และพอเลื่อนไปถึงก็ไม่เห็นแล้วว่ากำลังกดของใคร
+
+   หน้าตาตั้งใจให้เหมือนการ์ดหน้าอนุมัติ (.apv-card) แต่แยกชุด class ไว้
+   เพราะหน้าอนุมัติขึ้น production แล้วและมีชุดทดสอบจับอยู่ ไม่ควรไปแตะ */
+.lcards { display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+/* ตารางทะเบียนพนักงานใช้ปุ่มชุดเดียวกับการ์ด แต่ในตารางต้องเป็นปุ่มเล็ก */
+.emp-actions .btn { padding: 4px 10px; font-size: 12px; }
+.lcard {
+ background: #fff;
+ border: 1px solid var(--gray-200);
+ border-radius: 14px;
+ padding: 14px;
+ box-shadow: 0 2px 8px rgba(30,58,138,0.06);
+}
+/* พนักงานที่ลาออกแล้ว ยังต้องอ่านออก แค่ไม่ต้องเด่นเท่าคนที่ยังอยู่ */
+.lcard-dim { opacity: 0.72; }
+.lcard-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.lcard-title { font-size: 16px; font-weight: 700; line-height: 1.35; }
+.lcard-badge { flex: none; text-align: right; }
+.lcard-sub { font-size: 13px; color: var(--gray-700); margin-top: 2px; }
+.lcard-lines { display: flex; flex-direction: column; gap: 6px; font-size: 14px; margin-top: 10px; }
+.lcard-lines > div { display: flex; justify-content: space-between; gap: 12px; }
+.lcard-lines span { color: var(--gray-700); }
+.lcard-lines b { text-align: right; font-weight: 600; }
+.lcard-note {
+ margin-top: 10px;
+ padding-top: 10px;
+ border-top: 1px solid var(--gray-100);
+ font-size: 13px;
+ color: var(--gray-700);
+ word-break: break-word;
+}
+/* ปุ่มสองใบต่อแถว สูงอย่างน้อย 44px ตามเกณฑ์พื้นที่สัมผัส */
+.lcard-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.lcard-actions .btn {
+ flex: 1 1 calc(50% - 4px);
+ min-height: 44px;
+ font-size: 14px;
+ font-weight: 600;
+}
+
+/* ============================================================
    v1.6.35: แถบเลือกทั้งหมดในหน้าอนุมัติ
    ============================================================
    เดิมใช้ position:sticky;top:0 ซึ่งไม่เคยทำงานเลย และวัดยืนยันแล้ว:
@@ -1169,7 +1215,7 @@ th,
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.43';
+const APP_VERSION = '1.6.44';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -8296,10 +8342,12 @@ function setApprovalTab(t) {
 //
 // การ์ดวางชื่อไว้บนสุด ปุ่มไว้ล่างสุดเต็มความกว้าง ไม่มีอะไรทับกัน
 // และแสดงธงเตือนเฉพาะใบที่ต้องคิดก่อนกด แทนที่จะให้ทุกแถวหน้าตาเหมือนกันหมด
-function _apvIsMobile() {
+// จุดตัดเดียวกับ CSS ที่สลับเป็นเลย์เอาต์มือถือ
+function _isMobileWidth() {
  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
   && window.matchMedia('(max-width: 768px)').matches;
 }
+function _apvIsMobile() { return _isMobileWidth(); }
 
 // ธงเตือน: คืนรายการข้อความที่ต้องเห็นก่อนกดอนุมัติ (ว่าง = ใบปกติ)
 // แยกออกมาเป็นฟังก์ชันล้วนเพื่อให้ทดสอบได้ และใช้ได้ทั้งการ์ดและตารางในอนาคต
@@ -8343,6 +8391,40 @@ function _apvCardList(type, items, describe) {
    เลือกทั้งหมด ${items.length} รายการ
   </label>
   <div class="apv-cards">${cards}</div>`;
+}
+
+// ============================================================
+// v1.6.44: การ์ดหน้ารายการบนมือถือ
+// ============================================================
+// ใช้กับหน้าที่เป็นตารางยาว ๆ แล้วมีปุ่มจัดการอยู่ท้ายแถว
+// ทะเบียนพนักงาน · สลิปเงินเดือน · คลังเครื่องเขียน · Audit Log
+//
+// describe(item) คืน:
+//   title   ชื่อเรื่องของแถว (HTML ที่ escape มาแล้ว)
+//   sub     บรรทัดรองใต้ชื่อ
+//   badge   ป้ายสถานะมุมขวาบน
+//   lines   [[ป้าย, ค่า]...] ค่าที่ว่างจะถูกตัดทิ้ง
+//   note    ข้อความท้ายการ์ด เช่น คำเตือน
+//   actions HTML ของปุ่ม
+//   dim     true = จางลง (เช่น พนักงานที่ลาออกแล้ว)
+function _listCards(items, describe) {
+ const cards = items.map(it => {
+  const d = describe(it);
+  const lines = (d.lines || []).filter(l => l && l[1] !== null && l[1] !== undefined && l[1] !== '');
+  return `<div class="lcard${d.dim ? ' lcard-dim' : ''}">
+   <div class="lcard-head">
+    <div>
+     <div class="lcard-title">${d.title}</div>
+     ${d.sub ? `<div class="lcard-sub">${d.sub}</div>` : ''}
+    </div>
+    ${d.badge ? `<div class="lcard-badge">${d.badge}</div>` : ''}
+   </div>
+   ${lines.length ? `<div class="lcard-lines">${lines.map(l => `<div><span>${esc(l[0])}</span><b>${l[1]}</b></div>`).join('')}</div>` : ''}
+   ${d.note ? `<div class="lcard-note">${d.note}</div>` : ''}
+   ${d.actions ? `<div class="lcard-actions">${d.actions}</div>` : ''}
+  </div>`;
+ }).join('');
+ return `<div class="lcards">${cards}</div>`;
 }
 
 function drawApprovalList() {
@@ -8619,6 +8701,34 @@ function renderEmployees() {
  })
  : all;
 
+ // v1.6.44: ตาราง 13 คอลัมน์กว้าง ~1,100px ในจอ 375px ปุ่มแก้ไข/รีเซ็ตรหัส
+ // อยู่คอลัมน์สุดท้าย ต้องเลื่อนไปจนสุดถึงจะกดได้ และตอนนั้นชื่อหลุดจอไปแล้ว
+ const _empBadge = e => e.active
+  ? '<span class="status-badge status-approved">ทำงานอยู่</span>'
+  : '<span class="status-badge status-rejected">ลาออกแล้ว</span>';
+ const _empActions = e => `<button class="btn btn-secondary" onclick="showEmployeeForm('${e.id}')">แก้ไข</button>
+  <button class="btn btn-secondary" onclick="resetPassword('${e.id}')">รีเซ็ตรหัส</button>
+  ${currentUser.role === 'admin' ? `<button class="btn btn-secondary" onclick="adjustLeaveQuotas('${e.id}')">สิทธิ์ลา</button>` : ''}
+  ${e.id !== currentUser.id ? `<button class="btn btn-danger" onclick="deleteEmployee('${e.id}')">ลบ</button>` : ''}`;
+ const _cards = _isMobileWidth() ? _listCards(emps, e => {
+  const mgr = e.managerId ? getEmployee(e.managerId) : null;
+  return {
+   dim: !e.active,
+   title: `${esc(e.firstName)} ${esc(e.lastName)}` + (e.nickname ? ` <small style="color:var(--gray-500);font-weight:500;">(${esc(e.nickname)})</small>` : ''),
+   sub: `${esc(e.position || '-')} · ${esc(e.department || '-')}`,
+   badge: _empBadge(e),
+   lines: [
+    ['รหัส', esc(e.id)],
+    ['บริษัท', getCompanyLabel(e.company)],
+    ['หัวหน้า', mgr ? esc(mgr.firstName) : '-'],
+    ['เงินเดือน', maskMoney(e.monthlySalary, ' ฿')],
+    ['วันเริ่มงาน', formatDate(e.startDate)],
+    ['สิทธิ์การใช้งาน', `<span class="role-badge">${esc(e.role)}</span>`]
+   ],
+   actions: _empActions(e)
+  };
+ }) : null;
+
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
  <h1>จัดการพนักงาน <small style="font-size:14px;color:var(--gray-500);">(${q ? `${emps.length} จาก ${all.length}` : all.length} คน)</small></h1>
@@ -8647,7 +8757,7 @@ function renderEmployees() {
  </div>
  <div class="card">
  <div class="card-body" style="padding:0;overflow-x:auto;">
- ${emps.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center;color:var(--gray-500);">ไม่พบพนักงานที่ตรงกับการค้นหา</div>` : `
+ ${emps.length === 0 ? `<div class="empty-state" style="padding:40px;text-align:center;color:var(--gray-500);">ไม่พบพนักงานที่ตรงกับการค้นหา</div>` : (_cards || `
  <table>
  <thead><tr><th>รหัส</th><th>ชื่อ-นามสกุล</th><th>ชื่อเล่น</th><th>เพศ</th><th>แผนก</th><th>ตำแหน่ง</th><th>บริษัท</th><th>หัวหน้า</th><th>เงินเดือน</th><th>วันเริ่มงาน</th><th>Role</th><th>สถานะ</th><th>การจัดการ</th></tr></thead>
  <tbody>
@@ -8667,18 +8777,15 @@ function renderEmployees() {
  <td>${maskMoney(e.monthlySalary, ' ฿')}</td>
  <td>${formatDate(e.startDate)}</td>
  <td><span class="role-badge">${e.role}</span></td>
- <td>${e.active ? '' : ''}</td>
- <td style="white-space:nowrap;">
- <button class="btn btn-sm btn-secondary" onclick="showEmployeeForm('${e.id}')">แก้ไข</button>
- <button class="btn btn-sm btn-secondary" onclick="resetPassword('${e.id}')">รีเซ็ตรหัส</button>
- ${currentUser.role === 'admin' ? `<button class="btn btn-sm btn-secondary" onclick="adjustLeaveQuotas('${e.id}')">สิทธิ์ลา</button>` : ''}
- ${e.id !== currentUser.id ? `<button class="btn btn-sm btn-danger" onclick="deleteEmployee('${e.id}')">ลบ</button>` : ''}
+ <td>${_empBadge(e)}</td>
+ <td style="white-space:nowrap;" class="emp-actions">
+ ${_empActions(e)}
  </td>
  </tr>`;
  }).join('')}
  </tbody>
  </table>
- `}
+ `)}
  </div>
  </div>
  `;
@@ -9824,27 +9931,6 @@ function normalizeAttendanceColumnA(rows, dateColIdx = 0) {
  }
  console.log(`[Normalize] Column A → DD/MM/YYYY:`, stats);
  return stats;
-}
-
-// Detect date format from string cells in the workbook (any cell with day > 12 = DD/MM confirmed)
-function detectExcelDateFormat(workbook, dateColIdx = 0) {
- let ddmm = 0, mmdd = 0;
- for (const sn of workbook.SheetNames) {
- const ws = workbook.Sheets[sn];
- const rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true });
- for (let i = 1; i < rows.length; i++) {
- const v = rows[i] && rows[i][dateColIdx];
- if (typeof v !== 'string') continue;
- const m = v.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
- if (!m) continue;
- const a = +m[1], b = +m[2];
- if (a > 12 && b <= 12) ddmm++;
- else if (b > 12 && a <= 12) mmdd++;
- }
- }
- if (ddmm > mmdd) return { format: 'DD/MM', confidence: 'high', evidence: { ddmm, mmdd } };
- if (mmdd > ddmm) return { format: 'MM/DD', confidence: 'high', evidence: { ddmm, mmdd } };
- return { format: 'DD/MM', confidence: 'default', evidence: { ddmm, mmdd } }; // Thai default
 }
 
 // Parse time from Date object or "HH:MM" string
@@ -12567,6 +12653,63 @@ function renderPaySlipAdmin() {
  const periodLocked = monthSlips.length > 0 && lockedCount === monthSlips.length;
  const isAdmin = currentUser.role === 'admin';
 
+ // v1.6.44: คำนวณรอบเดียว แล้วให้ทั้งตารางและการ์ดอ่านจากชุดเดียวกัน
+ // ถ้าแยกคำนวณสองที่ วันหนึ่งสองหน้าจะแสดงยอดไม่ตรงกันโดยไม่มีใครรู้
+ const neg = v => !isSalaryUnlocked() ? maskMoney(v)
+  : (v > 0 ? `<span style="color:var(--danger);">-${v.toLocaleString()}</span>` : '0');
+ const rows = emps.map(e => {
+  const saved = slips.find(x => x.employeeId === e.id && x.monthStr === _slipMonth);
+  const locked = isSlipLocked(saved);
+  // v1.6.0: ล็อกแล้วแสดงยอดที่ล็อกไว้ ไม่ใช่ยอดสด
+  const slip = locked ? saved : calculatePaySlip(e.id, y, m);
+  if (!slip) return null;
+  // ล็อกแล้วแต่ยอดสดเปลี่ยนไป = มีอะไรอนุมัติเข้ามาหลังปิดรอบ จะยกไปรอบถัดไป
+  let drift = 0;
+  if (locked) {
+   const live = calculatePaySlip(e.id, y, m);
+   const carried = (saved.carriedAdjustments || []).reduce((t, a) => t + (Number(a.amount) || 0), 0);
+   if (live) drift = Math.round(live.netPay - (Number(saved.netPay) || 0) - carried);
+  }
+  return { e, saved, locked, slip, drift };
+ }).filter(Boolean);
+
+ const _slipStatus = ({ saved, locked, slip, drift }) => `${locked
+   ? `<span class="status-badge status-approved" title="ปิดรอบเมื่อ ${esc(saved.paidAt||'')}">ปิดรอบแล้ว</span>${saved.docNo ? `<br><small style="color:var(--gray-500);">${esc(saved.docNo)}</small>` : ''}${drift ? `<br><small style="color:var(--warning);">ส่วนต่าง ${drift > 0 ? '+' : ''}${drift.toLocaleString()} จะยกไปรอบถัดไป</small>` : ''}`
+   : (saved ? '<span class="status-badge status-pending">บันทึกแล้ว</span>' : '<span style="color:var(--gray-500);font-size:12px;">ยังไม่บันทึก</span>')}
+  ${slip.missingSalary ? `<br><small style="color:var(--danger);font-weight:600;" title="ทุกยอดบนสลิปคิดจากเงินเดือน — ยังไม่กรอกจึงได้ 0 ทั้งใบ">⚠️ ยังไม่ได้กรอกเงินเดือน</small>` : ''}
+  ${(slip.deductionWarnings||[]).length ? `<br><small style="color:var(--danger);" title="${esc(slip.deductionWarnings.join(' · '))}">⚠️ หักเกินเพดาน</small>` : ''}`;
+
+ // sm = ปุ่มเล็กสำหรับในตาราง · ว่าง = ปุ่มเต็มขนาดสำหรับการ์ดบนมือถือ
+ const _slipActions = ({ e, saved, locked, slip }, sm) => `
+  ${isAdmin && !locked ? `<button class="btn ${sm}btn-warning" onclick="openCustomDeductionModal('${e.id}', ${y}, ${m})" title="เพิ่ม/แก้ไข รายการหักพิเศษ (กยศ, ประกันชีวิต ฯลฯ)">Adjust${slip.customDeductionsTotal > 0 ? ` (${slip.customDeductions.length})` : ''}</button>` : ''}
+  <button class="btn ${sm}btn-secondary" onclick="previewPaySlip('${e.id}', ${y}, ${m})" title="ดูตัวอย่างสลิปก่อนบันทึก">Preview</button>
+  <button class="btn ${sm}btn-primary" onclick="downloadPaySlipImage('${e.id}', ${y}, ${m})">PNG</button>
+  <button class="btn ${sm}btn-success" onclick="sharePaySlip('${e.id}', ${y}, ${m})">แชร์</button>
+  ${isAdmin && !locked ? `<button class="btn ${sm}btn-secondary" onclick="savePaySlip('${e.id}', ${y}, ${m})">${saved ? 'บันทึกใหม่' : 'บันทึก'}</button>` : ''}`;
+
+ // v1.6.44: 15 คอลัมน์บนจอ 375px อ่านไม่ออกเลย และปุ่มอยู่สุดขอบขวา
+ const _cards = _isMobileWidth() ? _listCards(rows, r => ({
+  dim: !r.e.active,
+  title: `${esc(r.e.firstName)} ${esc(r.e.lastName)}`,
+  sub: esc(r.e.id) + (r.e.active ? '' : ' · ลาออกแล้ว'),
+  badge: _slipStatus(r),
+  lines: [
+   ['เงินเดือน', maskMoney(r.slip.baseSalary)],
+   ['OT', `<span style="color:var(--success);">${isSalaryUnlocked() ? '+' : ''}${maskMoney(r.slip.otPay)}</span>`],
+   ['คอมมิชชัน', `<span style="color:var(--success);">${isSalaryUnlocked() ? '+' : ''}${maskMoney(r.slip.commissionTotal)}</span>`],
+   ['เบี้ยขยัน', `<span style="color:${r.slip.eligibleForDiligence?'var(--success)':'var(--gray-500)'};">${r.slip.eligibleForDiligence?'+':''}${r.slip.diligenceAmount.toLocaleString()}</span>`],
+   ['ยกยอด', (r.slip.carryOverTotal||0) === 0 ? '0' : `<span style="color:${r.slip.carryOverTotal > 0 ? 'var(--success)' : 'var(--danger)'};">${r.slip.carryOverTotal > 0 ? '+' : ''}${r.slip.carryOverTotal.toLocaleString()}</span>`],
+   ['มาสาย', neg(r.slip.lateDeducTotal)],
+   ['ขาดงาน', neg(r.slip.absentDeduction || 0) + ((r.slip.absentDays||0) ? ` <small style="color:var(--gray-500);">(${r.slip.absentDays} วัน)</small>` : '')],
+   ['ลาไม่รับค่าจ้าง', neg(r.slip.unpaidDeduction)],
+   ['ประกันสังคม', neg(r.slip.sso.amount)],
+   ['หักพิเศษ', neg(r.slip.customDeductionsTotal)],
+   ['เงินสุทธิ', `<strong>${maskMoney(r.slip.netPay)}</strong>`]
+  ],
+  note: r.slip.deferredDeduction > 0 && isSalaryUnlocked() ? `<span style="color:var(--danger);">ยกไปหักต่อ ${r.slip.deferredDeduction.toLocaleString()}</span>` : '',
+  actions: _slipActions(r, '')
+ })) : null;
+
  document.getElementById('mainContent').innerHTML = `
  <div class="page-header">
  <h1>สลิปเงินเดือน (Admin)</h1>
@@ -12610,28 +12753,13 @@ function renderPaySlipAdmin() {
  </div>
  </div>
  <div class="card-body" style="padding:0;overflow-x:auto;">
+ ${_cards || `
  <table>
  <thead><tr>
  <th>รหัส</th><th>ชื่อ</th><th>เงินเดือน</th><th>OT</th><th>คอม</th><th>เบี้ยขยัน</th><th>ยกยอด</th><th>มาสาย</th><th>ขาดงาน</th><th>ลาไม่รับ</th><th>ปกส.</th><th>หักพิเศษ</th><th>เงินสุทธิ</th><th>สถานะ</th><th>การจัดการ</th>
  </tr></thead>
  <tbody>
- ${emps.map(e => {
- const saved = slips.find(s => s.employeeId === e.id && s.monthStr === _slipMonth);
- const locked = isSlipLocked(saved);
- // v1.6.0: ล็อกแล้วแสดงยอดที่ล็อกไว้ ไม่ใช่ยอดสด
- const slip = locked ? saved : calculatePaySlip(e.id, y, m);
- if (!slip) return '';
- // ล็อกแล้วแต่ยอดสดเปลี่ยนไป = มีอะไรอนุมัติเข้ามาหลังปิดรอบ จะยกไปรอบถัดไป
- let drift = 0;
- if (locked) {
-  const live = calculatePaySlip(e.id, y, m);
-  const carried = (saved.carriedAdjustments || []).reduce((t, a) => t + (Number(a.amount) || 0), 0);
-  if (live) drift = Math.round(live.netPay - (Number(saved.netPay) || 0) - carried);
- }
- // v1.6.4: ปิดบังด้วย — ประกันสังคมคือ 5% ของฐาน จึงย้อนกลับไปหาเงินเดือนได้ทันที
- const neg = v => !isSalaryUnlocked() ? maskMoney(v)
-  : (v > 0 ? `<span style="color:var(--danger);">-${v.toLocaleString()}</span>` : '0');
- return `<tr${e.active ? '' : ' style="opacity:.72;"'}>
+ ${rows.map(r => { const { e, saved, locked, slip } = r; return `<tr${e.active ? '' : ' style="opacity:.72;"'}>
  <td>${e.id}${e.active ? '' : ' <small style="color:var(--gray-500);">(ลาออก)</small>'}</td>
  <td>${esc(e.firstName)} ${esc(e.lastName)}</td>
  <td>${maskMoney(slip.baseSalary)}</td>
@@ -12647,24 +12775,13 @@ function renderPaySlipAdmin() {
  <td>${neg(slip.sso.amount)}</td>
  <td>${neg(slip.customDeductionsTotal)}</td>
  <td><strong>${maskMoney(slip.netPay)}</strong>${slip.deferredDeduction > 0 && isSalaryUnlocked() ? `<br><small style="color:var(--danger);">ยกไปหักต่อ ${slip.deferredDeduction.toLocaleString()}</small>` : ''}</td>
- <td style="white-space:nowrap;">
-   ${locked
-     ? `<span class="status-badge status-approved" title="ปิดรอบเมื่อ ${esc(saved.paidAt||'')}">ปิดรอบแล้ว</span>${saved.docNo ? `<br><small style="color:var(--gray-500);">${esc(saved.docNo)}</small>` : ''}${drift ? `<br><small style="color:var(--warning);">ส่วนต่าง ${drift > 0 ? '+' : ''}${drift.toLocaleString()} จะยกไปรอบถัดไป</small>` : ''}`
-     : (saved ? '<span class="status-badge status-pending">บันทึกแล้ว</span>' : '<span style="color:var(--gray-500);font-size:12px;">ยังไม่บันทึก</span>')}
-   ${slip.missingSalary ? `<br><small style="color:var(--danger);font-weight:600;" title="ทุกยอดบนสลิปคิดจากเงินเดือน — ยังไม่กรอกจึงได้ 0 ทั้งใบ">⚠️ ยังไม่ได้กรอกเงินเดือน</small>` : ''}
-   ${(slip.deductionWarnings||[]).length ? `<br><small style="color:var(--danger);" title="${esc(slip.deductionWarnings.join(' · '))}">⚠️ หักเกินเพดาน</small>` : ''}
- </td>
- <td style="white-space:nowrap;">
- ${isAdmin && !locked ? `<button class="btn btn-sm btn-warning" onclick="openCustomDeductionModal('${e.id}', ${y}, ${m})" title="เพิ่ม/แก้ไข รายการหักพิเศษ (กยศ, ประกันชีวิต ฯลฯ)"> Adjust${slip.customDeductionsTotal > 0 ? ` (${slip.customDeductions.length})` : ''}</button>` : ''}
- <button class="btn btn-sm btn-secondary" onclick="previewPaySlip('${e.id}', ${y}, ${m})" title="ดูตัวอย่างสลิปก่อนบันทึก"> Preview</button>
- <button class="btn btn-sm btn-primary" onclick="downloadPaySlipImage('${e.id}', ${y}, ${m})"> PNG</button>
- <button class="btn btn-sm btn-success" onclick="sharePaySlip('${e.id}', ${y}, ${m})"> แชร์</button>
- ${isAdmin && !locked ? `<button class="btn btn-sm btn-secondary" onclick="savePaySlip('${e.id}', ${y}, ${m})">${saved ? 'บันทึกใหม่' : 'บันทึก'}</button>` : ''}
- </td>
+ <td style="white-space:nowrap;">${_slipStatus(r)}</td>
+ <td style="white-space:nowrap;">${_slipActions(r, 'btn-sm ')}</td>
  </tr>`;
  }).join('')}
  </tbody>
  </table>
+ `}
  </div>
  </div>
  `;
@@ -15479,6 +15596,16 @@ function renderAuditLog() {
  const all = DB.load('auditLog', []);
  const filtered = _auditFilter === 'all' ? all : all.filter(l => l.action === _auditFilter);
  const actionTypes = [...new Set(all.map(l => l.action))];
+ const shown = filtered.slice(0, 200);
+
+ // v1.6.44: บนมือถือ 5 คอลัมน์นี้บีบจนอ่านรายละเอียดไม่ออก
+ const _cards = _isMobileWidth() ? _listCards(shown, l => ({
+  title: esc(l.userName || '—'),
+  sub: formatDateTime(l.timestamp),
+  badge: `<span class="status-badge status-pending">${esc(l.action)}</span>`,
+  lines: [['เป้าหมาย', (l.targetType ? esc(l.targetType) + ': ' : '') + esc(l.targetId || '—')]],
+  note: l.details ? esc(l.details) : ''
+ })) : null;
 
  document.getElementById('mainContent').innerHTML = `
   <div class="page-header">
@@ -15495,16 +15622,16 @@ function renderAuditLog() {
   </div>
   <div class="card">
    <div class="card-body" style="padding:0;">
-    ${filtered.length ? `<table>
+    ${shown.length ? `${_cards || `<table>
      <thead><tr><th>เวลา</th><th>ผู้ใช้</th><th>การกระทำ</th><th>เป้าหมาย</th><th>รายละเอียด</th></tr></thead>
-     <tbody>${filtered.slice(0, 200).map(l => `<tr>
+     <tbody>${shown.map(l => `<tr>
       <td>${formatDateTime(l.timestamp)}</td>
-      <td>${l.userName}</td>
-      <td><span class="status-badge status-pending">${l.action}</span></td>
-      <td>${l.targetType ? l.targetType + ': ' : ''}${l.targetId || '—'}</td>
-      <td class="text-sm">${l.details || '—'}</td>
+      <td>${esc(l.userName || '—')}</td>
+      <td><span class="status-badge status-pending">${esc(l.action)}</span></td>
+      <td>${l.targetType ? esc(l.targetType) + ': ' : ''}${esc(l.targetId || '—')}</td>
+      <td class="text-sm">${esc(l.details || '—')}</td>
      </tr>`).join('')}</tbody>
-    </table>${filtered.length > 200 ? `<div class="text-sm" style="padding:12px;">แสดง 200 รายการล่าสุด จาก ${filtered.length}</div>` : ''}` : '<div class="empty-state">ยังไม่มี log</div>'}
+    </table>`}${filtered.length > 200 ? `<div class="text-sm" style="padding:12px;">แสดง 200 รายการล่าสุด จาก ${filtered.length}</div>` : ''}` : '<div class="empty-state">ยังไม่มี log</div>'}
    </div>
   </div>
  `;
@@ -16509,6 +16636,23 @@ function renderStationery() {
  const items = DB.load('stationery', []);
  const tx = DB.load('stationeryTx', []).sort((a,b) => new Date(b.createdAt) - new Date(a.createdAt));
 
+ // v1.6.44: ปุ่มเบิกอยู่คอลัมน์สุดท้าย ต้องเลื่อนแนวนอนไปจนสุดถึงจะกดได้บนมือถือ
+ const _stBadge = it => it.stock <= 0 ? '<span class="status-badge status-rejected">หมด</span>'
+  : it.stock < it.minStock ? '<span class="status-badge status-rejected">ต่ำกว่าขั้นต่ำ</span>'
+  : it.stock < it.minStock * 1.5 ? '<span class="status-badge status-pending">ใกล้หมด</span>'
+  : '<span class="status-badge status-approved">ปกติ</span>';
+ const _cards = _isMobileWidth() ? _listCards(items, it => ({
+  title: esc(it.name),
+  badge: _stBadge(it),
+  lines: [
+   ['คงเหลือ', `<span style="color:${it.stock < it.minStock ? 'var(--danger)' : 'inherit'};">${it.stock} ${esc(it.unit)}</span>`],
+   ['ขั้นต่ำ', `${it.minStock} ${esc(it.unit)}`]
+  ],
+  actions: `<button class="btn btn-secondary" onclick="showStationeryTx('out','${it.id}')">เบิก</button>
+   <button class="btn btn-secondary" onclick="editStationeryItem('${it.id}')">แก้ไข</button>
+   <button class="btn btn-danger" onclick="deleteStationeryItem('${it.id}')">ลบ</button>`
+ })) : null;
+
  document.getElementById('mainContent').innerHTML = `
   <div class="page-header">
    <div><h1>คลังเครื่องเขียน</h1><div class="text-sm">เบิก-รับเข้า-คงเหลือ · แจ้งเตือน Minimum Stock</div></div>
@@ -16520,7 +16664,7 @@ function renderStationery() {
   <div class="card">
    <div class="card-header"><h3>รายการคงคลัง</h3><a class="text-sm" onclick="showTxHistory()" style="cursor:pointer;color:var(--primary);">ประวัติทั้งหมด</a></div>
    <div class="card-body" style="padding:0;">
-    ${items.length ? `<table>
+    ${items.length ? (_cards || `<table>
      <thead><tr><th>รายการ</th><th>คงเหลือ</th><th>ขั้นต่ำ</th><th>หน่วย</th><th>สถานะ</th><th>การจัดการ</th></tr></thead>
      <tbody>${items.map(it => {
       const isLow = it.stock < it.minStock;
@@ -16539,7 +16683,7 @@ function renderStationery() {
        </td>
       </tr>`;
      }).join('')}</tbody>
-    </table>` : '<div class="empty-state">ยังไม่มีรายการในคลัง</div>'}
+    </table>`) : '<div class="empty-state">ยังไม่มีรายการในคลัง</div>'}
    </div>
   </div>
  `;

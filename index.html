@@ -814,9 +814,12 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  right: 0;
  pointer-events: none;
  }
- /* Modal full-screen on portrait */
+ /* Modal full-screen on portrait
+  * v1.6.39: ถอด .modal-content ออก — showModal() ไม่เคยสร้าง element ชื่อนี้
+  * (ตรวจแล้ว querySelectorAll('.modal-content').length === 0 ทุกหน้า)
+  * กฎที่ไม่ตรงกับอะไรเลยทำให้คนอ่านโค้ดเข้าใจผิดว่าเคสนี้ถูกจัดการแล้ว */
  .modal { padding: 8px; }
- .modal-content { max-width: 100%; max-height: 95vh; }
+ .modal .modal-body { max-height: 70vh; overflow-y: auto; }
  /* Stats grid: 2 cols on mobile */
  .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
  /* Tabs: allow wrap & scroll horizontally if many
@@ -834,6 +837,33 @@ tr:hover td { background: rgba(30,58,138,0.04); }
  .tabs::-webkit-scrollbar { height: 4px; }
  .tab { flex-shrink: 0; white-space: nowrap; }
 
+}
+
+/* ============================================================
+   v1.6.39: กริดที่ย่อหน้าจอได้จริง
+   ============================================================
+   เดิมกริดเหล่านี้เขียนเป็น inline style แล้วอาศัยกฎที่จับคู่จาก *ข้อความ*
+   ของ attribute style ([style*="grid-template-columns:1fr 1fr"])
+   ซึ่งไม่เคยตรงกับแดชบอร์ด เพราะแดชบอร์ดเขียน 2fr 1fr และ repeat(3,1fr)
+
+   วัดที่ 375px ก่อนแก้: การ์ด 'สิทธิ์วันลาคงเหลือ' กว้าง 90px และไทล์คำขอ 67px
+   ซึ่งเป็นหน้าแรกที่พนักงานทุกคนเห็นทุกเช้า
+
+   การจับคู่จากข้อความจะพังทุกครั้งที่มีคนเขียนกริดใหม่ด้วยรูปแบบอื่น
+   คลาสจริงไม่มีปัญหานั้น */
+.grid-main-side { display: grid; grid-template-columns: 2fr 1fr; }
+.grid-two       { display: grid; grid-template-columns: 1fr 1fr; }
+.grid-tiles     { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+/* ไทล์คำขอบนแดชบอร์ด: คงเป็น 3 คอลัมน์บนจอใหญ่ตามดีไซน์เดิม
+   เปลี่ยนเฉพาะพฤติกรรมตอนจอแคบ ซึ่งเป็นที่ที่มันพังจริง */
+.grid-tiles-3   { display: grid; grid-template-columns: repeat(3, 1fr); }
+
+@media (max-width: 768px) {
+ .grid-main-side,
+ .grid-two { grid-template-columns: 1fr; }
+ /* 150px คือความกว้างต่ำสุดที่ข้อความอย่าง 'งานนอกสถานที่' ยังอยู่ในสองบรรทัด */
+ .grid-tiles,
+ .grid-tiles-3 { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 }
 
 /* ============================================================
@@ -977,8 +1007,9 @@ th,
  }
 }
 @media (max-width: 768px) {
- /* v1.4.16: collapse 2-column inline grids to 1-column on mobile.
-  * Attribute selector handles places using inline style="grid-template-columns:1fr 1fr" */
+ /* v1.6.39: กฎที่จับจากข้อความ inline style ถูกลบออกแล้ว ดูคลาส .grid-main-side /
+  * .grid-tiles / .grid-two ข้างบน — เหตุผลอยู่ในคอมเมนต์ของคลาสเหล่านั้น
+  * ยังคงเหลือไว้สำหรับ inline grid ที่ยังไม่ได้แปลงเป็นคลาส (เช่นในรายงานบางหน้า) */
  [style*="grid-template-columns:1fr 1fr"],
  [style*="grid-template-columns: 1fr 1fr"] {
  grid-template-columns: 1fr !important;
@@ -1098,7 +1129,7 @@ th,
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.38';
+const APP_VERSION = '1.6.39';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -7579,7 +7610,7 @@ function renderActivityCalendar() {
  </div>
  </div>
 
- <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+ <div class="grid-two" style="gap:14px;margin-bottom:14px;">
   <div class="card">
    <div class="card-header"><h3>คำขอลาล่าสุด</h3></div>
    <div class="card-body" style="padding:0;">
@@ -9308,7 +9339,7 @@ function previewAttendance(e) {
  <div class="alert alert-success">อ่านไฟล์สำเร็จ — รวม ${totalScans.toLocaleString()} ครั้งสแกน → จัดกลุ่มได้ ${allRecords.length.toLocaleString()} records</div>
  <div class="alert alert-info mb-3" style="font-size:13px;">
  <strong>Step 1: Normalize Column A → DD/MM/YYYY</strong> (uniform format ก่อน parse)
- <div style="margin-top:8px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+ <div class="grid-tiles" style="margin-top:8px;gap:8px;">
  <div><span style="color:var(--gray-500);">Datetime → DD/MM:</span> <strong>${normStats.datetime.toLocaleString()}</strong></div>
  <div><span style="color:var(--gray-500);">String DD/MM (คง):</span> <strong>${normStats.string.toLocaleString()}</strong></div>
  <div><span style="color:var(--gray-500);">ISO → DD/MM:</span> <strong>${normStats.iso.toLocaleString()}</strong></div>
@@ -15133,16 +15164,16 @@ function renderDashboardOverview() {
 
   <div class="stats-grid">
    <div class="stat-card green"><div class="label">วันลาพักร้อนคงเหลือ</div><div class="value">${b.vacation.remaining} <small>วัน</small></div><div class="sub">จากสิทธิ์ ${b.vacation.quota} วัน${b.vacation.carryRemaining > 0 ? ` · ยกมา ${b.vacation.carryRemaining} วัน ใช้ได้ถึง ${formatDate(b.vacation.carryExpires)}` : ''}</div></div>
-   <div class="stat-card" title="${formatPayrollCycle(_targetOTCycle)}"><div class="label" style="display:flex;justify-content:space-between;align-items:center;gap:6px;"><span>OT เดือนนี้</span><select onchange="_empOTCycle=this.value;renderDashboardOverview();" style="font-size:11px;padding:2px 6px;border:1px solid var(--gray-300);border-radius:4px;background:white;color:var(--gray-700);max-width:120px;cursor:pointer;" title="เลือกรอบเงินเดือนเพื่อดู OT ย้อนหลัง">${_empOTCycleOptions.map(o => `<option value="${o.value}" ${o.value===_targetOTCycle?'selected':''}>${o.label}</option>`).join('')}</select></div><div class="value">${otHoursThisMonth.toFixed(1)} <small>ชม.</small></div></div>
+   <div class="stat-card" title="${formatPayrollCycle(_targetOTCycle)}"><div class="label" style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;"><span>OT เดือนนี้</span><select onchange="_empOTCycle=this.value;renderDashboardOverview();" style="font-size:12px;padding:3px 6px;border:1px solid var(--gray-300);border-radius:4px;background:white;color:var(--gray-700);max-width:100%;cursor:pointer;" title="เลือกรอบเงินเดือนเพื่อดู OT ย้อนหลัง">${_empOTCycleOptions.map(o => `<option value="${o.value}" ${o.value===_targetOTCycle?'selected':''}>${o.label}</option>`).join('')}</select></div><div class="value">${otHoursThisMonth.toFixed(1)} <small>ชม.</small></div></div>
    <div class="stat-card orange"><div class="label">คำขอรออนุมัติ</div><div class="value">${pendingCount}</div></div>
    <div class="stat-card"><div class="label">ลาป่วยคงเหลือ</div><div class="value">${b.sick.remaining} <small>/${b.sick.quota}</small></div></div>
   </div>
 
-  <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;">
+  <div class="grid-main-side" style="gap:16px;">
    <div class="card">
     <div class="card-header"><h3>One Request Center</h3><a class="text-sm" onclick="navigate('my-leaves')" style="cursor:pointer;color:var(--primary);">ดูทั้งหมด</a></div>
     <div class="card-body">
-     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+     <div class="grid-tiles-3" style="gap:12px;">
       ${[
        {key:'my-leaves', label:'ขอลา', sub:'ป่วย กิจ พักร้อน'},
        {key:'my-ot', label:'ขอ OT', sub:'ล่วงเวลา'},
@@ -15234,7 +15265,7 @@ function renderHolidayLeave() {
    <div class="text-sm">ปฏิทินวันหยุดบริษัท + นโยบายสิทธิ์ลา</div>
   </div>
 
-  <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;">
+  <div class="grid-main-side" style="gap:16px;">
    <div class="card">
     <div class="card-header"><h3>วันหยุดประจำปี ${new Date().getFullYear() + 543}</h3></div>
     <div class="card-body" style="padding:0;">
@@ -15721,7 +15752,7 @@ function renderExecDashboard() {
    <!-- v1.5.12: "ผลประเมินรอบนี้" stat card removed (evaluation system deprecated) -->
   </div>
 
-  <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;">
+  <div class="grid-main-side" style="gap:14px;">
    <div class="card">
     <div class="card-header"><h3>จำนวนพนักงานตามบริษัท</h3></div>
     <div class="card-body">
@@ -15763,7 +15794,7 @@ function renderExecDashboard() {
    <div style="font-size:16px;font-weight:700;color:var(--primary-dark);text-align:center;">📊 YTD Analytics</div>
    <div style="font-size:12px;color:var(--gray-500);text-align:center;margin-top:2px;">สะสมตั้งแต่ 1 ม.ค. ${new Date().getFullYear() + 543} ถึงปัจจุบัน · คลิกที่แผนกเพื่อดูรายละเอียด</div>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:12px;">
+  <div class="grid-two" style="gap:14px;margin-top:12px;">
    ${_renderDeptBarWidget('⏰ OT ตามแผนก (ชั่วโมง)', ytdOT, 'ชม.', '#3b82f6', '_execDrillOT')}
    ${_renderDeptBarWidget('🏥 ลาป่วย ตามแผนก', ytdSick, 'วัน', '#ef4444', '_execDrillSick')}
    ${_renderDeptBarWidget('🌴 ลาพักร้อน ตามแผนก', ytdVacation, 'วัน', '#10b981', '_execDrillVacation')}
@@ -15771,7 +15802,7 @@ function renderExecDashboard() {
    <div class="card">
     <div class="card-header"><h3>👥 พนักงานเริ่มงาน / ลาออก (YTD)</h3></div>
     <div class="card-body">
-     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+     <div class="grid-two" style="gap:14px;margin-bottom:14px;">
       <div style="padding:12px;background:#dcfce7;border-radius:8px;text-align:center;">
        <div class="text-sm" style="color:#166534;">เข้าใหม่</div>
        <div style="font-size:28px;font-weight:700;color:#166534;">${ytdHiresResigns.hiresTotal}</div>
@@ -16220,7 +16251,7 @@ function renderAnnouncements() {
    <div><h1>ประกาศ & นโยบาย</h1><div class="text-sm">ข่าวภายใน + Policy Acknowledgement</div></div>
    ${canCreate ? '<button class="btn btn-primary" onclick="showAnnouncementForm()">+ ประกาศใหม่</button>' : ''}
   </div>
-  <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;">
+  <div class="grid-main-side" style="gap:14px;">
    <div class="card">
     <div class="card-header"><h3>ประกาศล่าสุด</h3></div>
     <div class="card-body" style="padding:0;">

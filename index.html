@@ -13,8 +13,9 @@
      และ Sarabun ต้องมาก่อน Inter สำหรับภาษาไทย ดูเหตุผลที่ body { font-family } -->
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Sarabun:wght@400;500;600;700&display=swap" rel="stylesheet">
 <!-- v1.4.36: swap SheetJS → xlsx-js-style (drop-in, adds cell border/bold/alignment support) -->
-<script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<!-- v1.6.43: xlsx (425KB) และ html2canvas (199KB) ย้ายไปโหลดตอนใช้งานจริง
+     เดิมโหลดทุกครั้งที่เปิดหน้าเว็บ รวมกับของอื่นเป็น 1.82MB ก่อนล็อกอิน
+     ทั้งที่พนักงานที่มายื่นใบลาไม่ได้ใช้ทั้งสองตัวเลย ดู ensureLib() -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <!-- v1.4.46: LZ-String compression (defensive) for iOS Safari ~5MB quota fix -->
 <script src="https://cdn.jsdelivr.net/npm/lz-string@1.5.0/libs/lz-string.min.js"></script>
@@ -1088,7 +1089,7 @@ th,
  </div>
  <!-- v1.6.20: ซ่อนไว้จนกว่าจะเปิดใช้ระบบใบขอซื้อในหน้าตั้งค่า -->
  <div class="form-group hidden" id="loginTargetGroup">
- <label>เข้าใช้งานระบบ</label>
+ <label for="loginTarget">เข้าใช้งานระบบ</label>
  <select id="loginTarget">
  <option value="ehr">ระบบบริหารงานบุคคล (e-HR)</option>
  <option value="pr">ระบบใบขอซื้อ (PR)</option>
@@ -1112,15 +1113,15 @@ th,
  <div id="changePassAlert"></div>
  <form id="changePassForm">
  <div class="form-group">
- <label>รหัสผ่านปัจจุบัน</label>
+ <label for="currentPass">รหัสผ่านปัจจุบัน</label>
  <input type="password" id="currentPass" required minlength="1" placeholder="••••••" autocomplete="current-password">
  </div>
  <div class="form-group">
- <label>รหัสผ่านใหม่ (อย่างน้อย 6 ตัว ห้ามเลขเรียงหรือเลขซ้ำ)</label>
+ <label for="newPass1">รหัสผ่านใหม่ (อย่างน้อย 6 ตัว ห้ามเลขเรียงหรือเลขซ้ำ)</label>
  <input type="password" id="newPass1" required minlength="6" placeholder="••••••" autocomplete="new-password">
  </div>
  <div class="form-group">
- <label>ยืนยันรหัสผ่านใหม่</label>
+ <label for="newPass2">ยืนยันรหัสผ่านใหม่</label>
  <input type="password" id="newPass2" required minlength="6" placeholder="••••••" autocomplete="new-password">
  </div>
  <button type="submit" class="btn btn-primary btn-block">บันทึกรหัสผ่านใหม่</button>
@@ -1168,7 +1169,7 @@ th,
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.42';
+const APP_VERSION = '1.6.43';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -4334,6 +4335,53 @@ function getPendingApprovals(managerId) {
 // MODAL
 // ============================================================
 // ============================================================
+// v1.6.43: โหลดไลบรารีหนักตอนที่จะใช้จริง
+// ============================================================
+// xlsx-js-style 425KB + html2canvas 199KB เดิมอยู่ใน <head> จึงถูกดาวน์โหลด
+// ทุกครั้งที่เปิดหน้าเว็บ รวมของทั้งหมดเป็น 1.82MB ก่อนจะพิมพ์รหัสผ่านได้ด้วยซ้ำ
+// พนักงานที่เข้ามายื่นใบลาจากมือถือนอกออฟฟิศไม่ได้ใช้ทั้งสองตัวเลย
+// มีแต่แอดมินตอนส่งออก Excel หรือสร้างรูปสลิปเท่านั้นที่ต้องใช้
+//
+// โหลดครั้งเดียวแล้วจำไว้ · ถ้าโหลดไม่สำเร็จจะบอกผู้ใช้และคืน false
+// ให้ผู้เรียกหยุดอย่างสุภาพ แทนที่จะพังด้วย ReferenceError
+const _libUrls = {
+ xlsx: 'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js',
+ html2canvas: 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'
+};
+const _libPending = {};
+
+function _libLoaded(name) {
+ return name === 'xlsx' ? typeof XLSX !== 'undefined' : typeof html2canvas !== 'undefined';
+}
+
+function ensureLib(name) {
+ if (_libLoaded(name)) return Promise.resolve();
+ if (_libPending[name]) return _libPending[name];
+ _libPending[name] = new Promise((resolve, reject) => {
+  const el = document.createElement('script');
+  el.src = _libUrls[name];
+  el.onload = () => resolve();
+  el.onerror = () => { delete _libPending[name]; reject(new Error(name)); };
+  document.head.appendChild(el);
+ });
+ return _libPending[name];
+}
+
+// ใช้ที่ต้นฟังก์ชันส่งออก: if (!(await ensureLibSafe('xlsx'))) return;
+async function ensureLibSafe(name) {
+ if (_libLoaded(name)) return true;
+ const _t = setTimeout(() => toast('กำลังเตรียมเครื่องมือ...', 'info'), 400);
+ try {
+  await ensureLib(name);
+  return true;
+ } catch (e) {
+  toast('โหลดเครื่องมือไม่สำเร็จ ตรวจอินเทอร์เน็ตแล้วลองใหม่', 'error');
+  return false;
+ } finally {
+  clearTimeout(_t);
+ }
+}
+// ============================================================
 // v1.6.40: ถามข้อความด้วย modal แทน prompt()
 // ============================================================
 // prompt() ของเบราว์เซอร์: ตัดข้อความยาวบน iOS · คัดลอกไม่ได้ · ตรวจค่าไม่ได้
@@ -4892,7 +4940,7 @@ function showLeaveForm(editId, presetEmployeeId) {
  const emps = DB.load('employees').filter(e => e.active !== false).sort((a,b) => a.id.localeCompare(b.id));
  return `
  <div class="form-group">
- <label>พนักงานที่ลา *</label>
+ <label for="leaveOwnerId">พนักงานที่ลา *</label>
  <select id="leaveOwnerId" required onchange="showLeaveForm(null, this.value)">
  ${emps.map(e => `<option value="${e.id}" ${e.id === ownerId ? 'selected' : ''}>${e.id} — ${esc(e.firstName)} ${esc(e.lastName)}</option>`).join('')}
  </select>
@@ -4919,7 +4967,7 @@ function showLeaveForm(editId, presetEmployeeId) {
  ${adminEmpSelector}
  ${adminEditOwnerLabel}
  <div class="form-group">
- <label>ประเภทการลา *</label>
+ <label for="leaveType">ประเภทการลา *</label>
  <select id="leaveType" required onchange="updateLeaveFormUI()" ${editReq ? 'disabled' : ''}>
  <option value="">เลือกประเภท</option>
  <option value="personal" ${(prob && b.personal.quota <= 0) ? 'disabled' : ''} ${editReq?.type === 'personal' ? 'selected' : ''}>ลากิจ (เหลือ ${showRemain(b.personal.remaining, adjPersonal)} วัน)${prob ? ' - ทดลองงาน' : ''}</option>
@@ -4937,17 +4985,17 @@ function showLeaveForm(editId, presetEmployeeId) {
 
  <div id="dateRangeGroup" class="form-row">
  <div class="form-group">
- <label>วันที่เริ่ม *</label>
+ <label for="leaveStart">วันที่เริ่ม *</label>
  <input type="date" id="leaveStart" required onchange="calcLeaveDays()" value="${editReq?.startDate || ''}">
  </div>
  <div class="form-group">
- <label>วันที่สิ้นสุด *</label>
+ <label for="leaveEnd">วันที่สิ้นสุด *</label>
  <input type="date" id="leaveEnd" required onchange="calcLeaveDays()" value="${editReq?.endDate || ''}">
  </div>
  </div>
 
  <div class="form-group" id="halfDayGroup">
- <label>ลาครึ่งวัน (ถ้ามี)</label>
+ <label for="leaveHalfDay">ลาครึ่งวัน (ถ้ามี)</label>
  <select id="leaveHalfDay" onchange="calcLeaveDays()">
  <option value="" ${!editReq?.halfDay ? 'selected' : ''}>ลาเต็มวัน</option>
  <option value="morning" ${editReq?.halfDay === 'morning' ? 'selected' : ''}>ครึ่งเช้า (08:00-12:00)</option>
@@ -4956,17 +5004,17 @@ function showLeaveForm(editId, presetEmployeeId) {
  </div>
 
  <div class="form-group">
- <label>จำนวน</label>
+ <label for="leaveDays">จำนวน</label>
  <input type="text" id="leaveDays" readonly style="background:var(--gray-100);">
  </div>
 
  <div class="form-group">
- <label>เหตุผล *</label>
+ <label for="leaveReason">เหตุผล *</label>
  <textarea id="leaveReason" rows="3" required placeholder="ระบุเหตุผลการลา">${editReq?.reason || ''}</textarea>
  </div>
 
  <div class="form-group" id="attachGroup">
- <label id="attachLabel">แนบไฟล์ (ไม่จำเป็น)</label>
+ <label id="attachLabel" for="leaveFile">แนบไฟล์ (ไม่จำเป็น)</label>
  <input type="file" id="leaveFile" accept="image/*,application/pdf">
  <div id="attachHint" class="text-sm" style="margin-top:4px;"></div>
  ${hasAnyAttachment(editReq) ? `<div class="text-sm" style="margin-top:6px;"> ไฟล์เดิม: ${attachmentLinkHtml(editReq, '')} <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
@@ -5414,19 +5462,19 @@ function showOTForm(editId) {
  </div>
  ` : ''}
  <div class="form-group">
- <label>วันที่ทำ OT *</label>
+ <label for="otDate">วันที่ทำ OT *</label>
  <input type="date" id="otDate" required value="${editReq?.date || ''}">
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>เวลาเริ่ม *</label>
+ <label for="otStart">เวลาเริ่ม *</label>
  <select id="otStart" required onchange="updateOTDurationPreview()">
  <option value="">— เลือกเวลา —</option>
  ${renderHalfHourOptions(editReq?.startTime)}
  </select>
  </div>
  <div class="form-group">
- <label>เวลาสิ้นสุด *</label>
+ <label for="otEnd">เวลาสิ้นสุด *</label>
  <select id="otEnd" required onchange="updateOTDurationPreview()">
  <option value="">— เลือกเวลา —</option>
  ${renderHalfHourOptions(editReq?.endTime)}
@@ -5438,11 +5486,11 @@ function showOTForm(editId) {
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">💡 เลือกทีละ 30 นาที (v1.4.68) — 00:00, 00:30, 01:00, ..., 23:30</div>
  </div>
  <div class="form-group">
- <label>เหตุผลการทำ OT *</label>
+ <label for="otReason">เหตุผลการทำ OT *</label>
  <textarea id="otReason" rows="3" required placeholder="ระบุเหตุผลการทำงานล่วงเวลา">${editReq?.reason || ''}</textarea>
  </div>
  <div class="form-group">
- <label>แนบรูป/เอกสารประกอบ (ไม่จำเป็น)</label>
+ <label for="otFile">แนบรูป/เอกสารประกอบ (ไม่จำเป็น)</label>
  <input type="file" id="otFile" accept="image/*,application/pdf">
  <div class="text-sm" style="margin-top:4px;color:var(--gray-500);">ภาพ JPG/PNG หรือ PDF — ขนาดไม่เกิน 2 MB · ใช้แนบหลักฐานงาน เช่น email, ภาพหน้าจอ, ใบ work order</div>
  ${hasAnyAttachment(editReq) ? `<div class="text-sm" style="margin-top:8px;padding:8px 12px;background:var(--gray-100);border-radius:6px;">📎 ไฟล์เดิม: ${attachmentLinkHtml(editReq, '')} <span style="color:var(--gray-500);">(เลือกไฟล์ใหม่เพื่อแทนที่)</span></div>` : ''}
@@ -5646,26 +5694,26 @@ function showTimeCertForm(editId) {
  <form id="timeCertForm" onsubmit="submitTimeCert(event, '${editId || ''}')">
  ${editReq ? '<div class="alert alert-info mb-3">กำลังแก้ไขคำขอรับรองเวลา</div>' : ''}
  <div class="form-group">
- <label>วันที่ทำงาน *</label>
+ <label for="tcDate">วันที่ทำงาน *</label>
  <input type="date" id="tcDate" required value="${editReq?.date || ''}" max="${today()}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">วันที่ต้องการขอรับรองเวลา (ไม่เกินวันนี้)</div>
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>เวลาเข้างานจริง *</label>
+ <label for="tcCheckIn">เวลาเข้างานจริง *</label>
  <input type="time" id="tcCheckIn" required value="${editReq?.claimedCheckIn || ''}">
  </div>
  <div class="form-group">
- <label>เวลาเลิกงาน (ถ้ามี)</label>
+ <label for="tcCheckOut">เวลาเลิกงาน (ถ้ามี)</label>
  <input type="time" id="tcCheckOut" value="${editReq?.claimedCheckOut || ''}">
  </div>
  </div>
  <div class="form-group">
- <label>เหตุผล *</label>
+ <label for="tcReason">เหตุผล *</label>
  <textarea id="tcReason" rows="3" required placeholder="ระบุเหตุผล เช่น เครื่องสแกนค้าง / ลืมสแกน / มาประชุมที่อื่นก่อน">${editReq?.reason || ''}</textarea>
  </div>
  <div class="form-group">
- <label>แนบหลักฐาน (ไม่จำเป็น)</label>
+ <label for="tcFile">แนบหลักฐาน (ไม่จำเป็น)</label>
  <input type="file" id="tcFile" accept="image/*,application/pdf">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ภาพ JPG/PNG หรือ PDF — ไม่เกิน 2 MB · เช่น email, screenshot, ภาพถ่ายในที่ทำงาน</div>
  ${hasAnyAttachment(editReq) ? `<div class="text-sm" style="margin-top:8px;">📎 ไฟล์เดิม: ${attachmentLinkHtml(editReq, '')}</div>` : ''}
@@ -5808,11 +5856,11 @@ function showCompOffForm() {
  <div class="alert alert-info mb-3"> ต้องขออนุมัติก่อนทำงานในวันหยุด สะสมแล้วใช้ได้ภายใน 1 ปี</div>
  <form id="compOffForm" onsubmit="submitCompOff(event)">
  <div class="form-group">
- <label>วันที่จะทำงานในวันหยุด *</label>
+ <label for="coWorkDate">วันที่จะทำงานในวันหยุด *</label>
  <input type="date" id="coWorkDate" required>
  </div>
  <div class="form-group">
- <label>เหตุผล / งานที่จะทำ *</label>
+ <label for="coReason">เหตุผล / งานที่จะทำ *</label>
  <textarea id="coReason" rows="3" required></textarea>
  </div>
  </form>
@@ -5892,21 +5940,21 @@ function showFieldWorkForm() {
  <div class="alert alert-info mb-3"> การขอปฏิบัติงานนอกสถานที่ไม่หักสิทธิ์ลา</div>
  <form id="fwForm" onsubmit="submitFieldWork(event)">
  <div class="form-group">
- <label>วันที่ไปปฏิบัติงาน *</label>
+ <label for="fwDate">วันที่ไปปฏิบัติงาน *</label>
  <input type="date" id="fwDate" required>
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>เวลาเริ่ม *</label>
+ <label for="fwStart">เวลาเริ่ม *</label>
  <input type="time" id="fwStart" required>
  </div>
  <div class="form-group">
- <label>เวลาสิ้นสุด *</label>
+ <label for="fwEnd">เวลาสิ้นสุด *</label>
  <input type="time" id="fwEnd" required>
  </div>
  </div>
  <div class="form-group">
- <label>วัตถุประสงค์ของงาน *</label>
+ <label for="fwPurpose">วัตถุประสงค์ของงาน *</label>
  <textarea id="fwPurpose" rows="3" required placeholder="เช่น พบลูกค้า ABC เพื่อนำเสนอผลิตภัณฑ์ใหม่"></textarea>
  </div>
  </form>
@@ -6226,16 +6274,16 @@ async function openCalendarTimeCertModal(dateStr) {
  <form id="calTimeCertForm" onsubmit="submitCalendarTimeCert(event, '${dateStr}'); return false;">
  <div class="form-row">
  <div class="form-group">
- <label>เวลาเข้างาน *</label>
+ <label for="calTcCheckIn">เวลาเข้างาน *</label>
  <input type="time" id="calTcCheckIn" required value="${existingScan?.checkIn || ''}">
  </div>
  <div class="form-group">
- <label>เวลาออกงาน (ไม่จำเป็น)</label>
+ <label for="calTcCheckOut">เวลาออกงาน (ไม่จำเป็น)</label>
  <input type="time" id="calTcCheckOut" value="${existingScan?.checkOut || ''}">
  </div>
  </div>
  <div class="form-group">
- <label>เหตุผลที่ขอรับรองเวลา *</label>
+ <label for="calTcReason">เหตุผลที่ขอรับรองเวลา *</label>
  <textarea id="calTcReason" rows="3" required placeholder="เช่น: ลืมสแกนเข้างาน, เครื่องสแกนเสีย, ทำงานจากที่บ้าน"></textarea>
  </div>
  <div class="alert alert-info" style="font-size:12px;">
@@ -6628,6 +6676,7 @@ async function generateOrgImage() {
  try {
  await new Promise(r => requestAnimationFrame(r));
  const fullWidth = target.scrollWidth;
+ if (!(await ensureLibSafe('html2canvas'))) return;   // v1.6.43
  const canvas = await html2canvas(target, {
  backgroundColor: '#ffffff',
  scale: 2,
@@ -6804,7 +6853,7 @@ function renderShiftSchedule() {
  <h1>ตารางลงกะงาน</h1>
  <div class="flex" style="gap:8px;flex-wrap:wrap;">
  <input type="month" value="${_shiftMonth}" onchange="_shiftMonth=this.value; renderShiftSchedule()" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
- <input type="text" id="shiftSearchInput" placeholder="🔍 ค้นหาชื่อหรือรหัส..." oninput="filterShiftScheduleRows(this.value)" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;min-width:200px;" title="v1.4.58: ค้นหาแบบ contains (ชื่อ + รหัส) — highlight matches; ไม่ซ่อน rows อื่น">
+ <input type="text" id="shiftSearchInput" aria-label="ค้นหาพนักงานในตารางกะ" placeholder="🔍 ค้นหาชื่อหรือรหัส..." oninput="filterShiftScheduleRows(this.value)" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;min-width:200px;" title="v1.4.58: ค้นหาแบบ contains (ชื่อ + รหัส) — highlight matches; ไม่ซ่อน rows อื่น">
  <button class="btn btn-success btn-sm" onclick="exportShiftScheduleXLSX()">⬇ Export Excel (Template)</button>
  <label class="btn btn-warning btn-sm" style="margin:0;cursor:pointer;">⬆ Import Excel
  <input type="file" accept=".xlsx,.xls" style="display:none;" onchange="importShiftScheduleXLSX(this.files[0]); this.value='';">
@@ -7007,8 +7056,8 @@ function cycleShift(empId, date) {
 // ============================================================
 // EXPORT SHIFT SCHEDULE → XLSX (3 sheets)
 // ============================================================
-function exportShiftScheduleXLSX() {
- if (!_xlsxCheck()) return;
+async function exportShiftScheduleXLSX() {
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  const role = currentUser.role;
  const me = currentUser;
  const emps = DB.load('employees').filter(e => e.active);
@@ -7176,9 +7225,9 @@ function exportShiftScheduleXLSX() {
 //   · L / C              → SKIP (auto-derived from leave)
 //   · Row not in Excel    → entire employee untouched
 // ============================================================
-function importShiftScheduleXLSX(file) {
+async function importShiftScheduleXLSX(file) {
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  if (!file) return;
- if (!_xlsxCheck()) return;
  const reader = new FileReader();
  reader.onload = async e => {
  try {
@@ -7583,6 +7632,7 @@ async function generateShiftImage() {
  // Wait one frame so layout updates
  await new Promise(r => requestAnimationFrame(r));
  const fullWidth = target.scrollWidth;
+ if (!(await ensureLibSafe('html2canvas'))) return;   // v1.6.43
  const canvas = await html2canvas(target, {
  backgroundColor: '#ffffff',
  scale: 2,
@@ -8584,6 +8634,7 @@ function renderEmployees() {
  <input
  type="text"
  id="empSearchInput"
+ aria-label="ค้นหาพนักงาน"
  value="${q.replace(/"/g,'&quot;')}"
  placeholder="ค้นหาด้วย ชื่อ / นามสกุล / รหัสพนักงาน ..."
  oninput="onEmpSearch(this.value)"
@@ -8696,36 +8747,36 @@ function showEmployeeForm(id) {
  style="${emp ? 'background:#f3f4f6;cursor:not-allowed;color:#6b7280;' : ''}">
  </div>
  <div class="form-group">
- <label>รหัสผ่าน ${emp ? '(ว่างไว้ถ้าไม่เปลี่ยน)' : '*'}</label>
+ <label for="empPass">รหัสผ่าน ${emp ? '(ว่างไว้ถ้าไม่เปลี่ยน)' : '*'}</label>
  <input type="text" id="empPass" ${emp ? '' : 'required'} value="">
  </div>
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>ชื่อ *</label>
+ <label for="empFirst">ชื่อ *</label>
  <input type="text" id="empFirst" required value="${emp?.firstName || ''}">
  </div>
  <div class="form-group">
- <label>นามสกุล *</label>
+ <label for="empLast">นามสกุล *</label>
  <input type="text" id="empLast" required value="${emp?.lastName || ''}">
  </div>
  </div>
  <div class="form-group">
- <label>ชื่อเล่น</label>
+ <label for="empNickname">ชื่อเล่น</label>
  <input type="text" id="empNickname" value="${emp?.nickname || ''}" placeholder="เช่น เก่ง, ตุ้ม, แก้ว">
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>แผนก *</label>
+ <label for="empDept">แผนก *</label>
  <input type="text" id="empDept" required value="${emp?.department || ''}">
  </div>
  <div class="form-group">
- <label>ตำแหน่ง *</label>
+ <label for="empPos">ตำแหน่ง *</label>
  <input type="text" id="empPos" required value="${emp?.position || ''}">
  </div>
  </div>
  <div class="form-group">
- <label>หัวหน้างาน</label>
+ <label for="empMgr">หัวหน้างาน</label>
  <select id="empMgr">
  <option value="">-- ไม่มี --</option>
  ${mgrs.map(m => `<option value="${m.id}" ${emp?.managerId === m.id ? 'selected' : ''}>${esc(m.firstName)} ${esc(m.lastName)} (${m.id})</option>`).join('')}
@@ -8733,11 +8784,11 @@ function showEmployeeForm(id) {
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>วันเริ่มงาน *</label>
+ <label for="empStart">วันเริ่มงาน *</label>
  <input type="date" id="empStart" required value="${emp?.startDate || ''}">
  </div>
  <div class="form-group">
- <label>Role *</label>
+ <label for="empRole">Role *</label>
  <select id="empRole" required>
  <option value="employee" ${emp?.role === 'employee' ? 'selected' : ''}>Employee</option>
  <option value="manager" ${emp?.role === 'manager' ? 'selected' : ''}>Manager</option>
@@ -8788,14 +8839,14 @@ function showEmployeeForm(id) {
  </select>
  </div>
  <div class="form-group">
- <label>เพศ * <small style="color:var(--gray-500);">(ใช้สำหรับสิทธิ์ลาบวช)</small></label>
+ <label for="empGender">เพศ * <small style="color:var(--gray-500);">(ใช้สำหรับสิทธิ์ลาบวช)</small></label>
  <select id="empGender" required>
  <option value="male" ${emp?.gender === 'male' ? 'selected' : ''}>ชาย</option>
  <option value="female" ${emp?.gender === 'female' ? 'selected' : ''}>หญิง</option>
  </select>
  </div>
  <div class="form-group">
- <label>สัญชาติ <small style="color:var(--gray-500);">(สำหรับสรุปรายวัน)</small></label>
+ <label for="empNationality">สัญชาติ <small style="color:var(--gray-500);">(สำหรับสรุปรายวัน)</small></label>
  <select id="empNationality">
  <option value="thai" ${(emp?.nationality || 'thai') === 'thai' ? 'selected' : ''}>ไทย</option>
  <option value="myanmar" ${emp?.nationality === 'myanmar' ? 'selected' : ''}>พม่า</option>
@@ -8805,11 +8856,11 @@ function showEmployeeForm(id) {
  </div>
  <div class="form-row">
  <div class="form-group">
- <label> เงินเดือน (บาท/เดือน)</label>
+ <label for="empSalary"> เงินเดือน (บาท/เดือน)</label>
  <input type="number" id="empSalary" min="0" step="100" value="${emp?.monthlySalary || 0}" placeholder="เช่น 25000">
  </div>
  <div class="form-group">
- <label> ประกันสังคม Override <small style="color:var(--gray-500);">(ว่าง = คำนวณอัตโนมัติตามกฎหมาย)</small></label>
+ <label for="empSso"> ประกันสังคม Override <small style="color:var(--gray-500);">(ว่าง = คำนวณอัตโนมัติตามกฎหมาย)</small></label>
  <input type="number" id="empSso" min="0" step="1" value="${emp?.ssoOverride !== undefined && emp?.ssoOverride !== null ? emp.ssoOverride : ''}" placeholder="ว่าง = auto (5% × max 15,000)">
  </div>
  </div>
@@ -9258,7 +9309,7 @@ function renderUploadAttendance() {
  <strong>การจัดกลุ่ม:</strong> 1 พนักงาน + 1 วัน อาจมีหลายครั้งสแกน → เวลาแรก = เข้างาน, เวลาสุดท้าย = เลิกงาน
  </div>
  <div class="form-group">
- <label>เลือกไฟล์ (.xlsx หรือ .txt)</label>
+ <label for="attFile">เลือกไฟล์ (.xlsx หรือ .txt)</label>
  <input type="file" id="attFile" accept=".xlsx,.xls,.txt" onchange="previewAttendance(event)">
  </div>
  <div id="attPreview"></div>
@@ -9336,7 +9387,9 @@ function parseTxtAttendanceLine(line) {
  return { date: dateMatch[1], time: timeMatch[1], empCode, firstName, lastName, company, department };
 }
 
-function previewAttendance(e) {
+async function previewAttendance(e) {
+
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  const file = e.target.files[0];
  if (!file) return;
 
@@ -10372,15 +10425,13 @@ function renderAttendanceReport() {
 // ============================================================
 // EXPORT XLSX HELPERS (employees / attendance / payroll)
 // ============================================================
-function _xlsxCheck() {
- if (typeof XLSX === 'undefined') {
- toast('ไลบรารี Excel โหลดไม่สำเร็จ — ตรวจสอบอินเทอร์เน็ต', 'error');
- return false;
- }
- return true;
-}
+// v1.6.43: _xlsxCheck() ถูกถอดออก -- เดิมเช็กว่า XLSX โหลดมาแล้วหรือยัง
+// ซึ่งจริงเสมอเพราะอยู่ใน <head> พอย้ายไปโหลดตอนใช้งาน มันจะเป็นเท็จเสมอ
+// ตอนนี้ ensureLibSafe('xlsx') ทำหน้าที่ทั้งโหลดและแจ้งเตือนเมื่อโหลดไม่ได้
 
-function _xlsxSaveSheet(rows, sheetName, filename, colWidths) {
+async function _xlsxSaveSheet(rows, sheetName, filename, colWidths) {
+
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  const ws = XLSX.utils.aoa_to_sheet(rows);
  if (colWidths) ws['!cols'] = colWidths.map(w => ({ wch: w }));
  // Set first row as header (bold via cell styles works only with paid SheetJS; skip)
@@ -10390,7 +10441,7 @@ function _xlsxSaveSheet(rows, sheetName, filename, colWidths) {
 }
 
 async function exportEmployeesXLSX() {
- if (!_xlsxCheck()) return;
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  // v1.6.4: ไฟล์นี้มีเงินเดือนของทุกคน
  if (!(await unlockSalary('เพื่อส่งออกไฟล์ทะเบียนพนักงาน ซึ่งมีเงินเดือนของทุกคน'))) return;
  const all = DB.load('employees');
@@ -10428,12 +10479,13 @@ async function exportEmployeesXLSX() {
  }));
  const colWidths = [12,16,18,10,8,16,22,14,22,12,12,14,10,14,16,16,12];
  const stamp = today();
- _xlsxSaveSheet(rows, 'พนักงาน', `รายชื่อพนักงาน-${stamp}.xlsx`, colWidths);
+ await _xlsxSaveSheet(rows, 'พนักงาน', `รายชื่อพนักงาน-${stamp}.xlsx`, colWidths);
  toast(`Export ${emps.length} คน สำเร็จ`);
 }
 
-function exportAttendanceXLSX() {
- if (!_xlsxCheck()) return;
+async function exportAttendanceXLSX() {
+
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  const records = DB.load('attendanceRecords');
  const dayRecordsRaw = records.filter(r => r.date === _attReportDate);
 
@@ -10981,8 +11033,8 @@ function exportAttendanceXLSX() {
 //   - Per-company summaries: Grand total (rows 1-8) + Per-day breakdown table
 //   - สรุปลา-สาย: all leave/late records across range
 // ============================================================
-function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
- if (!_xlsxCheck()) return;
+async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  // Validate range
  if (!startDate || !endDate) { toast('เลือกช่วงวันที่ก่อน', 'error'); return; }
  const start = new Date(startDate);
@@ -11446,11 +11498,11 @@ function openRangeExportModal(opts = {}) {
  </div>
  <div class="form-row" style="margin-bottom:12px;">
  <div class="form-group">
- <label>วันเริ่ม *</label>
+ <label for="rangeStart">วันเริ่ม *</label>
  <input type="date" id="rangeStart" value="${cycleStartStr}" required>
  </div>
  <div class="form-group">
- <label>วันสิ้นสุด *</label>
+ <label for="rangeEnd">วันสิ้นสุด *</label>
  <input type="date" id="rangeEnd" value="${cycleEndStr}" required>
  </div>
  </div>
@@ -11487,7 +11539,7 @@ function _doRangeExport(scope) {
 }
 
 async function exportPayrollXLSX() {
- if (!_xlsxCheck()) return;
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  // v1.6.4: ไฟล์นี้มีเงินเดือนและเงินสุทธิของทุกคน ออกจากระบบไปแล้วควบคุมต่อไม่ได้
  if (!(await unlockSalary('เพื่อส่งออกไฟล์ Payroll ซึ่งมีเงินเดือนและเงินสุทธิของพนักงานทุกคน'))) return;
  const [y, m] = _slipMonth.split('-').map(Number);
@@ -11556,7 +11608,7 @@ async function exportPayrollXLSX() {
  const colWidths = [12,22,16,14,12,8,12,12,10,16,16,18,10,12,10,12,16,10,12,12,14,14,14,16,12];
  // v1.4.54: filename uses formatSlipMonth (Q1 B) — calendar-month emphasis with cycle detail
  const slipLabel = formatSlipMonth(_slipMonth).replace(/[()]/g, '').replace(/[/:]/g, '-').replace(/\s+/g, '_');
- _xlsxSaveSheet(rows, `Payroll ${_slipMonth}`, `Payroll-${_slipMonth}-${slipLabel}.xlsx`, colWidths);
+ await _xlsxSaveSheet(rows, `Payroll ${_slipMonth}`, `Payroll-${_slipMonth}-${slipLabel}.xlsx`, colWidths);
  toast(`Export ${emps.length} คน สำเร็จ — รวม ${Math.round(totals.net).toLocaleString()} บาท`);
 }
 
@@ -11566,16 +11618,13 @@ async function exportPayrollXLSX() {
 async function exportAttendanceReportPNG(mode) {
  const target = document.getElementById('attReportCapture');
  if (!target) { toast('ไม่พบเนื้อหารายงาน', 'error'); return; }
- if (typeof html2canvas !== 'function') {
- toast('ไลบรารี html2canvas โหลดไม่สำเร็จ — ตรวจสอบอินเทอร์เน็ต', 'error');
- return;
- }
  // Make all tab sections visible during capture so all data shows
  const sections = document.querySelectorAll('.att-section');
  const origDisplay = [];
  sections.forEach((s, i) => { origDisplay[i] = s.style.display; s.style.display = 'block'; });
  toast('กำลังสร้างรูป...', 'info');
  try {
+ if (!(await ensureLibSafe('html2canvas'))) return;   // v1.6.43
  const canvas = await html2canvas(target, {
  backgroundColor: '#ffffff',
  scale: 2,
@@ -12154,21 +12203,21 @@ function showCommissionForm(editId) {
  ${editComm ? '<div class="alert alert-info mb-3"> กำลังแก้ไขรายการค่าคอมมิชชั่น</div>' : ''}
  <datalist id="commEmpList">${empDatalistOptions()}</datalist>
  <div class="form-group">
- <label>พนักงาน * <small style="color:var(--gray-500);">(พิมพ์ค้นหารหัส/ชื่อ/แผนกได้)</small></label>
+ <label for="commEmp">พนักงาน * <small style="color:var(--gray-500);">(พิมพ์ค้นหารหัส/ชื่อ/แผนกได้)</small></label>
  <input type="text" id="commEmp" list="commEmpList" required ${editComm ? 'readonly' : ''} value="${editInputValue}" placeholder="พิมพ์ค้นหา หรือเลือกจากรายการ">
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>เดือน *</label>
+ <label for="commMonth">เดือน *</label>
  <input type="month" id="commMonth" required value="${editComm?.monthStr || _commMonth}">
  </div>
  <div class="form-group">
- <label>จำนวนเงิน (บาท) *</label>
+ <label for="commAmount">จำนวนเงิน (บาท) *</label>
  <input type="number" id="commAmount" required min="0" step="0.01" value="${editComm?.amount || ''}" placeholder="เช่น 5000">
  </div>
  </div>
  <div class="form-group">
- <label>รายละเอียด / เหตุผล</label>
+ <label for="commDesc">รายละเอียด / เหตุผล</label>
  <textarea id="commDesc" rows="3" placeholder="เช่น คอมจาก deal ABC, โบนัสยอดขาย">${editComm?.description || ''}</textarea>
  </div>
  </form>
@@ -12224,7 +12273,7 @@ function showBulkCommissionForm() {
  <datalist id="bulkEmpList">${empDatalistOptions()}</datalist>
  <form id="bulkCommForm" onsubmit="submitBulkCommission(event)" style="min-width:0;">
  <div class="form-group">
- <label>เดือนที่จะเพิ่ม *</label>
+ <label for="bulkCommMonth">เดือนที่จะเพิ่ม *</label>
  <input type="month" id="bulkCommMonth" required value="${_commMonth}">
  </div>
  <hr style="margin:14px 0;">
@@ -12675,7 +12724,7 @@ function askPassword(title, reason) {
   showModal(title, `
    <div class="text-sm" style="color:var(--gray-600);margin-bottom:12px;line-height:1.7;">${esc(reason)}</div>
    <div class="form-group">
-    <label>รหัสผ่านของคุณ (${esc(currentUser.id)})</label>
+    <label for="pwConfirmInput">รหัสผ่านของคุณ (${esc(currentUser.id)})</label>
     <input type="password" id="pwConfirmInput" autocomplete="current-password"
      onkeydown="if(event.key==='Enter'){event.preventDefault();window._askPwResolve(this.value);}
                 if(event.key==='Escape'){window._askPwResolve(null);}">
@@ -12969,16 +13018,16 @@ function openCustomDeductionModal(empId, year, month) {
  <h4 style="margin-bottom:8px;">เพิ่มรายการใหม่</h4>
  <div class="form-row">
  <div class="form-group">
- <label>รายการ *</label>
+ <label for="newDeductLabel">รายการ *</label>
  <input type="text" id="newDeductLabel" placeholder="เช่น กยศ, ประกันชีวิต">
  </div>
  <div class="form-group">
- <label>จำนวน (บาท) *</label>
+ <label for="newDeductAmount">จำนวน (บาท) *</label>
  <input type="number" id="newDeductAmount" min="0" step="0.01" placeholder="เช่น 500">
  </div>
  </div>
  <div class="form-group">
- <label>หมายเหตุ (ไม่บังคับ)</label>
+ <label for="newDeductNote">หมายเหตุ (ไม่บังคับ)</label>
  <input type="text" id="newDeductNote" placeholder="เช่น งวดที่ 3/24, เลขบัญชี ฯลฯ">
  </div>
  <button class="btn btn-primary btn-block" onclick="addCustomDeduction('${empId}',${year},${month})"> เพิ่มรายการ</button>
@@ -13369,6 +13418,7 @@ async function generatePaySlipImage(empId, year, month) {
 
  // Render with html2canvas
  try {
+ if (!(await ensureLibSafe('html2canvas'))) return;   // v1.6.43
  const canvas = await html2canvas(target, {
  backgroundColor: '#ffffff',
  scale: 2, // 2x resolution
@@ -14241,8 +14291,8 @@ function showLateDetailModal(empCode, monthStr) {
 
 // Excel export for late summary
 // v1.5.1 HOTFIX (ADR-0004): per-day threshold via shared helpers
-function exportLateSummaryXLSX() {
- if (!_xlsxCheck()) return;
+async function exportLateSummaryXLSX() {
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  const settings = DB.load('settings');
  const monthStr = _lateReportMonth || getPayrollMonth(today()); // v1.4.51: default to current payroll month
  // v1.5.1: per-day threshold — filter + calc via shared helpers
@@ -14454,8 +14504,9 @@ function deleteTimeCert(id) {
  renderPage();
 }
 
-function exportTimeCertXLSX() {
- if (!_xlsxCheck()) return;
+async function exportTimeCertXLSX() {
+
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  const all = DB.load('timeCertRequests', []).slice().sort((a,b) => new Date(b.requestDate) - new Date(a.requestDate));
  if (!all.length) { toast('ไม่มีข้อมูลคำขอรับรองเวลา', 'error'); return; }
 
@@ -14558,15 +14609,15 @@ function renderSettings() {
  <div class="card-header"><h3>เวลาทำงาน และ การคำนวณเงินเดือน</h3></div>
  <div class="card-body">
  <div class="form-row">
- <div class="form-group"><label>เวลาเริ่มงาน (เกินถือว่าหลังเวลา)</label><input type="time" id="qWorkStart" value="${s.workStartTime || '08:45'}"></div>
- <div class="form-group"><label>เวลาที่ถือว่ามาสาย</label><input type="time" id="qLateThreshold" value="${s.lateThreshold || '09:01'}"></div>
- <div class="form-group"><label>ระยะเวลาผ่อนผัน — Grace Period (นาที) <small style="color:var(--gray-500);">(v1.4.65)</small></label><input type="number" id="qGraceMinutes" min="0" max="120" step="1" value="${s.defaultGracePeriodMinutes ?? 16}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใช้กับพนักงานที่มี custom start time (เช่น บอย 10:00) → ปล่อยผ่านได้ X นาที ก่อนนับสาย · Default 16 นาที (= 08:45→09:01)</div></div>
+ <div class="form-group"><label for="qWorkStart">เวลาเริ่มงาน (เกินถือว่าหลังเวลา)</label><input type="time" id="qWorkStart" value="${s.workStartTime || '08:45'}"></div>
+ <div class="form-group"><label for="qLateThreshold">เวลาที่ถือว่ามาสาย</label><input type="time" id="qLateThreshold" value="${s.lateThreshold || '09:01'}"></div>
+ <div class="form-group"><label for="qGraceMinutes">ระยะเวลาผ่อนผัน — Grace Period (นาที) <small style="color:var(--gray-500);">(v1.4.65)</small></label><input type="number" id="qGraceMinutes" min="0" max="120" step="1" value="${s.defaultGracePeriodMinutes ?? 16}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใช้กับพนักงานที่มี custom start time (เช่น บอย 10:00) → ปล่อยผ่านได้ X นาที ก่อนนับสาย · Default 16 นาที (= 08:45→09:01)</div></div>
  </div>
  <div class="form-row">
- <div class="form-group"><label>OT Multiplier — วันทำการปกติ (เท่า)</label><input type="number" step="0.1" min="1" id="qOtMult" value="${s.otMultiplier ?? 1.5}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">มาตรฐานกฎหมายแรงงานไทย: 1.5× ของค่าจ้างต่อชั่วโมง</div></div>
- <div class="form-group"><label>OT Multiplier — วันหยุด (เท่า)</label><input type="number" step="0.1" min="1" id="qOtMultHoliday" value="${s.otMultiplierHoliday ?? 3}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">วันหยุดประจำสัปดาห์ (เสาร์-อาทิตย์) + วันหยุดบริษัท · มาตรฐานกฎหมาย: 3×</div></div>
+ <div class="form-group"><label for="qOtMult">OT Multiplier — วันทำการปกติ (เท่า)</label><input type="number" step="0.1" min="1" id="qOtMult" value="${s.otMultiplier ?? 1.5}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">มาตรฐานกฎหมายแรงงานไทย: 1.5× ของค่าจ้างต่อชั่วโมง</div></div>
+ <div class="form-group"><label for="qOtMultHoliday">OT Multiplier — วันหยุด (เท่า)</label><input type="number" step="0.1" min="1" id="qOtMultHoliday" value="${s.otMultiplierHoliday ?? 3}"><div class="text-sm" style="color:var(--gray-500);margin-top:4px;">วันหยุดประจำสัปดาห์ (เสาร์-อาทิตย์) + วันหยุดบริษัท · มาตรฐานกฎหมาย: 3×</div></div>
  <div class="form-group">
- <label>โหมดคำนวณค่าหักสาย</label>
+ <label for="qLateMode">โหมดคำนวณค่าหักสาย</label>
  <select id="qLateMode">
  <option value="occurrence" ${s.lateCalculationMode === 'occurrence' ? 'selected' : ''}>ต่อครั้งที่มาสาย</option>
  <option value="minute" ${s.lateCalculationMode === 'minute' ? 'selected' : ''}>ต่อนาที</option>
@@ -14575,12 +14626,12 @@ function renderSettings() {
  </div>
  </div>
  <div class="form-row">
- <div class="form-group"><label>ค่าหักมาสาย (บาท/หน่วย ตามโหมด — ตั้ง 0 = ไม่หักทั้งบริษัท)</label><input type="number" id="qLateDeduct" min="0" step="1" value="${s.lateDeduction ?? 50}"></div>
- <div class="form-group"><label>เบี้ยขยัน (บาท/เดือน)</label><input type="number" id="qDiligence" value="${s.diligenceBonus || 500}"></div>
+ <div class="form-group"><label for="qLateDeduct">ค่าหักมาสาย (บาท/หน่วย ตามโหมด — ตั้ง 0 = ไม่หักทั้งบริษัท)</label><input type="number" id="qLateDeduct" min="0" step="1" value="${s.lateDeduction ?? 50}"></div>
+ <div class="form-group"><label for="qDiligence">เบี้ยขยัน (บาท/เดือน)</label><input type="number" id="qDiligence" value="${s.diligenceBonus || 500}"></div>
  </div>
  <div class="form-row">
- <div class="form-group"><label>วันทำงาน/เดือน (สำหรับคำนวณเรทรายวัน)</label><input type="number" id="qWorkDays" value="${s.workDaysPerMonth || 22}"></div>
- <div class="form-group"><label>ชั่วโมงทำงาน/วัน</label><input type="number" id="qWorkHours" value="${s.workHoursPerDay || 8}"></div>
+ <div class="form-group"><label for="qWorkDays">วันทำงาน/เดือน (สำหรับคำนวณเรทรายวัน)</label><input type="number" id="qWorkDays" value="${s.workDaysPerMonth || 22}"></div>
+ <div class="form-group"><label for="qWorkHours">ชั่วโมงทำงาน/วัน</label><input type="number" id="qWorkHours" value="${s.workHoursPerDay || 8}"></div>
  </div>
  <div class="alert alert-info" style="font-size:13px;">
  <strong>เบี้ยขยัน</strong> — ได้เฉพาะเมื่อพนักงานไม่ขาด ไม่สาย และไม่ลาในประเภทที่ตั้งค่าให้ตัดสิทธิ์ ตลอดทั้งรอบ
@@ -14593,7 +14644,7 @@ function renderSettings() {
  <div class="card-body">
  <div class="form-row">
  <div class="form-group">
- <label>วันตัดรอบเงินเดือน (Payroll Cutoff Day)</label>
+ <label for="qPayrollCutoffDay">วันตัดรอบเงินเดือน (Payroll Cutoff Day)</label>
  <input type="number" id="qPayrollCutoffDay" min="1" max="31" step="1" value="${s.payrollCutoffDay ?? 21}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
  Events ที่เกิด<strong>หลัง</strong>วันตัดรอบ (เช่น วันที่ 22 ขึ้นไป) จะถูกนำไปคิดใน<strong>รอบเงินเดือนเดือนถัดไป</strong><br>
@@ -14613,7 +14664,7 @@ function renderSettings() {
  <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
  <div class="form-row">
  <div class="form-group">
- <label>สลิปเงินเดือน — Default Month <small style="color:var(--gray-500);">(v1.4.54)</small></label>
+ <label for="qSlipMonthDefault">สลิปเงินเดือน — Default Month <small style="color:var(--gray-500);">(v1.4.54)</small></label>
  <select id="qSlipMonthDefault" style="padding:6px 12px;border:1px solid var(--gray-300);border-radius:6px;">
  <option value="calendar" ${(s.slipMonthDefault ?? 'calendar') === 'calendar' ? 'selected' : ''}>ปฏิทิน (เดือนปัจจุบัน — แนะนำ)</option>
  <option value="payroll" ${s.slipMonthDefault === 'payroll' ? 'selected' : ''}>Payroll Cycle (getPayrollMonth ของวันนี้)</option>
@@ -14665,7 +14716,7 @@ function renderSettings() {
 
   <div class="form-row">
    <div class="form-group">
-    <label>เตือนเมื่อรายการหักพิเศษเกิน (% ของเงินได้)</label>
+    <label for="qDeductWarn">เตือนเมื่อรายการหักพิเศษเกิน (% ของเงินได้)</label>
     <input type="number" id="qDeductWarn" min="0" max="100" step="1" value="${s.deductionWarnPercent ?? 10}">
     <div class="field-hint">
      มาตรา 76 พ.ร.บ.คุ้มครองแรงงาน — รายการหักตาม (2)-(5) หักได้ไม่เกิน 10% ต่อรายการ
@@ -14674,7 +14725,7 @@ function renderSettings() {
     </div>
    </div>
    <div class="form-group">
-    <label>เปิดดูเงินเดือนได้นานกี่นาทีต่อการยืนยันหนึ่งครั้ง</label>
+    <label for="qSalaryUnlockMin">เปิดดูเงินเดือนได้นานกี่นาทีต่อการยืนยันหนึ่งครั้ง</label>
     <input type="number" id="qSalaryUnlockMin" min="1" max="60" step="1" value="${s.salaryUnlockMinutes ?? 5}">
     <div class="field-hint">
      ตัวเลขเงินเดือนถูกปิดบังไว้เสมอ ต้องยืนยันรหัสผ่านของตัวเองก่อนจึงจะเห็น
@@ -14683,7 +14734,7 @@ function renderSettings() {
     </div>
    </div>
    <div class="form-group">
-    <label>คำนำหน้าเลขที่เอกสารสลิป</label>
+    <label for="qSlipPrefix">คำนำหน้าเลขที่เอกสารสลิป</label>
     <input type="text" id="qSlipPrefix" maxlength="8" value="${s.payslipDocPrefix || 'PS'}">
     <div class="field-hint">เช่น PS จะได้เลขที่ PS-202609-0001 ออกให้อัตโนมัติตอนปิดรอบ</div>
    </div>
@@ -14712,11 +14763,11 @@ function renderSettings() {
  </label>
  </div>
  <div class="form-row">
- <div class="form-group"><label>อัตรา (%)</label><input type="number" step="0.1" id="qSsoRate" value="${s.ssoRate ?? 5}"></div>
- <div class="form-group"><label>ฐานคำนวณขั้นต่ำ (บาท)</label><input type="number" id="qSsoMinBase" value="${s.ssoMinBase ?? 1650}"></div>
+ <div class="form-group"><label for="qSsoRate">อัตรา (%)</label><input type="number" step="0.1" id="qSsoRate" value="${s.ssoRate ?? 5}"></div>
+ <div class="form-group"><label for="qSsoMinBase">ฐานคำนวณขั้นต่ำ (บาท)</label><input type="number" id="qSsoMinBase" value="${s.ssoMinBase ?? 1650}"></div>
  </div>
  <div class="form-row">
- <div class="form-group"><label>ฐานคำนวณขั้นสูง (บาท)</label><input type="number" id="qSsoMaxBase" value="${s.ssoMaxBase ?? 15000}"></div>
+ <div class="form-group"><label for="qSsoMaxBase">ฐานคำนวณขั้นสูง (บาท)</label><input type="number" id="qSsoMaxBase" value="${s.ssoMaxBase ?? 15000}"></div>
  <div class="form-group">
  <label>คำนวณตัวอย่าง (เงินเดือน 15,000+)</label>
  <input type="text" readonly value="${((s.ssoMaxBase ?? 15000) * (s.ssoRate ?? 5) / 100).toLocaleString()} บาท/เดือน" style="background:var(--gray-100);">
@@ -14737,7 +14788,7 @@ function renderSettings() {
  <div class="card-header"><h3>วันหยุดบริษัท</h3></div>
  <div class="card-body">
  <div class="form-group">
- <label>เพิ่มวันหยุด</label>
+ <label for="newHoliday">เพิ่มวันหยุด</label>
  <div class="flex"><input type="date" id="newHoliday" style="flex:1;"><button class="btn btn-primary" onclick="addHoliday()">เพิ่ม</button></div>
  </div>
  <div>
@@ -14752,26 +14803,26 @@ function renderSettings() {
  <div class="card-header"><h3>สิทธิ์การลาเริ่มต้น (Default ทั้งระบบ)</h3></div>
  <div class="card-body">
  <div class="form-row">
- <div class="form-group"><label>ลากิจ (วัน/ปี)</label><input type="number" id="qPersonal" value="${s.leaveQuotas.personal}"></div>
- <div class="form-group"><label>ลาพักร้อน (วัน/ปี) — ปีที่ 1 หลังผ่านทดลอง</label><input type="number" id="qVacation" value="${s.leaveQuotas.vacation}"></div>
+ <div class="form-group"><label for="qPersonal">ลากิจ (วัน/ปี)</label><input type="number" id="qPersonal" value="${s.leaveQuotas.personal}"></div>
+ <div class="form-group"><label for="qVacation">ลาพักร้อน (วัน/ปี) — ปีที่ 1 หลังผ่านทดลอง</label><input type="number" id="qVacation" value="${s.leaveQuotas.vacation}"></div>
  </div>
  <div class="form-row">
- <div class="form-group"><label>ลาป่วย (วัน/ปี)</label><input type="number" id="qSick" value="${s.leaveQuotas.sick}"></div>
- <div class="form-group"><label>ลาคลอด (วัน/รอบ)</label><input type="number" id="qMat" value="${s.leaveQuotas.maternity}"></div>
+ <div class="form-group"><label for="qSick">ลาป่วย (วัน/ปี)</label><input type="number" id="qSick" value="${s.leaveQuotas.sick}"></div>
+ <div class="form-group"><label for="qMat">ลาคลอด (วัน/รอบ)</label><input type="number" id="qMat" value="${s.leaveQuotas.maternity}"></div>
  </div>
  <div class="form-row">
- <div class="form-group"><label>ลาบวช (วัน, ชายเท่านั้น)</label><input type="number" id="qOrdination" value="${s.leaveQuotas.ordination || 15}"></div>
- <div class="form-group"><label>ระยะทดลองงาน (วัน)</label><input type="number" id="qProb" value="${s.probationDays}"></div>
+ <div class="form-group"><label for="qOrdination">ลาบวช (วัน, ชายเท่านั้น)</label><input type="number" id="qOrdination" value="${s.leaveQuotas.ordination || 15}"></div>
+ <div class="form-group"><label for="qProb">ระยะทดลองงาน (วัน)</label><input type="number" id="qProb" value="${s.probationDays}"></div>
  </div>
  <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
  <div class="form-row">
  <div class="form-group">
- <label>สิทธิ์ลากิจในช่วงทดลองงาน (วัน)</label>
+ <label for="qProbPersonalCap">สิทธิ์ลากิจในช่วงทดลองงาน (วัน)</label>
  <input type="number" id="qProbPersonalCap" min="0" step="0.5" value="${s.probationPersonalCap ?? 3}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ตั้ง 0 = ไม่มีสิทธิ์ลากิจช่วงทดลองงาน</div>
  </div>
  <div class="form-group">
- <label>อายุของวันสะสมหยุด (เดือน)</label>
+ <label for="qCompOffExpire">อายุของวันสะสมหยุด (เดือน)</label>
  <input type="number" id="qCompOffExpire" min="1" max="60" step="1" value="${s.compOffExpireMonths ?? 12}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">วันสะสมหยุดจะหมดอายุภายในกี่เดือนหลังได้รับ (default 12 เดือน)</div>
  </div>
@@ -14779,22 +14830,22 @@ function renderSettings() {
  <hr style="margin:14px 0;border:none;border-top:1px solid var(--gray-200);">
  <div class="form-row">
  <div class="form-group">
- <label>ลาป่วยเกินกี่วันต้องแนบใบรับรองแพทย์</label>
+ <label for="qSickCertThreshold">ลาป่วยเกินกี่วันต้องแนบใบรับรองแพทย์</label>
  <input type="number" id="qSickCertThreshold" min="0" step="0.5" value="${s.sickCertThreshold ?? 2}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ลาเกินตัวเลขนี้ → ต้องเลือกประเภท "ลาป่วยมีใบรับรอง" และแนบไฟล์ใบรับรองแพทย์</div>
  </div>
  <div class="form-group">
- <label>ห้ามยื่นลาย้อนหลังเกิน (วัน)</label>
+ <label for="qBackDatedMax">ห้ามยื่นลาย้อนหลังเกิน (วัน)</label>
  <input type="number" id="qBackDatedMax" min="0" step="1" value="${s.backDatedLeaveMaxDays ?? 7}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใช้แสดงในนโยบายลา (ป้องกันทุจริต)</div>
  </div>
  </div> <div class="form-row">
  <div class="form-group">
- <label>ยกยอดวันลาข้ามปี — สูงสุด (วัน)</label>
+ <label for="qCarryOverMax">ยกยอดวันลาข้ามปี — สูงสุด (วัน)</label>
  <input type="number" id="qCarryOverMax" min="0" step="0.5" value="${s.leaveCarryOverMax ?? 5}">
  </div>
  <div class="form-group">
- <label>ตัดยอดยกข้ามปี (MM-DD)</label>
+ <label for="qCarryOverCutoff">ตัดยอดยกข้ามปี (MM-DD)</label>
  <input type="text" id="qCarryOverCutoff" placeholder="03-31" pattern="\\d{2}-\\d{2}" value="${s.leaveCarryOverCutoff ?? '03-31'}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">รูปแบบ MM-DD (เช่น 03-31 = 31 มี.ค.)</div>
  </div>
@@ -14819,24 +14870,24 @@ function renderSettings() {
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>Base (วัน/ปี)</label>
+ <label for="qVacAccrualBase">Base (วัน/ปี)</label>
  <input type="number" id="qVacAccrualBase" min="0" step="0.5" value="${s.vacationAccrual?.base ?? 6}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">สิทธิ์ลาพักร้อนปีที่ 1 (หลังผ่านทดลองงาน)</div>
  </div>
  <div class="form-group">
- <label>เริ่มเพิ่มที่อายุงาน (ปี)</label>
+ <label for="qVacAccrualStartYear">เริ่มเพิ่มที่อายุงาน (ปี)</label>
  <input type="number" id="qVacAccrualStartYear" min="1" value="${s.vacationAccrual?.startYear ?? 2}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">เช่น 2 = เริ่มเพิ่มเมื่ออายุงานเกิน 1 ปีเต็ม</div>
  </div>
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>เพิ่ม (วัน/ปี ที่ผ่านไป)</label>
+ <label for="qVacAccrualIncrement">เพิ่ม (วัน/ปี ที่ผ่านไป)</label>
  <input type="number" id="qVacAccrualIncrement" min="0" step="0.5" value="${s.vacationAccrual?.incrementPerYear ?? 1}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">จำนวนวันที่เพิ่มขึ้นต่อปีอายุงานที่เพิ่ม</div>
  </div>
  <div class="form-group">
- <label>เพดานสูงสุด (วัน)</label>
+ <label for="qVacAccrualMax">เพดานสูงสุด (วัน)</label>
  <input type="number" id="qVacAccrualMax" min="0" step="0.5" value="${s.vacationAccrual?.maxDays ?? 15}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">เพดานสิทธิ์ลาพักร้อนสูงสุดต่อปี ไม่ว่าทำงานนานเท่าไหร่</div>
  </div>
@@ -14855,7 +14906,7 @@ function renderSettings() {
  <div class="card-header"><h3>กฎการรับรองเวลา & ขาดงานอัตโนมัติ</h3></div>
  <div class="card-body">
  <div class="form-group">
- <label>มาสายเกินกี่นาที → ระบบบันทึก "ขาดงาน" อัตโนมัติ</label>
+ <label for="qAutoAbsentLate">มาสายเกินกี่นาที → ระบบบันทึก "ขาดงาน" อัตโนมัติ</label>
  <input type="number" id="qAutoAbsentLate" min="0" step="1" value="${s.autoAbsentLateMinutes ?? 240}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">
  นับจากเวลามาสาย (<strong>${s.lateThreshold || '09:01'}</strong>) — เช่น ตั้ง 240 นาที = 4 ชม.<br>
@@ -14932,7 +14983,7 @@ function renderSettings() {
   <label class="ios-toggle"><input type="checkbox" id="qPrEnabled" ${s.prSystemEnabled ? 'checked' : ''}><span>เปิดใช้งาน — หน้า login จะมีตัวเลือกระบบ</span></label>
   </div>
   <div class="form-group" style="margin-top:12px;">
-  <label>ที่อยู่ของระบบใบขอซื้อ</label>
+  <label for="qPrUrl">ที่อยู่ของระบบใบขอซื้อ</label>
   <input type="text" id="qPrUrl" value="${esc(s.prSystemUrl || '/pr')}" placeholder="/pr">
   <div class="field-hint">ต้องเป็นโดเมนเดียวกับ e-HR (เช่น <code>/pr</code>) ถ้าคนละโดเมน พนักงานจะต้องล็อกอินใหม่อีกครั้งที่ PR</div>
   </div>
@@ -15018,35 +15069,35 @@ function showCompanyForm(id) {
  <form id="companyForm" onsubmit="submitCompany(event, '${id || ''}'); return false;">
  <div class="form-row">
  <div class="form-group">
- <label>รหัส (ID) *</label>
+ <label for="coId">รหัส (ID) *</label>
  <input type="text" id="coId" required pattern="[a-z0-9_-]+" placeholder="เช่น habita, masterpiece" value="${c?.id || ''}" ${c ? 'readonly style="background:var(--gray-100);cursor:not-allowed;"' : ''}>
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใช้ตัวพิมพ์เล็ก a-z, ตัวเลข, - และ _ เท่านั้น · ${c ? 'ไม่สามารถเปลี่ยน ID ได้หลังบันทึก' : 'จะถูกใช้เป็นคีย์ในระบบ (เปลี่ยนภายหลังไม่ได้)'}</div>
  </div>
  <div class="form-group">
- <label>ชื่อย่อ (Label) *</label>
+ <label for="coLabel">ชื่อย่อ (Label) *</label>
  <input type="text" id="coLabel" required placeholder="เช่น The Habita" value="${c?.label || ''}">
  </div>
  </div>
  <div class="form-group">
- <label>ชื่อเต็ม (ใช้บนสลิปเงินเดือน) *</label>
+ <label for="coName">ชื่อเต็ม (ใช้บนสลิปเงินเดือน) *</label>
  <input type="text" id="coName" required placeholder="เช่น บริษัท เดอะ ฮาบิต้า จำกัด" value="${c?.name || ''}">
  </div>
  <div class="form-group">
- <label>ที่อยู่</label>
+ <label for="coAddress">ที่อยู่</label>
  <textarea id="coAddress" rows="2" placeholder="เลขที่ ถนน ตำบล อำเภอ จังหวัด รหัสไปรษณีย์">${c?.address || ''}</textarea>
  </div>
  <div class="form-row">
  <div class="form-group">
- <label>เลขผู้เสียภาษี (TAX ID)</label>
+ <label for="coTaxId">เลขผู้เสียภาษี (TAX ID)</label>
  <input type="text" id="coTaxId" placeholder="13 หลัก" value="${c?.taxId || ''}">
  </div>
  <div class="form-group">
- <label>เบอร์โทร</label>
+ <label for="coPhone">เบอร์โทร</label>
  <input type="text" id="coPhone" value="${c?.phone || ''}">
  </div>
  </div>
  <div class="form-group">
- <label>ชื่อไฟล์โลโก้</label>
+ <label for="coLogo">ชื่อไฟล์โลโก้</label>
  <input type="text" id="coLogo" placeholder="เช่น logo-black.png" value="${c?.logo || 'logo-black.png'}">
  <div class="text-sm" style="color:var(--gray-500);margin-top:4px;">ใส่ชื่อไฟล์ที่ deploy ไว้ใน root ของระบบ — ใช้แสดงบนสลิปเงินเดือน</div>
  </div>
@@ -15987,8 +16038,9 @@ function _execComputeSnapshot() {
  ytdOT, ytdSick, ytdVacation, ytdPersonal, ytdLate, ytdHiresResigns };
 }
 
-function exportExecDashboardXLSX() {
- if (!_xlsxCheck()) return;
+async function exportExecDashboardXLSX() {
+
+ if (!(await ensureLibSafe('xlsx'))) return;   // v1.6.43
  const s = _execComputeSnapshot();
  const wb = XLSX.utils.book_new();
  const companyLabel = (id) => getCompanyLabel(id);
@@ -16161,12 +16213,9 @@ function exportExecDashboardXLSX() {
 async function exportExecDashboardPNG(mode) {
  const target = document.getElementById('execDashboardCapture');
  if (!target) { toast('ไม่พบเนื้อหา dashboard', 'error'); return; }
- if (typeof html2canvas !== 'function') {
- toast('ไลบรารี html2canvas โหลดไม่สำเร็จ — ตรวจสอบอินเทอร์เน็ต', 'error');
- return;
- }
  toast('กำลังสร้างรูป...', 'info');
  try {
+ if (!(await ensureLibSafe('html2canvas'))) return;   // v1.6.43
  const canvas = await html2canvas(target, {
  backgroundColor: '#ffffff',
  scale: 2,
@@ -16274,12 +16323,12 @@ function renderMaintenance() {
 function showMaintenanceForm() {
  const body = `
   <form id="maintForm" onsubmit="submitMaintenance(event); return false;">
-   <div class="form-group"><label>เรื่อง *</label><input type="text" id="maintTitle" required placeholder="เช่น แอร์ห้องประชุมไม่เย็น"></div>
+   <div class="form-group"><label for="maintTitle">เรื่อง *</label><input type="text" id="maintTitle" required placeholder="เช่น แอร์ห้องประชุมไม่เย็น"></div>
    <div class="form-row">
-    <div class="form-group"><label>พื้นที่ *</label><input type="text" id="maintLocation" required placeholder="เช่น ชั้น 3 ห้องประชุม A"></div>
-    <div class="form-group"><label>ระดับความเร่งด่วน</label><select id="maintPriority"><option value="normal">ปกติ</option><option value="urgent">เร่งด่วน</option><option value="critical">วิกฤต</option></select></div>
+    <div class="form-group"><label for="maintLocation">พื้นที่ *</label><input type="text" id="maintLocation" required placeholder="เช่น ชั้น 3 ห้องประชุม A"></div>
+    <div class="form-group"><label for="maintPriority">ระดับความเร่งด่วน</label><select id="maintPriority"><option value="normal">ปกติ</option><option value="urgent">เร่งด่วน</option><option value="critical">วิกฤต</option></select></div>
    </div>
-   <div class="form-group"><label>รายละเอียด</label><textarea id="maintDesc" rows="3"></textarea></div>
+   <div class="form-group"><label for="maintDesc">รายละเอียด</label><textarea id="maintDesc" rows="3"></textarea></div>
   </form>
  `;
  showModal('แจ้งซ่อมอาคาร', body, `<button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button><button class="btn btn-primary" onclick="document.getElementById('maintForm').requestSubmit()">ส่งคำขอ</button>`);
@@ -16316,14 +16365,14 @@ function updateMaintenance(id) {
  if (!r) return;
  const body = `
   <div class="form-group">
-   <label>สถานะ</label>
+   <label for="maintStatus">สถานะ</label>
    <select id="maintStatus">
     <option value="pending" ${r.status==='pending'?'selected':''}>รอรับงาน</option>
     <option value="in-progress" ${r.status==='in-progress'?'selected':''}>กำลังซ่อม</option>
     <option value="done" ${r.status==='done'?'selected':''}>เสร็จ</option>
    </select>
   </div>
-  <div class="form-group"><label>หมายเหตุ / ความคืบหน้า</label><textarea id="maintNote" rows="3">${r.note || ''}</textarea></div>
+  <div class="form-group"><label for="maintNote">หมายเหตุ / ความคืบหน้า</label><textarea id="maintNote" rows="3">${r.note || ''}</textarea></div>
  `;
  showModal('จัดการ ticket: ' + r.title, body, `
   <button class="btn btn-secondary" onclick="closeModal()">ปิด</button>
@@ -16397,12 +16446,12 @@ function renderAnnouncements() {
 function showAnnouncementForm() {
  const body = `
   <form id="annForm" onsubmit="submitAnnouncement(event); return false;">
-   <div class="form-group"><label>หัวข้อ *</label><input type="text" id="annTitle" required></div>
+   <div class="form-group"><label for="annTitle">หัวข้อ *</label><input type="text" id="annTitle" required></div>
    <div class="form-row">
-    <div class="form-group"><label>ประเภท</label><select id="annType"><option value="news">ข่าว/ประกาศ</option><option value="policy">นโยบาย (ต้องรับทราบ)</option><option value="holiday">วันหยุดพิเศษ</option></select></div>
-    <div class="form-group"><label>หมวด</label><input type="text" id="annCategory" placeholder="HR / IT Security / ฯลฯ"></div>
+    <div class="form-group"><label for="annType">ประเภท</label><select id="annType"><option value="news">ข่าว/ประกาศ</option><option value="policy">นโยบาย (ต้องรับทราบ)</option><option value="holiday">วันหยุดพิเศษ</option></select></div>
+    <div class="form-group"><label for="annCategory">หมวด</label><input type="text" id="annCategory" placeholder="HR / IT Security / ฯลฯ"></div>
    </div>
-   <div class="form-group"><label>เนื้อหา</label><textarea id="annContent" rows="5"></textarea></div>
+   <div class="form-group"><label for="annContent">เนื้อหา</label><textarea id="annContent" rows="5"></textarea></div>
   </form>
  `;
  showModal('สร้างประกาศ', body, `<button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button><button class="btn btn-primary" onclick="document.getElementById('annForm').requestSubmit()">เผยแพร่</button>`);
@@ -16581,11 +16630,11 @@ function showStationeryTx(type, itemId) {
  const items = DB.load('stationery', []);
  const body = `
   <form id="txForm" onsubmit="submitStationeryTx(event, '${type}'); return false;">
-   <div class="form-group"><label>รายการ *</label>
+   <div class="form-group"><label for="txItem">รายการ *</label>
     <select id="txItem" required>${items.map(it => `<option value="${it.id}" ${it.id===itemId?'selected':''}>${esc(it.name)} (คงเหลือ ${it.stock} ${it.unit})</option>`).join('')}</select>
    </div>
-   <div class="form-group"><label>จำนวน *</label><input type="number" id="txQty" min="1" required value="1"></div>
-   <div class="form-group"><label>หมายเหตุ</label><input type="text" id="txNote" placeholder="${type==='in'?'รับเข้าจาก':'เบิกให้ / เหตุผล'}"></div>
+   <div class="form-group"><label for="txQty">จำนวน *</label><input type="number" id="txQty" min="1" required value="1"></div>
+   <div class="form-group"><label for="txNote">หมายเหตุ</label><input type="text" id="txNote" placeholder="${type==='in'?'รับเข้าจาก':'เบิกให้ / เหตุผล'}"></div>
   </form>
  `;
  showModal(type === 'in' ? 'รับของเข้า' : 'เบิกของออก', body, `<button class="btn btn-secondary" onclick="closeModal()">ยกเลิก</button><button class="btn btn-primary" onclick="document.getElementById('txForm').requestSubmit()">${type==='in'?'รับเข้า':'เบิก'}</button>`);

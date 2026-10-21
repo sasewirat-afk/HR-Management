@@ -1215,7 +1215,7 @@ th,
 // Bumping this also matters operationally: checkVersionForceSync() below clears
 // hr__lastPullTimestamp on any version change, forcing every device to do one FULL
 // pull instead of incremental — which is exactly what the v1.5.28 cache fix needs.
-const APP_VERSION = '1.6.44';
+const APP_VERSION = '1.6.45';
 const APP_RELEASE_DATE = '2026-08-27';
 console.log(`%cCROCHET HR Management System v${APP_VERSION}`, 'color:#1d4ed8;font-weight:bold;font-size:14px;');
 // v1.5.28: login-screen badge reads from APP_VERSION so the two can never drift again
@@ -10724,7 +10724,7 @@ async function exportAttendanceXLSX() {
  const s1Data = [
  [`รายงานการเข้างาน วันที่ ${formatDate(_attReportDate)}`],
  [],
- ['วันที่','รหัสพนักงาน','ชื่อ-สกุล','ชื่อเล่น','บริษัท','แผนก','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่มาสาย']
+ ['วันที่','รหัสพนักงาน','ชื่อ-สกุล','ชื่อเล่น','บริษัท','แผนก','ตำแหน่ง','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่มาสาย']
  ];
  // Present (sorted by checkIn time) — v1.5.4: per-day threshold
  [...present].sort((a,b) => (a.checkIn||'').localeCompare(b.checkIn||'')).forEach(r => {
@@ -10738,7 +10738,8 @@ async function exportAttendanceXLSX() {
  r.date, r.employeeCode, r.employeeName,
  empObj ? (empObj.nickname || '') : '',
  empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
- getDeptForAttendance(r), r.checkIn, r.checkOut || '-', status, lateMin
+ getDeptForAttendance(r), empObj ? (empObj.position || '') : '',
+ r.checkIn, r.checkOut || '-', status, lateMin
  ]);
  });
  // v1.4.55: Leave — status now uses specific type per Topic 2 point 4
@@ -10759,7 +10760,7 @@ async function exportAttendanceXLSX() {
  _attReportDate, e.id, `${e.firstName} ${e.lastName}`,
  e.nickname || '',
  getCompanyLabel(e.company) || '-',
- e.department || '',
+ e.department || '', e.position || '',
  '', '', _leaveTypeToStatus(r.type), ''
  ]);
  });
@@ -10771,7 +10772,7 @@ async function exportAttendanceXLSX() {
  _attReportDate, e.id, `${e.firstName} ${e.lastName}`,
  e.nickname || '',
  getCompanyLabel(e.company) || '-',
- e.department || '',
+ e.department || '', e.position || '',
  f.startTime || '', f.endTime || '-', 'ทำงานนอกสถานที่', ''
  ]);
  });
@@ -10781,7 +10782,7 @@ async function exportAttendanceXLSX() {
  _attReportDate, e.id, `${e.firstName} ${e.lastName}`,
  e.nickname || '',
  getCompanyLabel(e.company) || '-',
- e.department || '',
+ e.department || '', e.position || '',
  '(ละเว้น)', '-', 'มาตรงเวลา', 0
  ]);
  });
@@ -10792,7 +10793,7 @@ async function exportAttendanceXLSX() {
  r.date || _attReportDate, r.employeeCode || '-', r.employeeName || '-',
  empObj ? (empObj.nickname || '') : '',
  empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
- getDeptForAttendance(r), '', '', 'ขาดงาน', ''
+ getDeptForAttendance(r), empObj ? (empObj.position || '') : '', '', '', 'ขาดงาน', ''
  ]);
  });
  // v1.4.39: Day off (from shift schedule)
@@ -10803,32 +10804,33 @@ async function exportAttendanceXLSX() {
  empObj ? (empObj.nickname || '') : '',
  empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
  empObj ? (empObj.department || '') : getDeptForAttendance(r),
+ empObj ? (empObj.position || '') : '',
  '', '', 'วันหยุด', ''
  ]);
  });
 
  const ws1 = XLSX.utils.aoa_to_sheet(s1Data);
- ws1['!cols'] = [{wch:12},{wch:14},{wch:26},{wch:12},{wch:16},{wch:22},{wch:12},{wch:12},{wch:14},{wch:12}];
- ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:9}}];
+ ws1['!cols'] = [{wch:12},{wch:14},{wch:26},{wch:12},{wch:16},{wch:22},{wch:22},{wch:12},{wch:12},{wch:14},{wch:12}];
+ ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:10}}];
  // Style: title, header, data + red on last col if late > 0
  if (ws1['A1']) ws1['A1'].s = S.titleBig;
- for (let c = 0; c <= 9; c++) {
+ for (let c = 0; c <= 10; c++) {
  const addr = XLSX.utils.encode_cell({r:2, c});
  if (ws1[addr]) ws1[addr].s = S.headerCell;
  }
  for (let r = 3; r < s1Data.length; r++) {
- for (let c = 0; c <= 9; c++) {
+ for (let c = 0; c <= 10; c++) {
  const addr = XLSX.utils.encode_cell({r, c});
  if (!ws1[addr]) ws1[addr] = { v: '', t: 's' };
- if (c === 8) {
+ if (c === 9) {
  // v1.4.55: สถานะ column — red for สาย/ขาดงาน/ลาป่วย/ลาอื่นๆ
  const v = ws1[addr].v;
  const redStatuses = ['มาสาย', 'ขาดงาน', 'ลาป่วย', 'ลาอื่นๆ', 'ลากิจ', 'ลาพักร้อน', 'ลาสะสมวันหยุด'];
  ws1[addr].s = redStatuses.includes(v) ? S.dataCellRed : S.dataCellCenter;
- } else if (c === 9) {
+ } else if (c === 10) {
  const v = ws1[addr].v;
  ws1[addr].s = (typeof v === 'number' && v > 0) ? S.dataCellRed : S.dataCellCenter;
- } else if (c === 0 || c === 1 || c === 6 || c === 7) {
+ } else if (c === 0 || c === 1 || c === 7 || c === 8) {
  ws1[addr].s = S.dataCellCenter;
  } else {
  ws1[addr].s = S.dataCell;
@@ -11004,13 +11006,13 @@ async function exportAttendanceXLSX() {
  s3Data.push([]);
  // Section 1: leave table
  const leaveHeaderRow = s3Data.length;
- s3Data.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','ประเภทลา','หมายเหตุ']);
+ s3Data.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','ตำแหน่ง','โครเชท์','มาสเตอร์พีช','ฮาบิตา','ประเภทลา','หมายเหตุ']);
  let idx = 1;
  leaveOnDate.forEach(r => {
  const e = getEmployee(r.employeeId);
  if (!e) return;
  s3Data.push([
- idx++, `${e.firstName} ${e.lastName}`, e.nickname || '', e.department || '',
+ idx++, `${e.firstName} ${e.lastName}`, e.nickname || '', e.department || '', e.position || '',
  e.company === 'crochet' ? '/' : '',
  e.company === 'masterpiece' ? '/' : '',
  e.company === 'habita' ? '/' : '',
@@ -11023,7 +11025,7 @@ async function exportAttendanceXLSX() {
  const lateSectionRow = s3Data.length;
  s3Data.push(['พนักงานที่มาทำงานสาย']);
  const lateHeaderRow = s3Data.length;
- s3Data.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','เวลาเข้า','หมายเหตุ']);
+ s3Data.push(['ลำดับ','ชื่อ-สกุล','ชื่อเล่น','แผนก','ตำแหน่ง','โครเชท์','มาสเตอร์พีช','ฮาบิตา','เวลาเข้า','หมายเหตุ']);
  let lateIdx = 1;
  // v1.5.4: per-day threshold filter
  present.filter(r => _isLateRec(r))
@@ -11033,8 +11035,9 @@ async function exportAttendanceXLSX() {
  const empName = empObj ? `${empObj.firstName} ${empObj.lastName}` : (r.employeeName || '');
  const nick = empObj ? (empObj.nickname || '') : '';
  const dept = empObj ? (empObj.department || '') : getDeptForAttendance(r);
+ const pos = empObj ? (empObj.position || '') : '';
  s3Data.push([
- lateIdx++, empName, nick, dept,
+ lateIdx++, empName, nick, dept, pos,
  empObj?.company === 'crochet' ? '/' : '',
  empObj?.company === 'masterpiece' ? '/' : '',
  empObj?.company === 'habita' ? '/' : '',
@@ -11044,14 +11047,14 @@ async function exportAttendanceXLSX() {
  const lateEndRow = s3Data.length - 1;
 
  const ws3 = XLSX.utils.aoa_to_sheet(s3Data);
- ws3['!cols'] = [{wch:8},{wch:26},{wch:12},{wch:22},{wch:12},{wch:14},{wch:10},{wch:14},{wch:20}];
+ ws3['!cols'] = [{wch:8},{wch:26},{wch:12},{wch:22},{wch:22},{wch:12},{wch:14},{wch:10},{wch:14},{wch:20}];
  ws3['!merges'] = [
- {s:{r:0,c:0},e:{r:0,c:8}},
- {s:{r:1,c:0},e:{r:1,c:8}},
- {s:{r:2,c:0},e:{r:2,c:8}},
- {s:{r:4,c:0},e:{r:4,c:8}},
- {s:{r:5,c:0},e:{r:5,c:8}},
- {s:{r:lateSectionRow,c:0},e:{r:lateSectionRow,c:8}}
+ {s:{r:0,c:0},e:{r:0,c:9}},
+ {s:{r:1,c:0},e:{r:1,c:9}},
+ {s:{r:2,c:0},e:{r:2,c:9}},
+ {s:{r:4,c:0},e:{r:4,c:9}},
+ {s:{r:5,c:0},e:{r:5,c:9}},
+ {s:{r:lateSectionRow,c:0},e:{r:lateSectionRow,c:9}}
  ];
  // Style letter head lines (rows 0-2)
  for (let r = 0; r <= 2; r++) {
@@ -11064,17 +11067,17 @@ async function exportAttendanceXLSX() {
  if (ws3[a]) ws3[a].s = S.titleMd;
  }
  // Leave header
- for (let c = 0; c <= 8; c++) {
+ for (let c = 0; c <= 9; c++) {
  const a = XLSX.utils.encode_cell({r: leaveHeaderRow, c});
  if (ws3[a]) ws3[a].s = S.headerCell;
  }
  // Leave rows with borders
  for (let r = leaveHeaderRow + 1; r <= leaveEndRow; r++) {
- for (let c = 0; c <= 8; c++) {
+ for (let c = 0; c <= 9; c++) {
  const addr = XLSX.utils.encode_cell({r, c});
  if (!ws3[addr]) ws3[addr] = { v: '', t: 's' };
- if (c === 0 || (c >= 4 && c <= 6)) ws3[addr].s = S.dataCellCenter;
- else if (c === 7) ws3[addr].s = S.dataCellRed;
+ if (c === 0 || (c >= 5 && c <= 7)) ws3[addr].s = S.dataCellCenter;
+ else if (c === 8) ws3[addr].s = S.dataCellRed;
  else ws3[addr].s = S.dataCell;
  }
  }
@@ -11082,17 +11085,17 @@ async function exportAttendanceXLSX() {
  const lateSectionAddr = XLSX.utils.encode_cell({r: lateSectionRow, c:0});
  if (ws3[lateSectionAddr]) ws3[lateSectionAddr].s = S.sectionLabel;
  // Late header
- for (let c = 0; c <= 8; c++) {
+ for (let c = 0; c <= 9; c++) {
  const a = XLSX.utils.encode_cell({r: lateHeaderRow, c});
  if (ws3[a]) ws3[a].s = S.headerCell;
  }
  // Late rows with borders
  for (let r = lateHeaderRow + 1; r <= lateEndRow; r++) {
- for (let c = 0; c <= 8; c++) {
+ for (let c = 0; c <= 9; c++) {
  const addr = XLSX.utils.encode_cell({r, c});
  if (!ws3[addr]) ws3[addr] = { v: '', t: 's' };
- if (c === 0 || (c >= 4 && c <= 6)) ws3[addr].s = S.dataCellCenter;
- else if (c === 7) ws3[addr].s = S.dataCellRed;
+ if (c === 0 || (c >= 5 && c <= 7)) ws3[addr].s = S.dataCellCenter;
+ else if (c === 8) ws3[addr].s = S.dataCellRed;
  else ws3[addr].s = S.dataCell;
  }
  }
@@ -11259,7 +11262,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  [rangeTitle],
  [`v1.5.3: per-day late threshold applied (shift → customStartTime → global ${globalLateThreshold})`],
  [],
- ['วันที่','รหัสพนักงาน','ชื่อ-สกุล','ชื่อเล่น','บริษัท','แผนก','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่มาสาย']
+ ['วันที่','รหัสพนักงาน','ชื่อ-สกุล','ชื่อเล่น','บริษัท','แผนก','ตำแหน่ง','เวลาเข้างาน','เวลาออกงาน','สถานะ','นาทีที่มาสาย']
  ];
 
  dates.forEach(dateStr => {
@@ -11285,7 +11288,8 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  r.date, r.employeeCode, r.employeeName,
  empObj ? (empObj.nickname || '') : '',
  empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
- getDeptForAttendance(r), r.checkIn, r.checkOut || '-', status, lateMin
+ getDeptForAttendance(r), empObj ? (empObj.position || '') : '',
+ r.checkIn, r.checkOut || '-', status, lateMin
  ]);
  });
  // Leave rows
@@ -11295,7 +11299,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  s1Data.push([
  dateStr, e.id, `${e.firstName} ${e.lastName}`,
  e.nickname || '', getCompanyLabel(e.company) || '-',
- e.department || '', '', '', _leaveTypeToStatus(r.type), ''
+ e.department || '', e.position || '', '', '', _leaveTypeToStatus(r.type), ''
  ]);
  });
  // Field Work
@@ -11305,7 +11309,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  s1Data.push([
  dateStr, e.id, `${e.firstName} ${e.lastName}`,
  e.nickname || '', getCompanyLabel(e.company) || '-',
- e.department || '', f.startTime || '', f.endTime || '-', 'ทำงานนอกสถานที่', ''
+ e.department || '', e.position || '', f.startTime || '', f.endTime || '-', 'ทำงานนอกสถานที่', ''
  ]);
  });
  // Exempt Present
@@ -11313,7 +11317,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  s1Data.push([
  dateStr, e.id, `${e.firstName} ${e.lastName}`,
  e.nickname || '', getCompanyLabel(e.company) || '-',
- e.department || '', '(ละเว้น)', '-', 'มาตรงเวลา', 0
+ e.department || '', e.position || '', '(ละเว้น)', '-', 'มาตรงเวลา', 0
  ]);
  });
  // Absent
@@ -11323,7 +11327,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  r.date || dateStr, r.employeeCode || '-', r.employeeName || '-',
  empObj ? (empObj.nickname || '') : '',
  empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
- getDeptForAttendance(r), '', '', 'ขาดงาน', ''
+ getDeptForAttendance(r), empObj ? (empObj.position || '') : '', '', '', 'ขาดงาน', ''
  ]);
  });
  // Day off
@@ -11334,14 +11338,15 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  empObj ? (empObj.nickname || '') : '',
  empObj ? (getCompanyLabel(empObj.company) || '-') : '-',
  empObj ? (empObj.department || '') : getDeptForAttendance(r),
+ empObj ? (empObj.position || '') : '',
  '', '', 'วันหยุด', ''
  ]);
  });
  });
 
  const ws1 = XLSX.utils.aoa_to_sheet(s1Data);
- ws1['!cols'] = [{wch:12},{wch:14},{wch:26},{wch:12},{wch:16},{wch:22},{wch:12},{wch:12},{wch:14},{wch:12}];
- ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:9}},{s:{r:1,c:0},e:{r:1,c:9}}];
+ ws1['!cols'] = [{wch:12},{wch:14},{wch:26},{wch:12},{wch:16},{wch:22},{wch:22},{wch:12},{wch:12},{wch:14},{wch:12}];
+ ws1['!merges'] = [{s:{r:0,c:0},e:{r:0,c:10}},{s:{r:1,c:0},e:{r:1,c:10}}];
  XLSX.utils.book_append_sheet(wb, ws1, 'ภาพรวม');
 
  // ============================================================
@@ -11485,7 +11490,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  s3Data.push([`รายงานการขาดลาของพนักงาน ${companyFullName}`]);
  s3Data.push([`ช่วงวันที่ ${formatDate(startDate)} ถึง ${formatDate(endDate)} (${daysDiff} วัน)`]);
  s3Data.push([]);
- s3Data.push(['ลำดับ','วันที่','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','ประเภทลา','หมายเหตุ']);
+ s3Data.push(['ลำดับ','วันที่','ชื่อ-สกุล','ชื่อเล่น','แผนก','ตำแหน่ง','โครเชท์','มาสเตอร์พีช','ฮาบิตา','ประเภทลา','หมายเหตุ']);
  let idx = 1;
  dates.forEach(dateStr => {
  const d = dayData[dateStr];
@@ -11493,7 +11498,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  const e = empsById.get(r.employeeId);
  if (!e) return;
  s3Data.push([
- idx++, formatDate(dateStr), `${e.firstName} ${e.lastName}`, e.nickname || '', e.department || '',
+ idx++, formatDate(dateStr), `${e.firstName} ${e.lastName}`, e.nickname || '', e.department || '', e.position || '',
  e.company === 'crochet' ? '/' : '',
  e.company === 'masterpiece' ? '/' : '',
  e.company === 'habita' ? '/' : '',
@@ -11503,7 +11508,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  });
  s3Data.push([]);
  s3Data.push(['พนักงานที่มาทำงานสาย']);
- s3Data.push(['ลำดับ','วันที่','ชื่อ-สกุล','ชื่อเล่น','แผนก','โครเชท์','มาสเตอร์พีช','ฮาบิตา','เวลาเข้า','เกณฑ์สาย']);
+ s3Data.push(['ลำดับ','วันที่','ชื่อ-สกุล','ชื่อเล่น','แผนก','ตำแหน่ง','โครเชท์','มาสเตอร์พีช','ฮาบิตา','เวลาเข้า','เกณฑ์สาย']);
  let lateIdx = 1;
  dates.forEach(dateStr => {
  const d = dayData[dateStr];
@@ -11519,7 +11524,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  s3Data.push([
  lateIdx++, formatDate(dateStr),
  `${empObj.firstName} ${empObj.lastName}`, empObj.nickname || '',
- empObj.department || '',
+ empObj.department || '', empObj.position || '',
  empObj.company === 'crochet' ? '/' : '',
  empObj.company === 'masterpiece' ? '/' : '',
  empObj.company === 'habita' ? '/' : '',
@@ -11528,7 +11533,7 @@ async function exportAttendanceRangeXLSX(startDate, endDate, scopeEmpIds) {
  });
  });
  const ws3 = XLSX.utils.aoa_to_sheet(s3Data);
- ws3['!cols'] = [{wch:8},{wch:12},{wch:26},{wch:12},{wch:22},{wch:12},{wch:14},{wch:10},{wch:14},{wch:12}];
+ ws3['!cols'] = [{wch:8},{wch:12},{wch:26},{wch:12},{wch:22},{wch:22},{wch:12},{wch:14},{wch:10},{wch:14},{wch:12}];
  XLSX.utils.book_append_sheet(wb, ws3, 'สรุปลา-สาย');
 
  // Write file
